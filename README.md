@@ -127,15 +127,3 @@ node's address filled in), and restart the CSE.
 | Dynamic Fields                | `evolution.move`        | runtime tier mutation      |
 | Transfer-to-Object            | `evolution.move`        | sub-cap attached to token  |
 | Move linear types (shared w/ Aptos but combined w/ above is unique) | `cap_token.move` | `key + store` only, no `copy`, no `drop` |
-
-## Known Limitations / Future Work
-
-- **Token index in the proxy is in-memory.** A restart would lose
-  the (originator, resource) → token-ID mapping. Production code
-  would subscribe to `TokenMinted` events and rebuild on boot.
-- **No PTB-side gas-cost benchmarking yet.** The Java proxy
-  measures wall-clock latency only; on-chain gas readings need a
-  follow-up call to `sui::dryRunTransactionBlock`.
-- **CLI shell-out has per-call process overhead.** Worth a
-  comparison run against a TS sidecar for the journal benchmark
-  numbers.
