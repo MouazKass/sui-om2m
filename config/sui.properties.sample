@@ -1,0 +1,37 @@
+# Sui Access Control plugin runtime config.
+# Drop this file at $OM2M_HOME/configuration/sui.properties on each
+# Raspberry Pi after running the deploy script.
+
+# --- Sui CLI ---
+# Absolute path to the `sui` binary on the Pi.
+sui.cli.path=/usr/local/bin/sui
+
+# Active environment from ~/.sui/sui_config/client.yaml
+sui.env=testnet
+
+# --- Package + shared object IDs (filled in after `sui client publish`) ---
+sui.package.id=0xPLACEHOLDER_PACKAGE_ID
+sui.identity.registry.id=0xPLACEHOLDER_IDENTITY_REGISTRY
+sui.trust.registry.id=0xPLACEHOLDER_TRUST_REGISTRY
+sui.policy.registry.id=0xPLACEHOLDER_POLICY_REGISTRY
+sui.audit.trail.id=0xPLACEHOLDER_AUDIT_TRAIL
+# Failover cluster object ID (empty disables failover on this node).
+sui.failover.cluster.id=0xPLACEHOLDER_CLUSTER
+
+# Sui Clock object — always 0x6.
+sui.clock.id=0x6
+
+# --- This node ---
+# Sui address of this CSE's keypair (from `sui client active-address`).
+sui.node.address=0xPLACEHOLDER_THIS_NODE
+
+# Gas budget per PTB submission, in MIST (1 SUI = 1e9 MIST).
+sui.gas.budget=20000000
+
+# --- MQTT (matches the existing testbed broker) ---
+mqtt.broker.url=tcp://10.25.96.200:1883
+
+# --- Failover timings ---
+failover.heartbeat.period.ms=5000
+failover.heartbeat.timeout.ms=15000
+failover.lease.anchor.period.ms=600000
