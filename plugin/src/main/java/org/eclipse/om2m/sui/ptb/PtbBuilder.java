@@ -8,8 +8,8 @@ import java.util.List;
 import org.eclipse.om2m.sui.config.SuiConfig;
 import org.eclipse.om2m.sui.sdk.SuiCli;
 import org.eclipse.om2m.sui.sdk.SuiCli.SuiCliException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 /**
  * Builds and submits the atomic 6-step access PTB from slide 9.
@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
  */
 public final class PtbBuilder {
 
-    private static final Logger LOG = LoggerFactory.getLogger(PtbBuilder.class);
+    private static final Log LOG = LogFactory.getLog(PtbBuilder.class);
 
     private final SuiConfig cfg;
     private final SuiCli cli;
@@ -65,14 +65,15 @@ public final class PtbBuilder {
         argv.add("@" + requesterAddress);
 
         // STEP 2 — trust::require_min(trust_reg, requester, min_required, clock) -> $trust
-        argv.add("--assign");
-        argv.add("trust_score");
+        // NOTE: --assign must appear AFTER the call it captures
         argv.add("--move-call");
         argv.add(pkg + "::trust::require_min");
         argv.add("@" + cfg.trustRegistryId);
         argv.add("@" + requesterAddress);
         argv.add(Long.toString(minTrustRequired));
         argv.add("@" + cfg.suiClockId);
+        argv.add("--assign");
+        argv.add("trust_score");
 
         // STEP 3 — cap_token::validate_for_use(token, resource_id, op, clock)
         argv.add("--move-call");
@@ -115,7 +116,7 @@ public final class PtbBuilder {
             // Any abort from steps 1-4 surfaces here as a non-zero exit.
             // The PTB rolled back; no state changed. We classify this as
             // DENIED and let the caller fire an out-of-band denial log.
-            LOG.info("Access PTB aborted in {} ms: {}", elapsedMs, e.getMessage());
+            LOG.info("Access PTB aborted in " + elapsedMs + " ms: " + e.getMessage());
             return AccessResult.denied(elapsedMs, e.getMessage());
         }
     }
@@ -154,7 +155,7 @@ public final class PtbBuilder {
         } catch (SuiCliException e) {
             // Denial logging failures aren't fatal but they're worth a
             // loud log — the audit trail will be incomplete.
-            LOG.warn("Failed to record denied access on-chain: {}", e.getMessage());
+            LOG.warn("Failed to record denied access on-chain: " + e.getMessage());
         }
     }
 
@@ -189,10 +190,10 @@ public final class PtbBuilder {
         private AccessResult(boolean granted, long ms, String d) {
             this.granted = granted; this.elapsedMs = ms; this.digestOrError = d;
         }
-        static AccessResult granted(long ms, String digest) {
+        public static AccessResult granted(long ms, String digest) {
             return new AccessResult(true, ms, digest);
         }
-        static AccessResult denied(long ms, String error) {
+        public static AccessResult denied(long ms, String error) {
             return new AccessResult(false, ms, error);
         }
     }

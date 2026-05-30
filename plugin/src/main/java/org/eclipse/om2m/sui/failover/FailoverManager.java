@@ -11,8 +11,8 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 import java.util.List;
 import java.util.UUID;
@@ -46,7 +46,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class FailoverManager implements MqttCallback {
 
-    private static final Logger LOG = LoggerFactory.getLogger(FailoverManager.class);
+    private static final Log LOG = LogFactory.getLog(FailoverManager.class);
 
     private static final String HEARTBEAT_TOPIC_PREFIX = "om2m/failover/heartbeat/";
 
@@ -73,7 +73,7 @@ public final class FailoverManager implements MqttCallback {
 
     /** Start everything: MQTT, watchdog, heartbeat (if parent), lease anchor (if parent). */
     public void start() {
-        if (cfg.clusterId == null || cfg.clusterId.isBlank()) {
+        if (cfg.clusterId == null || cfg.clusterId.trim().isEmpty()) {
             LOG.info("Failover disabled: no cluster ID in sui.properties");
             return;
         }
@@ -91,9 +91,7 @@ public final class FailoverManager implements MqttCallback {
             startParentDuties();
         }
 
-        LOG.info(
-            "Failover manager started. parent={} self={}",
-            currentParentAddr.get(), cfg.nodeAddress);
+        LOG.info("Failover manager started. parent=" + currentParentAddr.get() + " self=" + cfg.nodeAddress);
     }
 
     public void stop() {
@@ -118,7 +116,7 @@ public final class FailoverManager implements MqttCallback {
             mqtt.setCallback(this);
             mqtt.connect(opts);
             mqtt.subscribe(HEARTBEAT_TOPIC_PREFIX + cfg.clusterId);
-            LOG.info("MQTT connected to {}", cfg.mqttBrokerUrl);
+            LOG.info("MQTT connected to " + cfg.mqttBrokerUrl);
         } catch (MqttException e) {
             LOG.error("Failed to connect to MQTT broker", e);
         }
@@ -141,7 +139,7 @@ public final class FailoverManager implements MqttCallback {
     }
 
     @Override public void connectionLost(Throwable cause) {
-        LOG.warn("MQTT connection lost: {}", cause.getMessage());
+        LOG.warn("MQTT connection lost: " + cause.getMessage());
     }
     @Override public void deliveryComplete(IMqttDeliveryToken token) { /* unused */ }
 
@@ -158,7 +156,7 @@ public final class FailoverManager implements MqttCallback {
                     mqtt.publish(HEARTBEAT_TOPIC_PREFIX + cfg.clusterId, m);
                 }
             } catch (MqttException e) {
-                LOG.warn("Heartbeat publish failed: {}", e.getMessage());
+                LOG.warn("Heartbeat publish failed: " + e.getMessage());
             }
         }, 0, cfg.heartbeatPeriodMs, TimeUnit.MILLISECONDS);
 
@@ -183,7 +181,7 @@ public final class FailoverManager implements MqttCallback {
                 "--gas-budget", Long.toString(cfg.gasBudget));
             cli.runJson(argv);
         } catch (SuiCliException e) {
-            LOG.warn("Lease anchor failed (will retry next period): {}", e.getMessage());
+            LOG.warn("Lease anchor failed (will retry next period): " + e.getMessage());
         }
     }
 
@@ -201,7 +199,7 @@ public final class FailoverManager implements MqttCallback {
             LOG.warn("Self-parent watchdog tripped — our own MQTT is broken");
             return;
         }
-        LOG.warn("Parent silence detected ({} ms). Submitting Sui claim.", elapsed);
+        LOG.warn("Parent silence detected (" + elapsed + " ms). Submitting Sui claim.");
         attemptClaim();
     }
 
@@ -223,7 +221,7 @@ public final class FailoverManager implements MqttCallback {
             JsonNode resp = cli.runJson(argv);
             JsonNode status = resp.path("effects").path("status").path("status");
             if ("success".equalsIgnoreCase(status.asText())) {
-                LOG.info("CLAIM ACCEPTED — we are now parent of cluster {}", cfg.clusterId);
+                LOG.info("CLAIM ACCEPTED — we are now parent of cluster " + cfg.clusterId);
                 refreshCurrentParent();
                 if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
                     startParentDuties();
@@ -232,14 +230,14 @@ public final class FailoverManager implements MqttCallback {
                 // Could be E_LEASE_STILL_VALID (someone else got there
                 // first), E_TRUST_BELOW_GATE, or E_NOT_REGISTERED.
                 String err = resp.path("effects").path("status").path("error").asText("unknown");
-                LOG.info("Claim rejected on-chain: {}", err);
+                LOG.info("Claim rejected on-chain: " + err);
                 // Refresh in case someone else won.
                 refreshCurrentParent();
                 // Reset the watchdog so we don't hammer the chain.
                 lastHeartbeatMs.set(System.currentTimeMillis());
             }
         } catch (SuiCliException e) {
-            LOG.warn("Claim submission failed: {}", e.getMessage());
+            LOG.warn("Claim submission failed: " + e.getMessage());
         }
     }
 
@@ -255,7 +253,7 @@ public final class FailoverManager implements MqttCallback {
                 currentParentAddr.set(parent);
             }
         } catch (SuiCliException e) {
-            LOG.warn("Failed to read cluster state: {}", e.getMessage());
+            LOG.warn("Failed to read cluster state: " + e.getMessage());
         }
     }
 }

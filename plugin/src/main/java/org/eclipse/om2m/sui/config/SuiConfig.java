@@ -32,6 +32,16 @@ public final class SuiConfig {
     public final long   heartbeatPeriodMs;
     public final long   heartbeatTimeoutMs;
     public final long   leaseAnchorPeriodMs;
+    public final String dasApocPath;     // CSE NOTIFY dispatch path for this DAS
+    public final long   minTrust;        // trust gate fed into the PTB
+    public final boolean useNativeRpc;   // true = bypass CLI, use BCS+RPC
+    public final String  rpcUrl;          // fullnode RPC endpoint (testnet/mainnet)
+    public final String  keystorePath;    // path to sui.keystore file
+    // Provisioning maps: populated by the IN-CSE when tokens are minted.
+    private final java.util.Map<String,String> addrIndex =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String,String> tokenIndex =
+        new java.util.concurrent.ConcurrentHashMap<>();
 
     private SuiConfig(Properties p) {
         this.suiCliPath          = req(p, "sui.cli.path");
@@ -49,11 +59,17 @@ public final class SuiConfig {
         this.heartbeatPeriodMs   = Long.parseLong(p.getProperty("failover.heartbeat.period.ms",  "5000"));
         this.heartbeatTimeoutMs  = Long.parseLong(p.getProperty("failover.heartbeat.timeout.ms","15000"));
         this.leaseAnchorPeriodMs = Long.parseLong(p.getProperty("failover.lease.anchor.period.ms","600000"));
+        this.dasApocPath         = p.getProperty("sui.das.apoc.path", "sui-das");
+        this.minTrust            = Long.parseLong(p.getProperty("sui.min.trust", "50"));
+        this.useNativeRpc        = Boolean.parseBoolean(p.getProperty("sui.use.native.rpc", "false"));
+        this.rpcUrl              = p.getProperty("sui.rpc.url", "https://fullnode.testnet.sui.io:443");
+        this.keystorePath        = p.getProperty("sui.keystore.path",
+                                     System.getProperty("user.home") + "/.sui/sui_config/sui.keystore");
     }
 
     private static String req(Properties p, String key) {
         String v = p.getProperty(key);
-        if (v == null || v.isBlank()) {
+        if (v == null || v.trim().isEmpty()) {
             throw new IllegalStateException("Missing required config key: " + key);
         }
         return v;
@@ -68,6 +84,49 @@ public final class SuiConfig {
         } catch (IOException e) {
             throw new IllegalStateException("Cannot read " + file, e);
         }
-        return new SuiConfig(p);
+        SuiConfig cfg = new SuiConfig(p);
+        // Optionally load originator->address and originator+resource->token
+        // mappings from sui.mappings.properties (siblings to sui.properties).
+        // Keys:
+        //   addr.<originator>=<0x sui address>
+        //   token.<originator>::<resource-id>=<0x token object id>
+        Path mapFile = Paths.get(home, "configuration", "sui.mappings.properties");
+        if (Files.exists(mapFile)) {
+            Properties mp = new Properties();
+            try (InputStream min = Files.newInputStream(mapFile)) {
+                mp.load(min);
+                for (String key : mp.stringPropertyNames()) {
+                    String value = mp.getProperty(key);
+                    if (key.startsWith("addr.")) {
+                        cfg.registerAddress(key.substring(5), value);
+                    } else if (key.startsWith("token.")) {
+                        String rest = key.substring(6);
+                        int sep = rest.indexOf("::");
+                        if (sep > 0) {
+                            String originator = rest.substring(0, sep);
+                            String resourceId = rest.substring(sep + 2);
+                            cfg.registerToken(originator, resourceId, value);
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException("Cannot read " + mapFile, e);
+            }
+        }
+        return cfg;
+    }
+
+    // --- Originator -> Sui identity provisioning ---------------------------
+    public void registerAddress(String originator, String suiAddress) {
+        addrIndex.put(originator, suiAddress);
+    }
+    public void registerToken(String originator, String resourceId, String tokenObjectId) {
+        tokenIndex.put(originator + "::" + resourceId, tokenObjectId);
+    }
+    public String resolveAddress(String originator) {
+        return addrIndex.get(originator);
+    }
+    public String resolveToken(String originator, String resourceId) {
+        return tokenIndex.get(originator + "::" + resourceId);
     }
 }

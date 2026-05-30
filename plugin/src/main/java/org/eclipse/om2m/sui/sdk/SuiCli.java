@@ -9,8 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 /**
  * Thin wrapper around the Sui CLI. We chose this over the community
@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
  */
 public final class SuiCli {
 
-    private static final Logger LOG = LoggerFactory.getLogger(SuiCli.class);
+    private static final Log LOG = LogFactory.getLog(SuiCli.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final long DEFAULT_TIMEOUT_S = 60;
 
@@ -50,7 +50,7 @@ public final class SuiCli {
         // from ~/.sui/sui_config unless overridden.
         pb.environment().put("SUI_ENV", env);
 
-        LOG.debug("sui-cli exec: {}", String.join(" ", full));
+        LOG.debug("sui-cli exec: " + String.join(" ", full));
 
         try {
             Process p = pb.start();
@@ -59,8 +59,8 @@ public final class SuiCli {
                 p.destroyForcibly();
                 throw new SuiCliException("sui CLI timed out after " + DEFAULT_TIMEOUT_S + "s");
             }
-            byte[] out = p.getInputStream().readAllBytes();
-            byte[] err = p.getErrorStream().readAllBytes();
+            byte[] out = readAll(p.getInputStream());
+            byte[] err = readAll(p.getErrorStream());
             int rc = p.exitValue();
 
             String stdout = new String(out, StandardCharsets.UTF_8);
@@ -70,9 +70,9 @@ public final class SuiCli {
                 throw new SuiCliException(
                     "sui CLI exited " + rc + ": " + stderr.trim());
             }
-            if (stdout.isBlank()) {
+            if (stdout.trim().isEmpty()) {
                 // Some sub-commands print to stderr even on success.
-                return MAPPER.readTree(stderr.isBlank() ? "{}" : stderr);
+                return MAPPER.readTree(stderr.trim().isEmpty() ? "{}" : stderr);
             }
             return MAPPER.readTree(stdout);
         } catch (IOException | InterruptedException e) {
@@ -84,5 +84,13 @@ public final class SuiCli {
     public static final class SuiCliException extends Exception {
         public SuiCliException(String m) { super(m); }
         public SuiCliException(String m, Throwable t) { super(m, t); }
+    }
+
+    private static byte[] readAll(java.io.InputStream in) throws java.io.IOException {
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) baos.write(buf, 0, n);
+        return baos.toByteArray();
     }
 }
