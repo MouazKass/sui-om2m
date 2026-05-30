@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.eclipse.om2m</groupId>
+    <artifactId>org.eclipse.om2m.sui</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>bundle</packaging>
+    <name>Sui Access Control Plugin for OM2M</name>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <om2m.version>1.4.1</om2m.version>
+    </properties>
+
+    <dependencies>
+        <!-- OM2M core (provided by the runtime — same scope used in Hammad's plugin) -->
+        <dependency>
+            <groupId>org.eclipse.om2m</groupId>
+            <artifactId>org.eclipse.om2m.commons</artifactId>
+            <version>${om2m.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.om2m</groupId>
+            <artifactId>org.eclipse.om2m.core</artifactId>
+            <version>${om2m.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.om2m</groupId>
+            <artifactId>org.eclipse.om2m.core.service</artifactId>
+            <version>${om2m.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- OSGi declarative services -->
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.core</artifactId>
+            <version>6.0.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.osgi</groupId>
+            <artifactId>org.osgi.service.component</artifactId>
+            <version>1.4.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- MQTT for failover heartbeats -->
+        <dependency>
+            <groupId>org.eclipse.paho</groupId>
+            <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+            <version>1.2.5</version>
+        </dependency>
+
+        <!-- JSON parsing for Sui CLI output -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.16.1</version>
+        </dependency>
+
+        <!-- Logging (OM2M ships SLF4J) -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.32</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Tests -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.felix</groupId>
+                <artifactId>maven-bundle-plugin</artifactId>
+                <version>5.1.9</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <instructions>
+                        <Bundle-SymbolicName>org.eclipse.om2m.sui</Bundle-SymbolicName>
+                        <Bundle-Activator>org.eclipse.om2m.sui.SuiPluginActivator</Bundle-Activator>
+                        <Service-Component>OSGI-INF/*.xml</Service-Component>
+                        <Export-Package>org.eclipse.om2m.sui</Export-Package>
+                        <Import-Package>
+                            org.eclipse.om2m.commons.*,
+                            org.eclipse.om2m.core.service,
+                            org.osgi.framework,
+                            org.osgi.service.component,
+                            org.eclipse.paho.client.mqttv3,
+                            com.fasterxml.jackson.databind,
+                            org.slf4j,
+                            *
+                        </Import-Package>
+                        <Embed-Dependency>
+                            jackson-databind,jackson-core,jackson-annotations,
+                            org.eclipse.paho.client.mqttv3
+                        </Embed-Dependency>
+                        <Embed-Transitive>true</Embed-Transitive>
+                    </instructions>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
