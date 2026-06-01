@@ -51,7 +51,10 @@ public final class FailoverManager implements MqttCallback {
     private static final String HEARTBEAT_TOPIC_PREFIX = "om2m/failover/heartbeat/";
 
     private final SuiConfig cfg;
+    private volatile org.eclipse.om2m.sui.sdk.NativePtbBuilder nativePtb;
     private final SuiCli cli;
+    
+
     private final ScheduledExecutorService scheduler =
         Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "sui-failover");
@@ -91,7 +94,7 @@ public final class FailoverManager implements MqttCallback {
             startParentDuties();
         }
 
-        LOG.info("Failover manager started. parent=" + currentParentAddr.get() + " self=" + cfg.nodeAddress);
+        LOG.info("Failover manager started. parent=" + currentParentAddr.get() + " self=" + cfg.nodeAddress + " parentPoa=[" + cfg.parentPoa + "] poaFile=[" + cfg.poaFilePath + "]");
     }
 
     public void stop() {
@@ -204,56 +207,203 @@ public final class FailoverManager implements MqttCallback {
     }
 
     /** The on-chain part of slide 10. Calls failover::claim_parent. */
-    private void attemptClaim() {
-        List<String> argv = List.of(
-            "client", "call",
-            "--package",  cfg.packageId,
-            "--module",   "failover",
-            "--function", "claim_parent",
-            "--args",
-                cfg.clusterId,
-                cfg.identityRegistryId,
-                cfg.trustRegistryId,
-                cfg.suiClockId,
-            "--gas-budget", Long.toString(cfg.gasBudget));
-
-        try {
-            JsonNode resp = cli.runJson(argv);
-            JsonNode status = resp.path("effects").path("status").path("status");
-            if ("success".equalsIgnoreCase(status.asText())) {
-                LOG.info("CLAIM ACCEPTED — we are now parent of cluster " + cfg.clusterId);
-                refreshCurrentParent();
-                if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
-                    startParentDuties();
+        private void attemptClaim() {
+        // Submit off-thread so watchdog stays responsive
+        scheduler.submit(() -> {
+            try {
+                org.eclipse.om2m.sui.sdk.NativePtbBuilder n = nativePtb;
+                if (n == null) {
+                    synchronized (this) {
+                        n = nativePtb;
+                        if (n == null) {
+                            org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config nc =
+                                new org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config(
+                                    cfg.rpcUrl, cfg.packageId,
+                                    cfg.identityRegistryId, cfg.trustRegistryId,
+                                    cfg.policyRegistryId, cfg.auditTrailId,
+                                    cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
+                            n = new org.eclipse.om2m.sui.sdk.NativePtbBuilder(
+                                nc, java.nio.file.Paths.get(cfg.keystorePath));
+                            nativePtb = n;
+                        }
+                    }
                 }
-            } else {
-                // Could be E_LEASE_STILL_VALID (someone else got there
-                // first), E_TRUST_BELOW_GATE, or E_NOT_REGISTERED.
-                String err = resp.path("effects").path("status").path("error").asText("unknown");
-                LOG.info("Claim rejected on-chain: " + err);
-                // Refresh in case someone else won.
-                refreshCurrentParent();
-                // Reset the watchdog so we don't hammer the chain.
-                lastHeartbeatMs.set(System.currentTimeMillis());
+                org.eclipse.om2m.sui.sdk.NativePtbBuilder.Result r =
+                    n.claimParent(cfg.nodeAddress, cfg.clusterId);
+                if (r.granted) {
+                    LOG.info("CLAIM ACCEPTED — we are now parent of cluster " + cfg.clusterId
+                             + " digest=" + r.digest + " (" + r.elapsedMs + " ms)");
+                    currentParentAddr.set(cfg.nodeAddress);
+                    // Broadcast our HTTP PoA to followers via the Cluster dynamic field.
+                    // OM2M IN-CSE PoA convention is http://<host>:<port>/
+                    String poa = cfg.parentPoa;
+                    if (poa != null && !poa.isEmpty()) {
+                        org.eclipse.om2m.sui.sdk.NativePtbBuilder.Result pr =
+                            n.setParentPoa(cfg.nodeAddress, cfg.clusterId, poa);
+                        if (pr.granted) {
+                            LOG.info("PoA published on-chain: " + poa + " digest=" + pr.digest + " (" + pr.elapsedMs + " ms)");
+                        } else {
+                            LOG.warn("Failed to publish PoA on-chain: " + pr.error);
+                        }
+                        // Also write to local file (for parent's own local MN-CSE container, if any)
+                        try {
+                            String fp = cfg.poaFilePath;
+                            if (fp != null && !fp.isEmpty()) {
+                                java.nio.file.Path target = java.nio.file.Paths.get(fp);
+                                if (target.getParent() != null) java.nio.file.Files.createDirectories(target.getParent());
+                                java.nio.file.Files.write(target, poa.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                                LOG.info("PoA written locally to " + fp);
+                            }
+                        } catch (Exception fe) {
+                            LOG.warn("Local PoA write failed: " + fe.getMessage());
+                        }
+                        // Trigger role-switch to IN-CSE
+                        invokeRoleSwitch("in", null);
+                    }
+                    startParentDuties();
+                } else {
+                    LOG.info("Claim rejected on-chain: " + r.error + " (digest=" + r.digest + ")");
+                    refreshCurrentParent();
+                }
+            } catch (Exception e) {
+                LOG.warn("Claim submission failed: " + e.getMessage());
             }
-        } catch (SuiCliException e) {
-            LOG.warn("Claim submission failed: " + e.getMessage());
-        }
+        });
     }
 
     /** Read the cluster object and cache current_parent. */
     private void refreshCurrentParent() {
-        List<String> argv = List.of("client", "object", cfg.clusterId);
+        // Direct RPC fetch — avoid blocking the OSGi Activator on a CLI fork.
         try {
-            JsonNode resp = cli.runJson(argv);
-            String parent = resp
-                .path("content").path("fields").path("current_parent")
-                .asText("");
-            if (!parent.isEmpty()) {
-                currentParentAddr.set(parent);
+            com.fasterxml.jackson.databind.ObjectMapper m =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.node.ObjectNode req = m.createObjectNode();
+            req.put("jsonrpc", "2.0");
+            req.put("id", 1);
+            req.put("method", "sui_getObject");
+            com.fasterxml.jackson.databind.node.ArrayNode params = req.putArray("params");
+            params.add(cfg.clusterId);
+            com.fasterxml.jackson.databind.node.ObjectNode opts = params.addObject();
+            opts.put("showContent", true);
+
+            java.net.HttpURLConnection conn =
+                (java.net.HttpURLConnection) new java.net.URL(cfg.rpcUrl).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            byte[] body = m.writeValueAsString(req).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            conn.getOutputStream().write(body);
+            int rc = conn.getResponseCode();
+            if (rc < 200 || rc >= 300) {
+                LOG.warn("refreshCurrentParent HTTP " + rc);
+                return;
             }
-        } catch (SuiCliException e) {
+            java.io.InputStream in = conn.getInputStream();
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192]; int n;
+            while ((n = in.read(buf)) > 0) baos.write(buf, 0, n);
+            com.fasterxml.jackson.databind.JsonNode resp = m.readTree(baos.toByteArray());
+            String parent = resp.path("result").path("data").path("content")
+                .path("fields").path("current_parent").asText("");
+            if (!parent.isEmpty()) {
+                String previous = currentParentAddr.get();
+                currentParentAddr.set(parent);
+                LOG.info("Cluster current parent = " + parent);
+                // Detect parent change. If it's not us, read the new PoA from
+                // chain and persist it for follower bootstrapping.
+                boolean changed = (previous == null) || previous.isEmpty()
+                        || !previous.equalsIgnoreCase(parent);
+                if (changed && !parent.equalsIgnoreCase(cfg.nodeAddress)) {
+                    onParentChanged(parent);
+                }
+            } else {
+                LOG.info("Cluster has no current parent yet");
+            }
+        } catch (Exception e) {
             LOG.warn("Failed to read cluster state: " + e.getMessage());
+        }
+    }
+
+    /** Called when this follower notices the parent has changed (and it's not us). */
+    private void onParentChanged(String newParent) {
+        // Run off-thread; involves an RPC call.
+        scheduler.submit(() -> {
+            try {
+                org.eclipse.om2m.sui.sdk.NativePtbBuilder n = nativePtb;
+                if (n == null) {
+                    synchronized (this) {
+                        n = nativePtb;
+                        if (n == null) {
+                            org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config nc =
+                                new org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config(
+                                    cfg.rpcUrl, cfg.packageId,
+                                    cfg.identityRegistryId, cfg.trustRegistryId,
+                                    cfg.policyRegistryId, cfg.auditTrailId,
+                                    cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
+                            n = new org.eclipse.om2m.sui.sdk.NativePtbBuilder(
+                                nc, java.nio.file.Paths.get(cfg.keystorePath));
+                            nativePtb = n;
+                        }
+                    }
+                }
+                // Retry up to 5 times with backoff (parent may not have published yet)
+                String poa = null;
+                for (int attempt = 1; attempt <= 5; attempt++) {
+                    poa = n.fetchParentPoa(cfg.clusterId);
+                    if (poa != null && !poa.isEmpty()) break;
+                    LOG.info("PoA not yet on chain (attempt " + attempt + "/5), retrying...");
+                    Thread.sleep(2000L * attempt);
+                }
+                if (poa == null || poa.isEmpty()) {
+                    LOG.warn("New parent " + newParent + " did not publish PoA after 5 attempts");
+                    return;
+                }
+                LOG.info("New parent PoA: " + poa);
+                // Persist to file for the MN-CSE container's startup wrapper.
+                String path = cfg.poaFilePath;
+                if (path != null && !path.isEmpty()) {
+                    java.nio.file.Path target = java.nio.file.Paths.get(path);
+                    java.nio.file.Files.createDirectories(target.getParent());
+                    java.nio.file.Files.write(target,
+                        poa.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    LOG.info("PoA written to " + path);
+                    // Trigger role-switch to MN-CSE
+                    invokeRoleSwitch("mn", poa);
+                }
+            } catch (Exception e) {
+                LOG.warn("onParentChanged failed: " + e.getMessage());
+            }
+        });
+    }
+
+    /** Invoke /root/role-switch.sh role POA. Async via Runtime.exec. */
+    private void invokeRoleSwitch(String role, String poa) {
+        if (!cfg.roleSwitchEnabled) {
+            LOG.info("[role-switch] disabled in config; skipping (role=" + role + ")");
+            return;
+        }
+        try {
+            String[] cmd = (poa == null)
+                ? new String[]{"/root/role-switch.sh", role}
+                : new String[]{"/root/role-switch.sh", role, poa};
+            LOG.info("[role-switch] invoking: " + String.join(" ", cmd));
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            // Don't block — log output asynchronously
+            new Thread(() -> {
+                try (java.io.BufferedReader r = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(p.getInputStream()))) {
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        LOG.info("[role-switch] " + line);
+                    }
+                } catch (Exception ignored) {}
+            }, "role-switch-out").start();
+        } catch (Exception e) {
+            LOG.warn("[role-switch] invocation failed: " + e.getMessage());
         }
     }
 }

@@ -37,6 +37,9 @@ public final class SuiConfig {
     public final boolean useNativeRpc;   // true = bypass CLI, use BCS+RPC
     public final String  rpcUrl;          // fullnode RPC endpoint (testnet/mainnet)
     public final String  keystorePath;    // path to sui.keystore file
+    public final String  parentPoa;        // this node's HTTP PoA when acting as parent
+    public final String  poaFilePath;      // where to persist the current parent PoA for followers
+    public final boolean roleSwitchEnabled; // whether to invoke role-switch.sh on parent changes
     // Provisioning maps: populated by the IN-CSE when tokens are minted.
     private final java.util.Map<String,String> addrIndex =
         new java.util.concurrent.ConcurrentHashMap<>();
@@ -65,6 +68,9 @@ public final class SuiConfig {
         this.rpcUrl              = p.getProperty("sui.rpc.url", "https://fullnode.testnet.sui.io:443");
         this.keystorePath        = p.getProperty("sui.keystore.path",
                                      System.getProperty("user.home") + "/.sui/sui_config/sui.keystore");
+        this.parentPoa           = p.getProperty("sui.parent.poa", "");
+        this.poaFilePath         = p.getProperty("sui.poa.file.path", "/etc/sui-cluster/current-parent-poa");
+        this.roleSwitchEnabled   = Boolean.parseBoolean(p.getProperty("sui.role.switch.enabled", "false"));
     }
 
     private static String req(Properties p, String key) {

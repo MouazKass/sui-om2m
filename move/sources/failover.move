@@ -39,6 +39,7 @@ module om2m_access::failover {
     const E_LEASE_STILL_VALID:  u64 = 3;
     const E_NOT_PARENT_ROLE:    u64 = 4;
     const E_SAME_PARENT:        u64 = 5;
+    const E_NOT_PARENT:         u64 = 6;
 
     // === Cluster (shared object — one per failover group) ===
     // A cluster is the set of MN-CSEs that share a parent (and possibly
@@ -269,4 +270,40 @@ module om2m_access::failover {
     public fun lease_expires_ms(cluster: &Cluster): u64   { cluster.lease_expires_ms }
     public fun trust_gate(cluster: &Cluster): u64         { cluster.trust_gate }
     public fun epoch(cluster: &Cluster): u64              { cluster.epoch }
+
+
+    /// Dynamic field key for storing the parent's advertised PoA on
+    /// the Cluster object. Using a dynamic field lets us extend the
+    /// cluster's state without breaking upgrade compatibility on the
+    /// Cluster struct. This is the same Layer 3 mechanism (Dynamic
+    /// Fields) used for CapToken use-counter accounting.
+    public struct ParentPoaKey has copy, drop, store {}
+
+    /// Called by the active parent after it has come up as IN-CSE,
+    /// to advertise its HTTP(S) PoA to followers. Only the current
+    /// parent may call this; any other sender aborts.
+    public entry fun set_parent_poa(
+        cluster: &mut Cluster,
+        new_poa: vector<u8>,
+        ctx: &TxContext,
+    ) {
+        assert!(tx_context::sender(ctx) == cluster.current_parent, E_NOT_PARENT);
+        let key = ParentPoaKey {};
+        if (sui::dynamic_field::exists(&cluster.id, key)) {
+            let old: vector<u8> = sui::dynamic_field::remove(&mut cluster.id, key);
+            let _ = old;
+        };
+        sui::dynamic_field::add(&mut cluster.id, key, new_poa);
+    }
+
+    /// Read the currently advertised PoA for the cluster (for followers).
+    /// Returns empty vector if no PoA has been set yet.
+    public fun parent_poa(cluster: &Cluster): vector<u8> {
+        let key = ParentPoaKey {};
+        if (sui::dynamic_field::exists(&cluster.id, key)) {
+            *sui::dynamic_field::borrow<ParentPoaKey, vector<u8>>(&cluster.id, key)
+        } else {
+            vector[]
+        }
+    }
 }

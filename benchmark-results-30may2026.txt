@@ -1,0 +1,24 @@
+Sui-OM2M Native RPC Benchmark
+Date: 30 May 2026
+Hardware: Raspberry Pi 4 (rpi1, 10.25.96.200)
+Network: Sui testnet
+Path: HTTP NOTIFY → OM2M → SuiDasService → NativePtbBuilder → BCS+Ed25519 → sui_executeTransactionBlock (WaitForEffectsCert)
+
+n      : 100
+min    : 865 ms
+mean   : 1233 ms
+median : 1253 ms
+p95    : 1372 ms
+p99    : 2497 ms
+max    : 2497 ms
+stdev  : 191 ms
+
+Baseline (CLI shell-out + WaitForLocalExecution): 5760 ms
+Speedup: 4.67x median
+
+Sample digests:
+- 91QFobsBQDNEZDghs2V1uLDaDe4eLCxdt5WdP6PGmVy2
+- DuZyU29saQH6TFVSgmZ684734oemKjcGcPgxKMqMQMtW
+- Cbh9qoeZprADJw3DWrQE149kgRF6bLexJ1ZkSwrzRAnR
+
+Token used: 0xef3e0cd00fcb7659a82c82ddcc1fc6331347eed8fadfce019bb575411e2d7f5d

@@ -217,6 +217,189 @@ public final class NativePtbBuilder {
         }
     }
 
+    // ---------------------------------------------------------------
+    //  Trust-Gated Parent Failover claim
+    // ---------------------------------------------------------------
+    /**
+     * Submit failover::claim_parent for this cluster.
+     * Inputs: cluster (mut shared), identity_reg, trust_reg, clock (imm shared).
+     */
+    public Result claimParent(String requesterAddress, String clusterId) {
+        long t0 = System.nanoTime();
+        try {
+            Ed25519Signer.Keypair kp = keystore.get(requesterAddress);
+            if (kp == null) kp = keystore.get(requesterAddress.toLowerCase());
+            if (kp == null) {
+                return new Result(false, null, ms(t0), "no keypair for " + requesterAddress);
+            }
+
+            SuiObjectFetcher.ObjectInfo cluster  = fetcher.getObject(clusterId);
+            SuiObjectFetcher.ObjectInfo idReg    = fetcher.getObject(cfg.identityRegistryId);
+            SuiObjectFetcher.ObjectInfo trustReg = fetcher.getObject(cfg.trustRegistryId);
+            SuiObjectFetcher.ObjectInfo clock    = fetcher.getObject(cfg.suiClockId);
+            long gasPrice = fetcher.getReferenceGasPrice();
+            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(requesterAddress, cfg.gasBudget);
+
+            byte[] requesterAddr = BcsEncoder.hexTo32(requesterAddress);
+
+            SuiPtbEncoder enc = new SuiPtbEncoder();
+            int iCluster = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(clusterId), cluster.version, true)));
+            int iId      = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.identityRegistryId), idReg.version, false)));
+            int iTrust   = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.trustRegistryId), trustReg.version, false)));
+            int iClock   = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.suiClockId), clock.version, false)));
+
+            enc.addMoveCall(new SuiPtbEncoder.MoveCall(
+                    cfg.packageId, "failover", "claim_parent",
+                    java.util.Arrays.asList(
+                        SuiPtbEncoder.Arg.input(iCluster),
+                        SuiPtbEncoder.Arg.input(iId),
+                        SuiPtbEncoder.Arg.input(iTrust),
+                        SuiPtbEncoder.Arg.input(iClock))));
+
+            byte[] txBytes = enc.encodeTransactionData(
+                    requesterAddr,
+                    java.util.Collections.singletonList(gasCoin),
+                    gasPrice,
+                    cfg.gasBudget);
+
+            String txB64 = java.util.Base64.getEncoder().encodeToString(txBytes);
+            String sigB64 = Ed25519Signer.signTransaction(txBytes, kp);
+            JsonNode result = rpc.executeTransactionBlock(txB64, java.util.Collections.singletonList(sigB64));
+            String digest = result.path("digest").asText();
+            String status = result.path("effects").path("status").path("status").asText();
+            long elapsed = ms(t0);
+            if ("success".equals(status)) {
+                return new Result(true, digest, elapsed, null);
+            }
+            return new Result(false, digest, elapsed, result.path("effects").path("status").path("error").asText());
+        } catch (Exception e) {
+            return new Result(false, null, ms(t0), e.getMessage());
+        }
+    }
+
+    /**
+     * Submit failover::set_parent_poa via native RPC. Used by the new
+     * parent immediately after CLAIM ACCEPTED to advertise its HTTP
+     * Point-of-Access to followers via the Cluster object's dynamic field.
+     */
+    public Result setParentPoa(String requesterAddress, String clusterId, String poaUrl) {
+        long t0 = System.nanoTime();
+        try {
+            Ed25519Signer.Keypair kp = keystore.get(requesterAddress.toLowerCase());
+            if (kp == null) kp = keystore.get(requesterAddress);
+            if (kp == null) return new Result(false, null, ms(t0), "no keypair for " + requesterAddress);
+
+            SuiObjectFetcher.ObjectInfo cluster = fetcher.getObject(clusterId);
+            long gasPrice = fetcher.getReferenceGasPrice();
+            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(requesterAddress, cfg.gasBudget);
+
+            byte[] requesterAddr = BcsEncoder.hexTo32(requesterAddress);
+            SuiPtbEncoder enc = new SuiPtbEncoder();
+
+            int iCluster = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(clusterId), cluster.version, true)));
+
+            // vector<u8> arg: BCS = uleb128(length) + raw bytes
+            byte[] poaBytes = poaUrl.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            BcsEncoder vecEnc = new BcsEncoder();
+            vecEnc.writeUleb128(poaBytes.length);
+            vecEnc.writeRawBytes(poaBytes);
+            int iPoa = enc.addInput(SuiPtbEncoder.CallArg.pure(vecEnc.toBytes()));
+
+            enc.addMoveCall(new SuiPtbEncoder.MoveCall(
+                cfg.packageId, "failover", "set_parent_poa",
+                java.util.Arrays.asList(
+                    SuiPtbEncoder.Arg.input(iCluster),
+                    SuiPtbEncoder.Arg.input(iPoa))));
+
+            byte[] txBytes = enc.encodeTransactionData(
+                requesterAddr,
+                java.util.Collections.singletonList(gasCoin),
+                gasPrice, cfg.gasBudget);
+
+            String txB64  = java.util.Base64.getEncoder().encodeToString(txBytes);
+            String sigB64 = Ed25519Signer.signTransaction(txBytes, kp);
+            com.fasterxml.jackson.databind.JsonNode resp = rpc.executeTransactionBlock(
+                txB64, java.util.Collections.singletonList(sigB64));
+
+            String status = resp.path("effects").path("status").path("status").asText();
+            String digest = resp.path("digest").asText();
+            long elapsed = ms(t0);
+            if ("success".equals(status)) {
+                return new Result(true, digest, elapsed, null);
+            }
+            String err = resp.path("effects").path("status").path("error").asText();
+            return new Result(false, digest, elapsed, err);
+        } catch (Exception e) {
+            return new Result(false, null, ms(t0), e.getMessage());
+        }
+    }
+
+    /**
+     * Read the current parent's PoA from chain via the Cluster's dynamic field.
+     * Returns the URL string or null if no PoA has been set yet.
+     */
+    public String fetchParentPoa(String clusterId) {
+        try {
+            LOG.info("[fetchParentPoa] start clusterId=" + clusterId + " rpc=" + cfg.rpcUrl);
+            com.fasterxml.jackson.databind.ObjectMapper m =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.node.ObjectNode req = m.createObjectNode();
+            req.put("jsonrpc", "2.0");
+            req.put("id", 1);
+            req.put("method", "suix_getDynamicFieldObject");
+            com.fasterxml.jackson.databind.node.ArrayNode params = req.putArray("params");
+            params.add(clusterId);
+            com.fasterxml.jackson.databind.node.ObjectNode key = params.addObject();
+            StringBuilder pkgHex = new StringBuilder("0x");
+            for (byte b : cfg.packageId) pkgHex.append(String.format("%02x", b & 0xFF));
+            key.put("type", pkgHex.toString() + "::failover::ParentPoaKey");
+            com.fasterxml.jackson.databind.node.ObjectNode keyValue = m.createObjectNode();
+            keyValue.put("dummy_field", false);
+            key.set("value", keyValue);
+
+            java.net.HttpURLConnection conn =
+                (java.net.HttpURLConnection) new java.net.URL(cfg.rpcUrl).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            byte[] reqBody = m.writeValueAsBytes(req);
+            LOG.info("[fetchParentPoa] request: " + new String(reqBody, java.nio.charset.StandardCharsets.UTF_8));
+            conn.getOutputStream().write(reqBody);
+            int rc = conn.getResponseCode();
+            LOG.info("[fetchParentPoa] http status=" + rc);
+            if (rc < 200 || rc >= 300) return null;
+            java.io.InputStream in = conn.getInputStream();
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192]; int n;
+            while ((n = in.read(buf)) > 0) baos.write(buf, 0, n);
+            com.fasterxml.jackson.databind.JsonNode resp = m.readTree(baos.toByteArray());
+            LOG.info("[fetchParentPoa] response: " + new String(baos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8).substring(0, Math.min(500, baos.size())));
+            // The dynamic field's value is the vector<u8> we wrote.
+            // Path: result.data.content.fields.value
+            com.fasterxml.jackson.databind.JsonNode v = resp
+                .path("result").path("data").path("content").path("fields").path("value");
+            LOG.info("[fetchParentPoa] value node: isMissing=" + v.isMissingNode() + " isNull=" + v.isNull() + " isArray=" + v.isArray() + " isTextual=" + v.isTextual());
+            if (v.isMissingNode() || v.isNull()) return null;
+            // value can be either an array of numeric bytes or a string. Handle both.
+            if (v.isArray()) {
+                byte[] out = new byte[v.size()];
+                for (int i = 0; i < v.size(); i++) out[i] = (byte) v.get(i).asInt();
+                return new String(out, java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (v.isTextual()) return v.asText();
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // ---- BCS pre-encoding for Pure args ----
     // Sui Pure args are BCS-encoded inside the Vec<u8> wrapper.
 
