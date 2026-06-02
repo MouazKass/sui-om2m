@@ -180,4 +180,17 @@ module om2m_access::trust {
 
     public fun max_score(): u64 { MAX_SCORE }
     public fun default_score(): u64 { DEFAULT_SCORE }
+
+    /// Mint an additional AdminCap and transfer it to `recipient`.
+    /// Gated by an existing AdminCap, so only a current authority can delegate.
+    /// One cap per CSE node — see scripts/grant-admins.sh.
+    public entry fun grant_admin(
+        _admin: &AdminCap,
+        recipient: address,
+        ctx: &mut TxContext,
+    ) {
+        let cap = AdminCap { id: object::new(ctx) };
+        transfer::public_transfer(cap, recipient);
+    }
+
 }

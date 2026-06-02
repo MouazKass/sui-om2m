@@ -186,41 +186,36 @@ public final class SuiPtbEncoder {
      * @param gasPrice reference gas price (use 1000 on testnet)
      * @param gasBudget total gas budget (MIST)
      */
-    public byte[] encodeTransactionData(byte[] sender,
+        public byte[] encodeTransactionData(byte[] sender,
                                         List<ObjectRef> gasPayment,
                                         long gasPrice,
                                         long gasBudget) {
         BcsEncoder e = new BcsEncoder();
-
-        // TransactionData::V1 enum variant
         e.writeUleb128(0);
-
-        // TransactionDataV1 struct fields in order:
-        // kind: TransactionKind::ProgrammableTransaction
-        e.writeUleb128(0);  // TransactionKind variant 0
-        // ProgrammableTransaction struct: { inputs, commands }
-        e.writeUleb128(inputs.size());
-        for (CallArg a : inputs) a.encode(e);
-        e.writeUleb128(commands.size());
-        for (MoveCall mc : commands) mc.encode(e);
-
-        // sender
+        e.writeRawBytes(encodeTransactionKind());
         e.writeAddress(sender);
-
-        // gas_data: GasData { payment, owner, price, budget }
         e.writeUleb128(gasPayment.size());
         for (ObjectRef r : gasPayment) {
             e.writeAddress(r.objectId);
             e.writeU64(r.version);
             e.writeObjectDigest(r.digest);
         }
-        e.writeAddress(sender);   // gas owner = sender for us
+        e.writeAddress(sender);
         e.writeU64(gasPrice);
         e.writeU64(gasBudget);
-
-        // expiration: TransactionExpiration::None
         e.writeUleb128(0);
-
         return e.toBytes();
     }
+
+    /** TransactionKind::ProgrammableTransaction body only (for devInspect). */
+    public byte[] encodeTransactionKind() {
+        BcsEncoder e = new BcsEncoder();
+        e.writeUleb128(0);
+        e.writeUleb128(inputs.size());
+        for (CallArg a : inputs) a.encode(e);
+        e.writeUleb128(commands.size());
+        for (MoveCall mc : commands) mc.encode(e);
+        return e.toBytes();
+    }
+
 }

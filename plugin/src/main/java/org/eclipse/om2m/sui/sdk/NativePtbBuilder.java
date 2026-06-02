@@ -357,7 +357,11 @@ public final class NativePtbBuilder {
             com.fasterxml.jackson.databind.node.ObjectNode key = params.addObject();
             StringBuilder pkgHex = new StringBuilder("0x");
             for (byte b : cfg.packageId) pkgHex.append(String.format("%02x", b & 0xFF));
-            key.put("type", pkgHex.toString() + "::failover::ParentPoaKey");
+            // The ParentPoaKey field was originally created under v2 (0x1583a958...)
+            // and its on-chain type tag is frozen at that address. v3 calls update
+            // the field in place but the tag stays v2.
+            String pkgForKey = "0x1583a958b1e6afa8a996dbd0933be1b1d2bdbe01f0c7d04322b9dacb22464699";
+            key.put("type", pkgForKey + "::failover::ParentPoaKey");
             com.fasterxml.jackson.databind.node.ObjectNode keyValue = m.createObjectNode();
             keyValue.put("dummy_field", false);
             key.set("value", keyValue);
@@ -429,4 +433,125 @@ public final class NativePtbBuilder {
     private static long ms(long t0) {
         return (System.nanoTime() - t0) / 1_000_000L;
     }
+
+    /**
+     * Read a node's current on-chain trust score via dev-inspect of
+     * trust::score_of(&TrustRegistry, address, &Clock). Returns u64, or -1 on failure.
+     */
+    public long readTrustScore(String targetAddr) {
+        try {
+            SuiObjectFetcher.ObjectInfo trustReg = fetcher.getObject(cfg.trustRegistryId);
+            SuiObjectFetcher.ObjectInfo clock    = fetcher.getObject(cfg.suiClockId);
+
+            SuiPtbEncoder enc = new SuiPtbEncoder();
+            int iTrustReg = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(
+                        BcsEncoder.hexTo32(cfg.trustRegistryId), trustReg.version, false)));
+            int iTarget   = enc.addInput(SuiPtbEncoder.CallArg.pure(
+                    encAddress(BcsEncoder.hexTo32(targetAddr))));
+            int iClock    = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(
+                        BcsEncoder.hexTo32(cfg.suiClockId), clock.version, false)));
+
+            enc.addMoveCall(new SuiPtbEncoder.MoveCall(
+                    cfg.packageId, "trust", "score_of",
+                    Arrays.asList(SuiPtbEncoder.Arg.input(iTrustReg),
+                                  SuiPtbEncoder.Arg.input(iTarget),
+                                  SuiPtbEncoder.Arg.input(iClock))));
+
+            String kindB64 = java.util.Base64.getEncoder()
+                    .encodeToString(enc.encodeTransactionKind());
+
+            String senderHex = keystore.keySet().iterator().next();
+            JsonNode result = rpc.devInspectTransactionBlock(senderHex, kindB64);
+
+            JsonNode bytes = result.path("results").path(0)
+                                   .path("returnValues").path(0).path(0);
+            if (bytes.isArray() && bytes.size() > 0) {
+                long v = 0; int shift = 0;
+                for (JsonNode b : bytes) { v |= ((long) b.asInt() & 0xFF) << shift; shift += 8; }
+                return v;
+            }
+            LOG.warn("readTrustScore: unexpected devInspect shape for " + targetAddr
+                     + " resp=" + result.toString());
+        } catch (Exception e) {
+            LOG.warn("readTrustScore failed for " + targetAddr + ": " + e.getMessage());
+        }
+        return -1L;
+    }
+
+    /**
+     * Submit one trust::increase/decrease for target, authorised by this node's AdminCap.
+     * Entry (confirm against sources/trust.move):
+     *   increase(cap: &AdminCap, reg: &mut TrustRegistry, target: address, magnitude: u64, clock: &Clock)
+     *   decrease(...) same shape
+     */
+    public Result submitTrustDelta(String submitterAddr, String targetAddr,
+                                   long magnitude, boolean increase,
+                                   String adminCapId) {
+        long t0 = System.nanoTime();
+        try {
+            Ed25519Signer.Keypair kp = keystore.get(submitterAddr.toLowerCase());
+            if (kp == null) kp = keystore.get(submitterAddr);
+            if (kp == null) {
+                return new Result(false, null, ms(t0),
+                        "no keypair for submitter " + submitterAddr);
+            }
+
+            SuiObjectFetcher.ObjectInfo cap      = fetcher.getObject(adminCapId);
+            SuiObjectFetcher.ObjectInfo trustReg = fetcher.getObject(cfg.trustRegistryId);
+            SuiObjectFetcher.ObjectInfo clock    = fetcher.getObject(cfg.suiClockId);
+
+            long gasPrice = fetcher.getReferenceGasPrice();
+            SuiPtbEncoder.ObjectRef gasCoin =
+                    fetcher.pickGasCoin(submitterAddr, cfg.gasBudget);
+
+            byte[] submitterAddrBytes = BcsEncoder.hexTo32(submitterAddr);
+            String fn = increase ? "increase" : "decrease";
+
+            SuiPtbEncoder enc = new SuiPtbEncoder();
+            int iCap   = enc.addInput(SuiPtbEncoder.CallArg.ownedObject(
+                    new SuiPtbEncoder.ObjectRef(
+                        BcsEncoder.hexTo32(adminCapId), cap.version, cap.digestRaw32)));
+            int iReg   = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(
+                        BcsEncoder.hexTo32(cfg.trustRegistryId), trustReg.version, true)));
+            int iTgt   = enc.addInput(SuiPtbEncoder.CallArg.pure(
+                    encAddress(BcsEncoder.hexTo32(targetAddr))));
+            int iMag   = enc.addInput(SuiPtbEncoder.CallArg.pure(encU64(magnitude)));
+            int iClock = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(
+                        BcsEncoder.hexTo32(cfg.suiClockId), clock.version, false)));
+
+            enc.addMoveCall(new SuiPtbEncoder.MoveCall(
+                    cfg.packageId, "trust", fn,
+                    Arrays.asList(SuiPtbEncoder.Arg.input(iCap),
+                                  SuiPtbEncoder.Arg.input(iReg),
+                                  SuiPtbEncoder.Arg.input(iTgt),
+                                  SuiPtbEncoder.Arg.input(iMag),
+                                  SuiPtbEncoder.Arg.input(iClock))));
+
+            byte[] txBytes = enc.encodeTransactionData(
+                    submitterAddrBytes,
+                    Collections.singletonList(gasCoin),
+                    gasPrice,
+                    cfg.gasBudget);
+
+            String txB64  = java.util.Base64.getEncoder().encodeToString(txBytes);
+            String sigB64 = Ed25519Signer.signTransaction(txBytes, kp);
+
+            JsonNode result = rpc.executeTransactionBlock(
+                    txB64, Collections.singletonList(sigB64));
+            String digest = result.path("digest").asText(null);
+            String status = result.path("effects").path("status").path("status").asText("");
+            if ("success".equals(status)) {
+                return new Result(true, digest, ms(t0), null);
+            }
+            return new Result(false, digest, ms(t0),
+                    result.path("effects").path("status").path("error").asText("?"));
+        } catch (Exception e) {
+            return new Result(false, null, ms(t0), e.getMessage());
+        }
+    }
+
 }

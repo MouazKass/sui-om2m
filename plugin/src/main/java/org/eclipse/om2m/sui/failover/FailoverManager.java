@@ -2,6 +2,8 @@ package org.eclipse.om2m.sui.failover;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.eclipse.om2m.sui.config.SuiConfig;
+import org.eclipse.om2m.sui.trust.TrustScoringEngine;
+import org.eclipse.om2m.sui.trust.BehaviourObserver;
 import org.eclipse.om2m.sui.sdk.SuiCli;
 import org.eclipse.om2m.sui.sdk.SuiCli.SuiCliException;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
@@ -137,7 +139,20 @@ public final class FailoverManager implements MqttCallback {
         // currently considers parent. Stops a malicious node from
         // suppressing failover by spamming fake beats.
         if (parentAddr.equalsIgnoreCase(currentParentAddr.get())) {
-            lastHeartbeatMs.set(System.currentTimeMillis());
+            long localNow = System.currentTimeMillis();
+            lastHeartbeatMs.set(localNow);
+            try {
+                BehaviourObserver obs = TrustScoringEngine.activeObserver();
+                if (obs != null) {
+                    obs.recordHeartbeat(parentAddr, localNow);
+                    // Clock drift: how far the peer thinks "now" is from our "now".
+                    // payload[2] is the peer's ts-ms from the heartbeat publish.
+                    try {
+                        long peerTs = Long.parseLong(parts[2]);
+                        obs.recordClockDrift(parentAddr, (double) (localNow - peerTs), localNow);
+                    } catch (NumberFormatException _nfe) { /* malformed ts, ignore */ }
+                }
+            } catch (Throwable _t) { /* never let trust break failover */ }
         }
     }
 

@@ -21,6 +21,8 @@ import org.eclipse.om2m.sui.config.SuiConfig;
 import org.eclipse.om2m.sui.ptb.PtbBuilder;
 import org.eclipse.om2m.sui.ptb.PtbBuilder.AccessResult;
 import org.eclipse.om2m.sui.sdk.NativePtbBuilder;
+import org.eclipse.om2m.sui.trust.TrustScoringEngine;
+import org.eclipse.om2m.sui.trust.BehaviourObserver;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
@@ -114,6 +116,7 @@ public final class SuiDasService implements InterworkingService {
                     ? root.get("m2m:sec") : root;
                 com.fasterxml.jackson.databind.JsonNode dreq = sec.path("dreq");
                 if (dreq.isMissingNode()) {
+                    fireMalformedTrustHook(request);
                     response.setResponseStatusCode(ResponseStatusCode.CONTENTS_UNACCEPTABLE);
                     return response;
                 }
@@ -129,6 +132,7 @@ public final class SuiDasService implements InterworkingService {
                 securityInfo.setDasRequest(dr);
             } catch (Exception e) {
                 LOG.warn("Failed to parse SecurityInfo JSON: " + e.getMessage());
+                fireMalformedTrustHook(request);
                 response.setResponseStatusCode(ResponseStatusCode.CONTENTS_UNACCEPTABLE);
                 return response;
             }
@@ -190,11 +194,31 @@ public final class SuiDasService implements InterworkingService {
 
         if (!result.granted) {
             LOG.info("Sui DENY originator=" + originator + " resource=" + resourceId + " op=" + op + " err=" + result.digestOrError);
+        // Trust observer hook: record this access decision against the requester.
+        try {
+            BehaviourObserver obs = TrustScoringEngine.activeObserver();
+            if (obs != null && requesterAddress != null) {
+                long _now = System.currentTimeMillis();
+                obs.recordRequest(requesterAddress, resourceId, result.granted, false, _now);
+                obs.recordPtbResult(requesterAddress, result.granted, _now);
+            }
+        } catch (Throwable _t) { /* never let trust break access path */ }
+
             response.setResponseStatusCode(ResponseStatusCode.ACCESS_DENIED);
             return response;
         }
 
         LOG.info("Sui GRANT originator=" + originator + " resource=" + resourceId + " op=" + op + " digest=" + result.digestOrError + " (" + result.elapsedMs + " ms)");
+        // Trust observer hook: record this access decision against the requester.
+        try {
+            BehaviourObserver obs = TrustScoringEngine.activeObserver();
+            if (obs != null && requesterAddress != null) {
+                long _now = System.currentTimeMillis();
+                obs.recordRequest(requesterAddress, resourceId, result.granted, false, _now);
+                obs.recordPtbResult(requesterAddress, result.granted, _now);
+            }
+        } catch (Throwable _t) { /* never let trust break access path */ }
+
 
         // 6. Build a standard DynAuthDasResponse granting exactly the
         //    requested operation to the requesting originator.
@@ -253,4 +277,20 @@ public final class SuiDasService implements InterworkingService {
         if (operation.equals(Operation.DISCOVERY)) return 1;
         return 1;
     }
+
+    /** Fire malformed-payload signal against whoever sent this raw request. */
+    private void fireMalformedTrustHook(RequestPrimitive request) {
+        try {
+            org.eclipse.om2m.sui.trust.BehaviourObserver obs =
+                org.eclipse.om2m.sui.trust.TrustScoringEngine.activeObserver();
+            if (obs == null) return;
+            String httpOrig = request.getFrom();
+            if (httpOrig == null) return;
+            String addr = cfg.resolveAddress(httpOrig);
+            if (addr == null) return;
+            long now = System.currentTimeMillis();
+            obs.recordRequest(addr, null, /*granted=*/false, /*malformed=*/true, now);
+        } catch (Throwable _t) { /* trust must never break access */ }
+    }
+
 }

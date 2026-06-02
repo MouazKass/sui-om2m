@@ -102,4 +102,26 @@ public final class SuiRpcClient {
         }
         return out;
     }
+
+    /** Dev-inspect a transaction kind (read-only, no gas, no signature). */
+    public JsonNode devInspectTransactionBlock(String senderHex,
+                                               String kindBytesB64)
+            throws IOException {
+        ObjectNode root = MAPPER.createObjectNode();
+        root.put("jsonrpc", "2.0");
+        root.put("id", 1);
+        root.put("method", "sui_devInspectTransactionBlock");
+        ArrayNode params = root.putArray("params");
+        params.add(senderHex);
+        params.add(kindBytesB64);
+        params.addNull(); params.addNull(); params.addNull();
+        String body = MAPPER.writeValueAsString(root);
+        byte[] respBytes = post(body);
+        JsonNode resp = MAPPER.readTree(respBytes);
+        if (resp.has("error")) {
+            throw new IOException("Sui RPC error: " + resp.get("error").toString());
+        }
+        return resp.get("result");
+    }
+
 }

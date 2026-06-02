@@ -29,6 +29,7 @@ public final class SuiConfig {
     public final String nodeAddress;     // this CSE's Sui address
     public final long   gasBudget;       // mist
     public final String mqttBrokerUrl;   // tcp://10.25.96.200:1883
+    public final String trustAdminCapId; // per-node AdminCap, for trust engine writes
     public final long   heartbeatPeriodMs;
     public final long   heartbeatTimeoutMs;
     public final long   leaseAnchorPeriodMs;
@@ -59,6 +60,7 @@ public final class SuiConfig {
         this.nodeAddress         = req(p, "sui.node.address");
         this.gasBudget           = Long.parseLong(p.getProperty("sui.gas.budget", "20000000"));
         this.mqttBrokerUrl       = req(p, "mqtt.broker.url");
+        this.trustAdminCapId     = p.getProperty("trust.admin.cap.id", "").trim();
         this.heartbeatPeriodMs   = Long.parseLong(p.getProperty("failover.heartbeat.period.ms",  "5000"));
         this.heartbeatTimeoutMs  = Long.parseLong(p.getProperty("failover.heartbeat.timeout.ms","15000"));
         this.leaseAnchorPeriodMs = Long.parseLong(p.getProperty("failover.lease.anchor.period.ms","600000"));
