@@ -101,7 +101,9 @@ public final class TrustScoringEngine {
         long now = System.currentTimeMillis();
         List<NodeObservation> mine = new ArrayList<>();
         for (String target : observer.observedTargets()) {
-            if (target.equalsIgnoreCase(selfAddr)) continue;
+            // Publish self-observations too: peers receive them and may corroborate.
+            // (Self is still excluded from local SCORING below; nodes never judge
+            // themselves — peers attest to peers under assume-breach.)
             mine.add(observer.snapshot(target, now));
         }
         gossip.publish(mine);
@@ -129,7 +131,14 @@ public final class TrustScoringEngine {
         TrustState st = states.computeIfAbsent(target, a -> new TrustState());
         if (!st.seeded) {
             long onChain = ptb.readTrustScore(target);
-            st.seed(onChain >= 0 ? (double) onChain : 50.0);
+            if (onChain < 0) {
+                // Fail-closed (assume-breach): an unverifiable node is NOT seeded
+                // at neutral. Skip scoring it this tick and retry once the chain
+                // read succeeds. Prevents a bad actor from resetting to neutral.
+                LOG.warn("[trust] on-chain read failed for {}; skipping (fail-closed)", target);
+                return;
+            }
+            st.seed((double) onChain);
         }
         st.updateEma(local, cfg.emaAlpha);
 

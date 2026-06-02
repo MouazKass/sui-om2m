@@ -25,6 +25,7 @@ module om2m_access::trust {
     const E_NOT_FOUND: u64 = 1;
     const E_TRUST_TOO_LOW: u64 = 2;
     const E_ALREADY_EXISTS: u64 = 3;
+    const E_SELF_SCORING: u64 = 4;
 
     // === Bounds ===
     const MAX_SCORE: u64 = 100;
@@ -180,6 +181,34 @@ module om2m_access::trust {
 
     public fun max_score(): u64 { MAX_SCORE }
     public fun default_score(): u64 { DEFAULT_SCORE }
+
+    /// Hardened increase: enforces on-chain that the transaction signer is not
+    /// scoring itself (assume-breach: nodes never self-attest). Delegates to the
+    /// original `increase` once the self-scoring guard passes.
+    public fun increase_guarded(
+        admin: &AdminCap,
+        registry: &mut TrustRegistry,
+        node_addr: address,
+        delta: u64,
+        clock: &Clock,
+        ctx: &TxContext,
+    ) {
+        assert!(tx_context::sender(ctx) != node_addr, E_SELF_SCORING);
+        increase(admin, registry, node_addr, delta, clock);
+    }
+
+    /// Hardened decrease: same self-scoring guard as `increase_guarded`.
+    public fun decrease_guarded(
+        admin: &AdminCap,
+        registry: &mut TrustRegistry,
+        node_addr: address,
+        delta: u64,
+        clock: &Clock,
+        ctx: &TxContext,
+    ) {
+        assert!(tx_context::sender(ctx) != node_addr, E_SELF_SCORING);
+        decrease(admin, registry, node_addr, delta, clock);
+    }
 
     /// Mint an additional AdminCap and transfer it to `recipient`.
     /// Gated by an existing AdminCap, so only a current authority can delegate.

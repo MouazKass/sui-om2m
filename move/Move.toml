@@ -1,7 +1,7 @@
 [package]
 name = "om2m_access"
 edition = "2024.beta"
-published-at = "0x1583a958b1e6afa8a996dbd0933be1b1d2bdbe01f0c7d04322b9dacb22464699"
+published-at = "0x0bb0e9a007c84e3fe24d80039461c45c20915e4ee2fd27a88b43243d58b0abd0"
 version = "0.1.0"
 license = "Apache-2.0"
 authors = ["Mouaz Kassoumeh <mouaz.kassoumeh@aus.edu>"]
@@ -10,7 +10,7 @@ authors = ["Mouaz Kassoumeh <mouaz.kassoumeh@aus.edu>"]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
 
 [addresses]
-om2m_access = "0x1583a958b1e6afa8a996dbd0933be1b1d2bdbe01f0c7d04322b9dacb22464699"
+om2m_access = "0x0bb0e9a007c84e3fe24d80039461c45c20915e4ee2fd27a88b43243d58b0abd0"
 
 [dev-dependencies]
 

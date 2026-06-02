@@ -507,7 +507,7 @@ public final class NativePtbBuilder {
                     fetcher.pickGasCoin(submitterAddr, cfg.gasBudget);
 
             byte[] submitterAddrBytes = BcsEncoder.hexTo32(submitterAddr);
-            String fn = increase ? "increase" : "decrease";
+            String fn = increase ? "increase_guarded" : "decrease_guarded";
 
             SuiPtbEncoder enc = new SuiPtbEncoder();
             int iCap   = enc.addInput(SuiPtbEncoder.CallArg.ownedObject(
