@@ -1,0 +1,10 @@
+=== Evolution + Token-Lifecycle Evidence Run  (20260617-235521) ===
+package v4 : 0x7208dd4bcd25a69007317185524538cc44f00909a9bce8a9ea0b0976a30ad099
+driver     : publisher 0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e
+node_addr  : rpi1 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9  (evolution tracks this node's real score)
+------------------------------------------------------------------
+[0] Reading rpi1's current effective trust score from chain...
+    stored=92  effective=78  tier=3  -> evolve target ops=7 (READ|WRITE|DELETE)
+------------------------------------------------------------------
+[1] MINT fresh CapToken (READ only) to publisher  [CT2: issuance]
+ERROR: mint did not yield a token id (see log)

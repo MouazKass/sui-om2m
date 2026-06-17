@@ -222,4 +222,6 @@ module om2m_access::trust {
         transfer::public_transfer(cap, recipient);
     }
 
+
+    #[test_only] public fun init_for_testing(ctx: &mut sui::tx_context::TxContext) { init(ctx) }
 }

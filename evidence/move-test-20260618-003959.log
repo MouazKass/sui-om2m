@@ -1,0 +1,23 @@
+[NOTE] Dependencies on Sui, MoveStdlib, Bridge, DeepBook, and SuiSystem are automatically added, but this feature is disabled for your package because you have explicitly included dependencies on Sui. Consider removing these dependencies from `Move.toml`.
+INCLUDING DEPENDENCY MoveStdlib
+INCLUDING DEPENDENCY Sui
+BUILDING om2m_access
+Running Move unit tests
+[ PASS    ] om2m_access::evolution_lifecycle_tests::ct_revoke_consumes_token
+[ PASS    ] om2m_access::evolution_lifecycle_tests::ct_validate_exhausted_aborts
+[ PASS    ] om2m_access::evolution_lifecycle_tests::ct_validate_increments_uses
+[ PASS    ] om2m_access::evolution_lifecycle_tests::ct_validate_wrong_op_aborts
+[ PASS    ] om2m_access::evolution_lifecycle_tests::ct_validate_wrong_resource_aborts
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_permissionless_same_result_regardless_of_caller
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_promote_then_demote_strips_ops
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_basic_score_25
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_basic_score_49
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_custodian_score_100
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_custodian_score_90
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_probation_score_10
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_standard_score_50
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_standard_score_74
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_trusted_score_75
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_tier_trusted_score_89
+[ PASS    ] om2m_access::evolution_lifecycle_tests::evo_without_bootstrap_aborts
+Test result: OK. Total tests: 17; passed: 17; failed: 0

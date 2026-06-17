@@ -230,4 +230,6 @@ module om2m_access::cap_token {
     public fun op_write():  u8 { OP_WRITE }
     public fun op_delete(): u8 { OP_DELETE }
     public fun op_admin():  u8 { OP_ADMIN }
+
+    #[test_only] public fun init_for_testing(ctx: &mut sui::tx_context::TxContext) { init(ctx) }
 }
