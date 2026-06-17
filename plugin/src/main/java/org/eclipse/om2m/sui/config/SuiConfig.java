@@ -33,6 +33,7 @@ public final class SuiConfig {
     public final long   heartbeatPeriodMs;
     public final long   heartbeatTimeoutMs;
     public final long   leaseAnchorPeriodMs;
+    public final long   parentSelfCheckPeriodMs;
     public final String dasApocPath;     // CSE NOTIFY dispatch path for this DAS
     public final long   minTrust;        // trust gate fed into the PTB
     public final boolean useNativeRpc;   // true = bypass CLI, use BCS+RPC
@@ -64,6 +65,7 @@ public final class SuiConfig {
         this.heartbeatPeriodMs   = Long.parseLong(p.getProperty("failover.heartbeat.period.ms",  "5000"));
         this.heartbeatTimeoutMs  = Long.parseLong(p.getProperty("failover.heartbeat.timeout.ms","15000"));
         this.leaseAnchorPeriodMs = Long.parseLong(p.getProperty("failover.lease.anchor.period.ms","600000"));
+        this.parentSelfCheckPeriodMs = Long.parseLong(p.getProperty("failover.parent.selfcheck.period.ms","15000"));
         this.dasApocPath         = p.getProperty("sui.das.apoc.path", "sui-das");
         this.minTrust            = Long.parseLong(p.getProperty("sui.min.trust", "50"));
         this.useNativeRpc        = Boolean.parseBoolean(p.getProperty("sui.use.native.rpc", "false"));

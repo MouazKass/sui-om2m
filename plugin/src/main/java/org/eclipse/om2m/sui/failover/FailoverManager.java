@@ -200,7 +200,7 @@ public final class FailoverManager implements MqttCallback {
                     refreshCurrentParent();
                 }
             } catch (Throwable _t) { /* never let the self-check kill the scheduler */ }
-        }, cfg.leaseAnchorPeriodMs, cfg.leaseAnchorPeriodMs, TimeUnit.MILLISECONDS);
+        }, cfg.parentSelfCheckPeriodMs, cfg.parentSelfCheckPeriodMs, TimeUnit.MILLISECONDS);
     }
 
     /**
