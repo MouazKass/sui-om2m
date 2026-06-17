@@ -70,6 +70,7 @@ public final class FailoverManager implements MqttCallback {
     private ScheduledFuture<?> heartbeatTask;
     private ScheduledFuture<?> watchdogTask;
     private ScheduledFuture<?> anchorTask;
+    private ScheduledFuture<?> parentSelfCheckTask;
 
     public FailoverManager(SuiConfig cfg, SuiCli cli) {
         this.cfg = cfg;
@@ -103,6 +104,7 @@ public final class FailoverManager implements MqttCallback {
         if (heartbeatTask != null) heartbeatTask.cancel(false);
         if (watchdogTask  != null) watchdogTask.cancel(false);
         if (anchorTask    != null) anchorTask.cancel(false);
+        if (parentSelfCheckTask != null) parentSelfCheckTask.cancel(false);
         scheduler.shutdownNow();
         if (mqtt != null) {
             try { mqtt.disconnect(); } catch (MqttException ignored) {}
@@ -162,7 +164,11 @@ public final class FailoverManager implements MqttCallback {
     @Override public void deliveryComplete(IMqttDeliveryToken token) { /* unused */ }
 
     // === Parent duties ===
-    private void startParentDuties() {
+    private synchronized void startParentDuties() {
+        // Idempotency guard: cancel any existing tasks before (re)scheduling.
+        if (heartbeatTask != null) { heartbeatTask.cancel(false); heartbeatTask = null; }
+        if (anchorTask    != null) { anchorTask.cancel(false);    anchorTask    = null; }
+        if (parentSelfCheckTask != null) { parentSelfCheckTask.cancel(false); parentSelfCheckTask = null; }
         // Heartbeat publisher.
         heartbeatTask = scheduler.scheduleAtFixedRate(() -> {
             try {
@@ -185,6 +191,32 @@ public final class FailoverManager implements MqttCallback {
             cfg.leaseAnchorPeriodMs,
             cfg.leaseAnchorPeriodMs,
             TimeUnit.MILLISECONDS);
+
+        // FM3: while we are parent, periodically confirm the chain still
+        // names us. If it doesn't, refreshCurrentParent() -> stopParentDuties().
+        parentSelfCheckTask = scheduler.scheduleAtFixedRate(() -> {
+            try {
+                if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
+                    refreshCurrentParent();
+                }
+            } catch (Throwable _t) { /* never let the self-check kill the scheduler */ }
+        }, cfg.leaseAnchorPeriodMs, cfg.leaseAnchorPeriodMs, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * FM3: tear down parent duties when this node has been deposed.
+     * Cancels the heartbeat publisher and the lease anchor so the node
+     * stops asserting parenthood on MQTT and on-chain. Idempotent.
+     */
+    private synchronized void stopParentDuties() {
+        boolean wasParent = false;
+        if (heartbeatTask != null) { heartbeatTask.cancel(false); heartbeatTask = null; wasParent = true; }
+        if (anchorTask    != null) { anchorTask.cancel(false);    anchorTask    = null; wasParent = true; }
+        if (parentSelfCheckTask != null) { parentSelfCheckTask.cancel(false); parentSelfCheckTask = null; }
+        if (wasParent) {
+            lastHeartbeatMs.set(System.currentTimeMillis());
+            LOG.info("Parent duties stopped (deposed): heartbeat + lease anchor cancelled.");
+        }
     }
 
     private void anchorLease() {
@@ -331,6 +363,9 @@ public final class FailoverManager implements MqttCallback {
                 boolean changed = (previous == null) || previous.isEmpty()
                         || !previous.equalsIgnoreCase(parent);
                 if (changed && !parent.equalsIgnoreCase(cfg.nodeAddress)) {
+                    // FM3: the chain now names someone else as parent. If we were
+                    // running parent duties, tear them down before switching role.
+                    stopParentDuties();  // FM3
                     onParentChanged(parent);
                 }
             } else {
