@@ -246,7 +246,13 @@ public final class FailoverManager implements MqttCallback {
         // updates lastHeartbeatMs implicitly via the broker, so we
         // never reach this branch unless our own MQTT broke too.)
         if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
-            LOG.warn("Self-parent watchdog tripped — our own MQTT is broken");
+            // FM3b: before assuming our own MQTT is broken, re-check the chain.
+            // We may have been deposed while still believing we are parent;
+            // refreshCurrentParent() will detect that and fire stopParentDuties().
+            refreshCurrentParent();
+            if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
+                LOG.warn("Self-parent watchdog tripped — our own MQTT is broken");
+            }
             return;
         }
         LOG.warn("Parent silence detected (" + elapsed + " ms). Submitting Sui claim.");
