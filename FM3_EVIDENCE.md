@@ -88,3 +88,24 @@ follower without a stale self-parent loop and without restart-forced recovery.
 - Trust-engine on-chain score writes currently fail with an empty AdminCap
   (config omits the admin cap id); this is orthogonal to failover, which uses
   the gated-but-permissionless claim path.
+
+## Result 3 — three-node organic failover with contention (FM3b)
+
+Strongest case: all three nodes on FM3b. rpi2 parent (epoch 32), rpi1 + rpi3
+followers. rpi2 stopped (parent death). BOTH followers detected silence and
+submitted competing claims on the same parent-death:
+  - rpi3 (0x27dacda1...): Parent silence detected (15096 ms) -> CLAIM ACCEPTED,
+    digest HYEbwM3JdmRi3tFUShRj2WGxryChjWTNa9GGoAo8ezic
+  - rpi1 (0xef9c6271...): Parent silence detected (17635 ms) -> claim rejected
+    on-chain, MoveAbort code 3, digest CVvd9DK3wMCCSLA5PUhd9YNoSxdDFZR4Hn2QBCczqvfE
+
+The on-chain claim_parent guard arbitrated atomically: exactly one winner
+(rpi3, epoch 33), the competing claim aborted. Only rpi3 beat thereafter; rpi1
+settled as follower after its rejection. rpi2 was then restarted: it booted
+parent=rpi3 self=rpi2 (follower), made no claim attempts, stayed silent, and
+the chain held stable at rpi3/epoch 33.
+
+This demonstrates contention safety on a full cluster: parent dies -> multiple
+followers race -> chain admits exactly one new parent -> losing claimant and
+revived old parent both converge as stable followers. No split-brain, no dual
+parents, no stale-self-parent loop.
