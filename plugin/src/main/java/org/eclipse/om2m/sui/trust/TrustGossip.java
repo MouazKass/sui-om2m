@@ -173,8 +173,23 @@ final class TrustGossip implements MqttCallback {
             }
         }
 
-        latest.computeIfAbsent(obs.observerAddr, a -> new ConcurrentHashMap<>())
-              .put(obs.targetAddr, obs);
+        // SY5: replay hardening. Reject a (signed) observation whose producedAtMs
+        // is not strictly newer than the one we already hold for this
+        // (observer,target). Without this, an attacker could replay an OLDER
+        // captured-and-signed observation within the freshness window and
+        // override a newer one (out-of-order replay). Monotonic producedAtMs
+        // per (observer,target) makes ingest replay-safe, not just
+        // last-write-wins.
+        Map<String, NodeObservation> perObserver =
+            latest.computeIfAbsent(obs.observerAddr, a -> new ConcurrentHashMap<>());
+        NodeObservation prev = perObserver.get(obs.targetAddr);
+        if (prev != null && obs.producedAtMs <= prev.producedAtMs) {
+            LOG.warn("[trust] SY5 replay rejected: stale/duplicate obs from {} about {}"
+                    + " (producedAtMs {} <= stored {})",
+                    obs.observerAddr, obs.targetAddr, obs.producedAtMs, prev.producedAtMs);
+            return;
+        }
+        perObserver.put(obs.targetAddr, obs);
         lastSeen.put(obs.observerAddr, System.currentTimeMillis());
     }
 
