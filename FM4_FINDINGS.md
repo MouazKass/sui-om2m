@@ -38,3 +38,21 @@ time. Verify after: in-cse 200, GRANT still produces a digest, 5103 count = 0.
 ## Note
 Config edits are baked in the image: they survive `docker restart` but revert on
 `docker rm`/`run`. Any live config experiment must account for this.
+
+## Update 2026-06-23 — confirmed: registration is in the compiled product
+Further investigation ruled out the scripts:
+- start_arm64.sh launches OM2M via the product's own ./start.sh (no remote-CSE
+  injection in the script). The SKIP_ARM64_REGISTRATION toggle gates
+  /root/registration.sh, which is NOT the 5103 source — that script is custom
+  cluster-ID/PoA bootstrap logic (parses building/floor from ONEM2M_ID, runs a
+  small Python do_POST listener). Skipping it would break peer bootstrap, not
+  fix the loop.
+- Only org.eclipse.om2m.site.mn-cse is present on the image; no in-cse product
+  is built. The 127.0.0.1:8080 upward registration is compiled into the MN-CSE
+  product's CSEInitializer.
+
+Confirmed fix path: build org.eclipse.om2m.site.in-cse (a true IN-CSE product,
+no upward registration) for ARM64 and rebuild the Docker image, OR patch the
+MN-CSE product source to skip remote-CSE registration and rebuild. This is a
+Maven + image rebuild task, not a live/config fix. Pairs naturally with setting
+up a reproducible from-source build on a build host.
