@@ -72,6 +72,12 @@ public final class FailoverManager implements MqttCallback {
     private ScheduledFuture<?> anchorTask;
     private ScheduledFuture<?> parentSelfCheckTask;
 
+    // FM5: surface gas-exhaustion distinctly from ordinary claim rejection.
+    private final java.util.concurrent.atomic.AtomicLong gasFailureCount =
+        new java.util.concurrent.atomic.AtomicLong(0);
+    private volatile long lastGasFailureMs = 0L;
+    private volatile String lastGasFailureDetail = null;
+
     public FailoverManager(SuiConfig cfg, SuiCli cli) {
         this.cfg = cfg;
         this.cli = cli;
@@ -208,6 +214,29 @@ public final class FailoverManager implements MqttCallback {
      * Cancels the heartbeat publisher and the lease anchor so the node
      * stops asserting parenthood on MQTT and on-chain. Idempotent.
      */
+    // FM5: a gas-coin shortfall surfaces from pickGasCoin as
+    // "no gas coin with balance >= ..." inside Result.error, with a null digest
+    // (tx never submitted). Detect that and raise a distinct, queryable signal
+    // instead of logging it as an ordinary on-chain rejection.
+    private boolean isGasExhaustion(String msg) {
+        return msg != null && msg.contains("no gas coin");
+    }
+
+    private void surfaceGasExhaustion(String detail) {
+        long n = gasFailureCount.incrementAndGet();
+        lastGasFailureMs = System.currentTimeMillis();
+        lastGasFailureDetail = detail;
+        LOG.error("FM5 GAS EXHAUSTED - claim could not be funded (need a SUI coin"
+                + " with balance >= gasBudget=" + cfg.gasBudget + "). This node cannot"
+                + " participate in failover until its wallet is refunded."
+                + " failures=" + n + " detail=" + detail);
+    }
+
+    /** FM5: queryable gas-failure signal for monitoring/alerting. */
+    public long getGasFailureCount() { return gasFailureCount.get(); }
+    public long getLastGasFailureMs() { return lastGasFailureMs; }
+    public String getLastGasFailureDetail() { return lastGasFailureDetail; }
+
     private synchronized void stopParentDuties() {
         boolean wasParent = false;
         if (heartbeatTask != null) { heartbeatTask.cancel(false); heartbeatTask = null; wasParent = true; }
@@ -314,12 +343,20 @@ public final class FailoverManager implements MqttCallback {
                         invokeRoleSwitch("in", null);
                     }
                     startParentDuties();
+                } else if (isGasExhaustion(r.error)) {
+                    // FM5: funding failure, not an ordinary rejection. Surface it.
+                    surfaceGasExhaustion(r.error);
+                    refreshCurrentParent();
                 } else {
                     LOG.info("Claim rejected on-chain: " + r.error + " (digest=" + r.digest + ")");
                     refreshCurrentParent();
                 }
             } catch (Exception e) {
-                LOG.warn("Claim submission failed: " + e.getMessage());
+                if (isGasExhaustion(e.getMessage())) {
+                    surfaceGasExhaustion(e.getMessage());
+                } else {
+                    LOG.warn("Claim submission failed: " + e.getMessage());
+                }
             }
         });
     }
