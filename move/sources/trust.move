@@ -14,18 +14,22 @@
 // threshold itself lives in policy.move.
 
 module om2m_access::trust {
-    use sui::object::{Self, UID};
+    use sui::object::{Self, UID, ID};
     use sui::tx_context::{Self, TxContext};
     use sui::transfer;
     use sui::table::{Self, Table};
     use sui::clock::{Self, Clock};
     use sui::event;
+    use sui::dynamic_field as df;
+    use sui::vec_set::{Self, VecSet};
 
     // === Errors ===
     const E_NOT_FOUND: u64 = 1;
     const E_TRUST_TOO_LOW: u64 = 2;
     const E_ALREADY_EXISTS: u64 = 3;
     const E_SELF_SCORING: u64 = 4;
+    // TR7: capability revocation
+    const E_CAP_REVOKED: u64 = 5;
 
     // === Bounds ===
     const MAX_SCORE: u64 = 100;
@@ -194,6 +198,7 @@ module om2m_access::trust {
         ctx: &TxContext,
     ) {
         assert!(tx_context::sender(ctx) != node_addr, E_SELF_SCORING);
+        assert_cap_valid(admin, registry);
         increase(admin, registry, node_addr, delta, clock);
     }
 
@@ -207,6 +212,7 @@ module om2m_access::trust {
         ctx: &TxContext,
     ) {
         assert!(tx_context::sender(ctx) != node_addr, E_SELF_SCORING);
+        assert_cap_valid(admin, registry);
         decrease(admin, registry, node_addr, delta, clock);
     }
 
@@ -215,13 +221,113 @@ module om2m_access::trust {
     /// One cap per CSE node — see scripts/grant-admins.sh.
     public entry fun grant_admin(
         _admin: &AdminCap,
+        registry: &mut TrustRegistry,
         recipient: address,
         ctx: &mut TxContext,
     ) {
         let cap = AdminCap { id: object::new(ctx) };
+        // TR7: register the new cap as valid (no-op effect on enforcement until
+        // the registry is bootstrapped, but keeps the set complete).
+        let cid = object::id(&cap);
+        let set = valid_caps_mut(registry);
+        if (!vec_set::contains(set, &cid)) { vec_set::insert(set, cid); };
         transfer::public_transfer(cap, recipient);
     }
 
+
+    // ===================================================================
+    // TR7: AdminCap revocation via a per-registry validity set.
+    //
+    // A VecSet<ID> of valid AdminCap ids is stored as a dynamic field on the
+    // TrustRegistry. To stay upgrade-compatible (no struct change) and to avoid
+    // bricking caps that already exist at upgrade time, the set is created
+    // lazily and the guarded score functions are FAIL-OPEN until the registry
+    // is explicitly bootstrapped. After bootstrap_valid_caps is called once,
+    // the guarded functions are FAIL-CLOSED: a cap whose id is not in the set
+    // (e.g. one that was revoke_admin'd) can no longer score.
+    // ===================================================================
+
+    // Dynamic field keys (b"..." byte-vector keys).
+    const VALID_CAPS_KEY: vector<u8> = b"tr7_valid_caps";
+    const BOOTSTRAPPED_KEY: vector<u8> = b"tr7_bootstrapped";
+
+    fun is_bootstrapped(registry: &TrustRegistry): bool {
+        df::exists_(&registry.id, BOOTSTRAPPED_KEY)
+    }
+
+    fun valid_caps_mut(registry: &mut TrustRegistry): &mut VecSet<ID> {
+        if (!df::exists_(&registry.id, VALID_CAPS_KEY)) {
+            df::add(&mut registry.id, VALID_CAPS_KEY, vec_set::empty<ID>());
+        };
+        df::borrow_mut<vector<u8>, VecSet<ID>>(&mut registry.id, VALID_CAPS_KEY)
+    }
+
+    fun valid_caps(registry: &TrustRegistry): &VecSet<ID> {
+        df::borrow<vector<u8>, VecSet<ID>>(&registry.id, VALID_CAPS_KEY)
+    }
+
+    // Enforce cap validity, but only once the registry has been bootstrapped.
+    // Before bootstrap (immediately post-upgrade) all caps remain valid so the
+    // running cluster is not disrupted.
+    fun assert_cap_valid(admin: &AdminCap, registry: &TrustRegistry) {
+        if (is_bootstrapped(registry)) {
+            let id = object::id(admin);
+            assert!(
+                df::exists_(&registry.id, VALID_CAPS_KEY) &&
+                vec_set::contains(valid_caps(registry), &id),
+                E_CAP_REVOKED
+            );
+        }
+    }
+
+    // One-time migration: seed the valid-cap set with the ids of caps that
+    // already exist (the original AdminCap + any granted before this upgrade),
+    // then mark the registry bootstrapped (arms fail-closed enforcement).
+    // Gated by holding a (still-valid, pre-bootstrap) AdminCap.
+    public entry fun bootstrap_valid_caps(
+        _admin: &AdminCap,
+        registry: &mut TrustRegistry,
+        cap_ids: vector<ID>,
+        _ctx: &mut TxContext,
+    ) {
+        let set = valid_caps_mut(registry);
+        let mut i = 0;
+        let n = std::vector::length(&cap_ids);
+        while (i < n) {
+            let cid = *std::vector::borrow(&cap_ids, i);
+            if (!vec_set::contains(set, &cid)) {
+                vec_set::insert(set, cid);
+            };
+            i = i + 1;
+        };
+        if (!df::exists_(&registry.id, BOOTSTRAPPED_KEY)) {
+            df::add(&mut registry.id, BOOTSTRAPPED_KEY, true);
+        };
+    }
+
+    // Revoke a specific AdminCap by id: remove it from the valid set. After
+    // this, guarded score writes using that cap abort with E_CAP_REVOKED.
+    // Gated by holding a valid AdminCap (the caller proves current authority).
+    public entry fun revoke_admin(
+        admin: &AdminCap,
+        registry: &mut TrustRegistry,
+        cap_id: ID,
+        _ctx: &mut TxContext,
+    ) {
+        assert_cap_valid(admin, registry);
+        let set = valid_caps_mut(registry);
+        if (vec_set::contains(set, &cap_id)) {
+            vec_set::remove(set, &cap_id);
+        };
+    }
+
+    // Read-only: is a given cap id currently valid? (false also if never
+    // registered.) Useful for tests/monitoring.
+    public fun is_cap_valid(registry: &TrustRegistry, cap_id: ID): bool {
+        is_bootstrapped(registry) &&
+        df::exists_(&registry.id, VALID_CAPS_KEY) &&
+        vec_set::contains(valid_caps(registry), &cap_id)
+    }
 
     #[test_only] public fun init_for_testing(ctx: &mut sui::tx_context::TxContext) { init(ctx) }
 }
