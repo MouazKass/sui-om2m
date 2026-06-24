@@ -221,13 +221,23 @@ module om2m_access::trust {
     /// One cap per CSE node — see scripts/grant-admins.sh.
     public entry fun grant_admin(
         _admin: &AdminCap,
+        recipient: address,
+        ctx: &mut TxContext,
+    ) {
+        let cap = AdminCap { id: object::new(ctx) };
+        transfer::public_transfer(cap, recipient);
+    }
+
+    // TR7: registry-aware grant. New function (adding functions is
+    // upgrade-compatible; changing grant_admin's existing signature is not).
+    // Mints an AdminCap, registers its id in the validity set, transfers it.
+    public entry fun grant_admin_registered(
+        _admin: &AdminCap,
         registry: &mut TrustRegistry,
         recipient: address,
         ctx: &mut TxContext,
     ) {
         let cap = AdminCap { id: object::new(ctx) };
-        // TR7: register the new cap as valid (no-op effect on enforcement until
-        // the registry is bootstrapped, but keeps the set complete).
         let cid = object::id(&cap);
         let set = valid_caps_mut(registry);
         if (!vec_set::contains(set, &cid)) { vec_set::insert(set, cid); };
