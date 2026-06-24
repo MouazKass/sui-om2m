@@ -90,3 +90,14 @@ policy     0x621e7f65f9e9125ee7d50d08dc4108d30c7e8924353c131f3c2d0da31935a77c
 audit      0x433a99d49718a69af7ac22fc9adae43b10373b1c5f81ea7df4a037b8b80db32f
 cluster    0x2ca259ed6a30f0a9dd8b4950789331654f12836f179b82c7fbb52c74476a3800
 clock      0x6   gas budget 20000000   mqtt tcp://<own-ip>:1883
+
+## FM4 — cseType must be "in-cse" (not "IN")
+config.ini is baked in the image (NOT host-mounted). OM2M's CSEType.IN constant
+is the string "in-cse". If config.ini has `org.eclipse.om2m.cseType=IN`, the
+IN-CSE check fails ("IN" != "in-cse") and the node loops on upstream registration
+(5103 every 10s).
+On container recreation from the base image, EITHER:
+  - recreate from the per-node fixed image: mouazkass/om2m-sui-in:rpiN-incse, OR
+  - re-apply: sed -i 's/^org.eclipse.om2m.cseType=IN$/org.eclipse.om2m.cseType=in-cse/' \
+      .../configuration/config.ini  (then docker restart)
+Verify: in-cse=200 and `docker logs | grep -c 5103` == 0.
