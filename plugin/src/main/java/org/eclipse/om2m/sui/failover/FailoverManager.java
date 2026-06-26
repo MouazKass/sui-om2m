@@ -218,7 +218,7 @@ public final class FailoverManager implements MqttCallback {
     // "no gas coin with balance >= ..." inside Result.error, with a null digest
     // (tx never submitted). Detect that and raise a distinct, queryable signal
     // instead of logging it as an ordinary on-chain rejection.
-    private boolean isGasExhaustion(String msg) {
+    static boolean isGasExhaustion(String msg) {
         return msg != null && msg.contains("no gas coin");
     }
 

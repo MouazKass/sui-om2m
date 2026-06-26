@@ -141,6 +141,15 @@ final class TrustGossip implements MqttCallback {
         lastSeen.put(selfAddr, System.currentTimeMillis());
     }
 
+    // SY5: replay decision as a pure, testable predicate. An incoming
+    // observation is a replay/stale if we already hold one for this
+    // (observer,target) whose producedAtMs is >= the incoming one (i.e. the
+    // incoming is not STRICTLY newer). Extracted so the monotonic-ingest
+    // invariant can be unit-tested directly (see TrustGossipReplayTest).
+    static boolean isReplay(NodeObservation prev, NodeObservation incoming) {
+        return prev != null && incoming.producedAtMs <= prev.producedAtMs;
+    }
+
     @Override
     public void messageArrived(String t, MqttMessage message) {
         NodeObservation obs = NodeObservation.decode(new String(message.getPayload()));
@@ -183,7 +192,7 @@ final class TrustGossip implements MqttCallback {
         Map<String, NodeObservation> perObserver =
             latest.computeIfAbsent(obs.observerAddr, a -> new ConcurrentHashMap<>());
         NodeObservation prev = perObserver.get(obs.targetAddr);
-        if (prev != null && obs.producedAtMs <= prev.producedAtMs) {
+        if (isReplay(prev, obs)) {
             LOG.warn("[trust] SY5 replay rejected: stale/duplicate obs from {} about {}"
                     + " (producedAtMs {} <= stored {})",
                     obs.observerAddr, obs.targetAddr, obs.producedAtMs, prev.producedAtMs);
