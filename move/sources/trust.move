@@ -67,6 +67,11 @@ module om2m_access::trust {
         initial_score: u64,
     }
 
+    /// Emitted when an AdminCap is permanently destroyed via burn_admin.
+    public struct AdminCapBurned has copy, drop {
+        cap_id: ID,
+    }
+
     // === Init ===
     fun init(ctx: &mut TxContext) {
         let cap = AdminCap { id: object::new(ctx) };
@@ -329,6 +334,33 @@ module om2m_access::trust {
         if (vec_set::contains(set, &cap_id)) {
             vec_set::remove(set, &cap_id);
         };
+    }
+
+
+    // TR7 extension: permanently destroy an AdminCap. Removes it from the
+    // validity set if present, then deletes the object (consumed by value),
+    // so the cap can never be used or re-registered again. Gated by a valid
+    // AdminCap (caller proves current authority). Completes the cap
+    // lifecycle: mint -> grant -> revoke -> burn.
+    public entry fun burn_admin(
+        registry: &mut TrustRegistry,
+        to_burn: AdminCap,
+        _ctx: &mut TxContext,
+    ) {
+        // Self-burn: possession of the cap is the authority to destroy it.
+        let burn_id = object::id(&to_burn);
+        // Only touch the validity set if it already exists; never create it
+        // here as a side effect of burning.
+        if (df::exists_(&registry.id, VALID_CAPS_KEY)) {
+            let set = valid_caps_mut(registry);
+            if (vec_set::contains(set, &burn_id)) {
+                vec_set::remove(set, &burn_id);
+            };
+        };
+        let AdminCap { id } = to_burn;
+        object::delete(id);
+        // Auditable record: an authority capability was permanently destroyed.
+        event::emit(AdminCapBurned { cap_id: burn_id });
     }
 
     // Read-only: is a given cap id currently valid? (false also if never

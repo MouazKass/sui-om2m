@@ -146,4 +146,52 @@ module om2m_access::trust_revocation_tests {
         clock::destroy_for_testing(clk);
         ts::end(sc);
     }
+
+    // TR7 burn: a held cap is destroyed by burn_admin. Before burn it is in
+    // the validity set (is_cap_valid -> true); after burn it is gone from the
+    // set (is_cap_valid -> false) and the object no longer exists. Mirrors the
+    // full cap lifecycle: mint -> grant -> revoke -> burn.
+    #[test]
+    fun tr7_burn_removes_cap() {
+        let mut sc = setup();
+        let clk = mk_clock(&mut sc);
+        seed_node(&mut sc, &clk);
+        bootstrap_with_original(&mut sc);
+
+        // grant a registered cap to NEWCAP_HOLDER
+        ts::next_tx(&mut sc, ADMIN);
+        {
+            let cap = ts::take_from_sender<AdminCap>(&mut sc);
+            let mut reg = ts::take_shared<TrustRegistry>(&mut sc);
+            trust::grant_admin_registered(&cap, &mut reg, NEWCAP_HOLDER, ts::ctx(&mut sc));
+            ts::return_shared(reg);
+            ts::return_to_sender(&mut sc, cap);
+        };
+
+        // capture the new cap id; confirm it is valid before burning
+        ts::next_tx(&mut sc, NEWCAP_HOLDER);
+        let cap0 = ts::take_from_sender<AdminCap>(&mut sc);
+        let cap_id = object::id(&cap0);
+        ts::return_to_sender(&mut sc, cap0);
+        ts::next_tx(&mut sc, NEWCAP_HOLDER);
+        {
+            let reg = ts::take_shared<TrustRegistry>(&mut sc);
+            assert!(trust::is_cap_valid(&reg, cap_id), 0); // valid before burn
+            ts::return_shared(reg);
+        };
+
+        // NEWCAP_HOLDER self-burns its cap
+        ts::next_tx(&mut sc, NEWCAP_HOLDER);
+        {
+            let to_burn = ts::take_from_sender<AdminCap>(&mut sc);
+            let mut reg = ts::take_shared<TrustRegistry>(&mut sc);
+            trust::burn_admin(&mut reg, to_burn, ts::ctx(&mut sc));
+            assert!(!trust::is_cap_valid(&reg, cap_id), 1); // gone from set after burn
+            ts::return_shared(reg);
+        };
+
+        clock::destroy_for_testing(clk);
+        ts::end(sc);
+    }
+
 }
