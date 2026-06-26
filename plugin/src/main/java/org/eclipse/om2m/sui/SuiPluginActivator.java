@@ -60,7 +60,7 @@ public final class SuiPluginActivator implements BundleActivator {
                 NativePtbBuilder npb = new NativePtbBuilder(nc, Paths.get(cfg.keystorePath));
                 trustEngine = new TrustScoringEngine(
                     tcfg, npb, cfg.nodeAddress, cfg.trustAdminCapId,
-                    cfg.mqttBrokerUrl, cfg.clusterId);
+                    cfg.mqttBrokerUrl, cfg.clusterId, cfg.keystorePath);
                 trustEngine.start();
                 LOG.info("[sui-debug] step 10: TrustScoringEngine started");
             } catch (Throwable te) {
