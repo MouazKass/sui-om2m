@@ -186,4 +186,5 @@ module om2m_access::policy {
         let p = table::borrow(&registry.policies, *resource_id);
         p.min_trust
     }
+    #[test_only] public fun init_for_testing(ctx: &mut sui::tx_context::TxContext) { init(ctx) }
 }
