@@ -6,3 +6,5 @@ move/build/
 
 # Windows/WSL NTFS metadata
 *:Zone.Identifier
+plugin/target/
+target/
