@@ -35,3 +35,8 @@ mqtt.broker.url=tcp://10.25.96.200:1883
 failover.heartbeat.period.ms=5000
 failover.heartbeat.timeout.ms=15000
 failover.lease.anchor.period.ms=600000
+
+# Use native BCS+JSON-RPC for the DAS access PTB instead of shelling out to
+# the sui CLI. ~2.5x faster and reports precise on-chain Move abort codes on
+# DENY (vs the opaque "sui CLI exited 1"). See NATIVE_DAS_EVIDENCE.md.
+sui.use.native.rpc=true
