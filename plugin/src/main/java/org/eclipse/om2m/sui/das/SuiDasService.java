@@ -193,7 +193,7 @@ public final class SuiDasService implements InterworkingService {
         }
 
         if (!result.granted) {
-            LOG.info("Sui DENY originator=" + originator + " resource=" + resourceId + " op=" + op + " err=" + result.digestOrError);
+            LOG.info("Sui DENY originator=" + originator + " resource=" + resourceId + " op=" + op + " err=" + AbortDecoder.decode(result.digestOrError) + " [raw: " + result.digestOrError + "]");
         // Trust observer hook: record this access decision against the requester.
         try {
             BehaviourObserver obs = TrustScoringEngine.activeObserver();
