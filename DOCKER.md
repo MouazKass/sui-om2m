@@ -29,8 +29,8 @@ package). To recover a node from the image alone:
     # then (re)start the container so the mount picks them up
 
 ## TODO (durability hardening — not yet done)
-  - Wire the startup script to fall back to /root/baked-* when no mount is
-    present, so the image is self-sufficient.
+  - [DONE 2026-06-27] Startup script falls back to /root/baked-* when no valid
+    mount is present (detects missing/stale-v1 config). Images :rpiN-v6 are now self-sufficient. Script saved in docker/start_scripts/start_arm64.sh.
   - Add a @reboot mechanism (cron or systemd) that restores /tmp/sui.properties
     from a durable location and starts the container with --restart=unless-stopped.
     Currently restart policy = "no" and /tmp config is volatile across reboots.
