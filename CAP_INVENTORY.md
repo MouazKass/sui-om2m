@@ -31,3 +31,14 @@ score once the registry is bootstrapped (fail-closed).
 PolicyAdminCap (policy module) lives separately on the publisher wallet:
   0x5014cfabcf799c405b7989c9438d84e55ee5a1941cf95eebc87ba8947ad66883
   (used for set_policy/add_blackout in PO1/PO2 evidence — PO4 authority sep.)
+
+## UPDATE 2026-06-27 — v6 upgrade + burn
+v6 package: 0xb579914d317ebd8bb6ef6d0b59d2f80a4a81fc731917840dd01a4daa64180899
+burn_admin (self-burn AdminCap destructor) deployed in v6.
+- Revoked throwaway 0x991b870e... BURNED via burn_admin
+  (digest 6HUMB4jwqCkLcDccGX2Gnj4bqSddLQrq4aGbjv1Cfeya, AdminCapBurned emitted).
+  Object destroyed (object::delete), not just revoked. Full lifecycle complete:
+  mint -> grant -> revoke -> burn.
+- Node duplicate caps (0x0807e2b1/rpi1, 0xbac06c37/rpi2, 0xb01a5e5b/rpi3) left
+  in place: owned by node wallets (self-burn requires each node's key), and
+  inert/harmless. Documented, not burned.
