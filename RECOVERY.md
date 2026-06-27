@@ -173,3 +173,16 @@ On-chain access logic is independently proven (real GRANTs/DENYs with correct
 abort codes, capability isolation across nodes) in the evidence files, and the
 Evaluation section has five real measured numbers. Re-triggering a live GRANT is
 a system-reliability task, not a prerequisite for the written paper.
+
+## WORKING GRANT TRIGGER (verified 2026-06-27, rpi3, v6)
+The external NOTIFY path REQUIRES the X-M2M-Operation: 5 header. Without it,
+OM2M routes the POST through normal checkACP and returns 403. With it, the
+request reaches SuiDasService.doExecute and the on-chain check runs.
+
+# After recreating sui-das AE + sui-protected-cnt (with acpi from birth), fire:
+curl -s -w "\nHTTP %{http_code}\n" -X POST "http://127.0.0.1:8282/~/in-cse/in-name/sui-das" \
+  -H "X-M2M-Origin: admin:admin" -H "X-M2M-RI: fire" \
+  -H "X-M2M-Operation: 5" -H "Content-Type: application/json" \
+  -d '{"m2m:sec":{"sit":1,"dreq":{"or":"admin:admin","op":1,"rid":"/in-cse/in-name/sui-protected-cnt","rty":3}}}'
+# Expect: HTTP 200 + "Sui GRANT ... (NNNN ms)" in docker logs.
+# Steady-state latency ~1.4s on v6.
