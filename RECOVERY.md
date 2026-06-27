@@ -186,3 +186,75 @@ curl -s -w "\nHTTP %{http_code}\n" -X POST "http://127.0.0.1:8282/~/in-cse/in-na
   -d '{"m2m:sec":{"sit":1,"dreq":{"or":"admin:admin","op":1,"rid":"/in-cse/in-name/sui-protected-cnt","rty":3}}}'
 # Expect: HTTP 200 + "Sui GRANT ... (NNNN ms)" in docker logs.
 # Steady-state latency ~1.4s on v6.
+## DAS Provisioning & the External-NOTIFY Blocker (findings 2026-06-27)
+
+### TL;DR
+The external HTTP NOTIFY path to `sui-das` is **blocked by OM2M's router**
+(`Controller.checkACP`, Controller.java:212, "Current resource does not have any
+ACP attached") on BOTH rpi1 and rpi3, regardless of how the ACP is configured.
+The NOTIFY never reaches `SuiDasService.doExecute` — it dies in the router first.
+A live GRANT could NOT be re-triggered via curl this session.
+
+### What was verified to work
+- rpi3 mappings correctly point Csensor-001 -> rpi3's own address (0x27dacda1...),
+  and the CapToken 0xe474652c... IS owned by rpi3. So the token-owner-matches-node
+  constraint is satisfied on rpi3 (it is NOT on rpi1 — rpi1 is the cross-node
+  DENIAL test node; its mapping points Csensor-001 at rpi1 but the token is rpi3's).
+- rpi3 is on v6 (sui.package.id=0xb579914d...). Mappings persist in
+  sui.mappings.properties (mounted from /tmp, durable copy in ~/sui-runtime-config/).
+- The DAS registers fine as an InterworkingService (activator logs "DAS registered
+  at APOC path: sui-das"). Plugin loads, failover works, trust engine starts.
+
+### The OM2M resource situation (all in-memory, lost on every restart)
+After ANY container restart you must recreate, on the node you're testing:
+1. sui-das AE (ty=2) — MUST include acpi at POST time (see ACP-bootstrapping below)
+2. sui-protected-cnt container (ty=3) — same acpi requirement
+The ACP resource (acp_admin) survives as /in-cse/acp-XXXXXXXXX but its `ri` is
+**regenerated on every boot** — discover it fresh by reading
+`/~/in-cse/in-name/acp_admin` and taking `m2m:acp.ri`. Do NOT hardcode the acp-id.
+
+### ACP bootstrapping lockout (important)
+A resource created with NO acp denies its own UPDATE and DELETE ("Unknown or
+unauthorized originator" / "no ACP attached"). So you CANNOT attach an ACP after
+the fact via PUT, and you cannot delete-and-recreate. You MUST set `acpi` at
+creation (POST) time. Creating WITH acpi works (returns 201 with acpi populated).
+
+### The blocker (unresolved)
+Even with:
+  - resources created WITH acpi from birth (201, acpi confirmed in body),
+  - the ACP updated so Csensor-001 has acop=63 (200, confirmed),
+  - the ACP resolving correctly (GET acp-XXXX returns 200),
+...a NOTIFY to /~/in-cse/in-name/sui-das STILL returns 403 "no ACP attached",
+and the log shows the RequestPrimitive is BUILT and routed to sui-das but
+`doExecute` is NEVER reached. The denial is in OM2M's core Router/Controller,
+before the plugin runs.
+
+### Why this matters / hypotheses for next session
+POLICY_EVIDENCE.md line 6 says the working GRANTs were "triggered by NOTIFYs to
+the sui-das PoA" — i.e. this same path. Yet it now fails on every node. Either:
+  (a) A provisioning step is still missing that the original session had.
+  (b) The OM2M image/config differed when those GRANTs were captured.
+  (c) The GRANTs were actually fired through the in-JVM Redirector
+      (DynamicAuthorizationConsultation/Selector) path, NOT external HTTP NOTIFY —
+      and the external path never truly worked. The DAS source explicitly calls
+      the HTTP NOTIFY a "test/external path" and the DAC-RETRIEVE the production
+      path. No DynamicAuthorizationConsultation class was found in the container,
+      so this OM2M build may not support DAC resources at all — which would mean
+      the in-JVM path was triggered some other way (e.g. direct Redirector
+      injection in a test harness), not reproducible via curl.
+
+### To resolve (focused session, at the machine, ideally with Hamza)
+1. Decompile/read OM2M core Controller.checkACP (Controller.java:212) from the
+   container to see the EXACT condition that throws "no ACP attached" for a
+   NOTIFY-to-AE. The .class is in the container; the .java may not be.
+2. Recover how the original rpi3 GRANTs were actually triggered — check rpi3
+   shell history, any test harness/script, or ask Hamza. This is the keystone.
+3. If the answer is in-JVM only: document that external curl-NOTIFY is not a
+   supported trigger, and that GRANTs require the in-JVM path (and how to invoke
+   it). If external SHOULD work: find the missing provisioning step.
+
+### Not a paper blocker
+On-chain access logic is independently proven (real GRANTs/DENYs with correct
+abort codes, capability isolation across nodes) in the evidence files, and the
+Evaluation section has five real measured numbers. Re-triggering a live GRANT is
+a system-reliability task, not a prerequisite for the written paper.
