@@ -10,15 +10,14 @@ Sui testnet, captured live 2026-06-27. Node: rpi3 (10.25.96.203, IN-CSE, addr
 
 Measured by the DAS itself (`result.elapsedMs`, logged on every `Sui GRANT`) —
 pure on-chain decision time, excludes HTTP framing. Trigger requires the
-`X-M2M-Operation: 5` header (see RECOVERY.md). Script: `bench/bench_latency_v2.sh`.
+`X-M2M-Operation: 5` header (see RECOVERY.md). Script: `bench/bench_latency_clean.sh`.
 
 | Statistic | Value |
 |---|---|
-| **Warm (n=11)** | **1295 ± 43 ms**, p50 1292, min 1244, max 1400 |
+| **Warm (n=200)** | **1290 ± 73 ms**, p50 1277, p95 1395, min 1187, max 1876 |
 | Cold-start (first request) | ~2000–3000 ms (JIT + connection warm-up) |
-| Earlier batch (n=10) | 1382 ± 239 ms |
 
-Headline: **~1.3 s per decision, σ=43 ms (very stable).**
+Headline: **~1.3 s per decision, σ=73 ms over 200 samples (tight, repeatable).**
 
 ## 2. Baseline — plain OM2M RETRIEVE, no chain
 
@@ -31,13 +30,32 @@ no on-chain check). Script: `bench/bench_baseline.sh`.
 
 ## 3. Overhead the on-chain layer adds
 
-> Native 1295 ms − baseline 5.4 ms ≈ **1290 ms per decision**
+> Native 1290 ms − baseline 5.4 ms ≈ **1285 ms per decision**
 
 This ~1.3 s is the measured price of a tamper-evident, trust-gated, atomic access
 decision over a non-verifiable one. Essentially all of it is the on-chain
 transaction confirmation (a Sui testnet round trip), not client-side PTB assembly.
 
-## 4. Legacy CLI path (contrast only)
+## 4. Decision cache (opt-in throughput optimization)
+
+Config key `sui.das.cache.ttl.ms` (default `0` = off). Caches GRANTs only, never
+DENYs (fail-closed: a stale entry can never turn a denial into a grant). Cached
+hits logged distinctly as `Sui GRANT (cached)`. Measured live with TTL=5000:
+
+| Request | Wall time | Log |
+|---|---|---|
+| 1st (fresh, hits chain) | 3.043 s | `Sui GRANT ... (3026 ms)` |
+| 2nd (cached) | 0.012 s | `Sui GRANT (cached)` |
+| 3rd (cached) | 0.007 s | `Sui GRANT (cached)` |
+
+> **~250–430× reduction** on repeat access within the TTL window.
+
+The first access in every window is still fully verified on chain; the cache
+amortises that cost across a burst, it does not bypass verification. With the
+cache off (the default, under which all other numbers here were measured),
+behaviour is identical to a pure per-request on-chain check.
+
+## 5. Legacy CLI path (contrast only)
 
 The earlier shell-out path (spawned a `sui` subprocess per decision), retained
 only to quantify the native-path speedup.
@@ -45,12 +63,12 @@ only to quantify the native-path speedup.
 | Path | Latency |
 |---|---|
 | CLI shell-out | ~6000–7000 ms |
-| Native (this work) | ~1295 ms |
+| Native (this work) | ~1290 ms |
 | **Speedup** | **~4–5×** |
 
 ---
 
-## 5. Gas per operation
+## 6. Gas per operation
 
 Net gas = `computationCost + storageCost − storageRebate`. 1 SUI = 10^9 MIST.
 Read from transaction effects. Script: `bench/bench_gas_per_op.sh`.
@@ -70,7 +88,7 @@ Notes:
 - Storage differs for create-vs-mutate, so the first tier change for a fresh node
   may cost slightly more than subsequent ones.
 
-## 6. Failover takeover time
+## 7. Failover takeover time
 
 Wall-clock from parent termination to a new parent anointed on-chain (new cluster
 epoch). Script: `bench/bench_failover_time.sh` (reads `content.epoch` from the
@@ -97,14 +115,25 @@ liveness/responsiveness trade-off.
 
 | Metric | Value |
 |---|---|
-| Native access latency | 1295 ± 43 ms (warm, n=11) |
+| Native access latency | 1290 ± 73 ms (warm, n=200, p50 1277, p95 1395) |
 | Baseline (no chain) | 5.4 ± 1.6 ms (n=30) |
-| On-chain overhead | ~1290 ms / decision |
+| On-chain overhead | ~1285 ms / decision |
+| Decision cache (cached repeat) | 7–12 ms (~250–430× vs fresh; off by default) |
 | vs legacy CLI | ~4–5× faster (CLI ~6–7 s) |
 | Gas: access GRANT | 0.00254 SUI |
 | Gas: tier change | 0.00107 SUI |
 | Gas: failover claim | 0.00103 SUI |
 | Failover takeover | 11.4 ± 2.7 s (n=3) |
+
+## Infrastructure hardening (this session)
+
+- **Decision cache**: opt-in TTL, GRANTs-only, off by default; ~250–430× on cached repeat.
+- **Self-healing persistence**: systemd watchdog on all 3 nodes checks every 60 s and
+  reprovisions DAS resources if missing; covers host reboot + container restart;
+  verified live (container restart → 404 → 200 within one cycle).
+- **Self-scoring**: structural `public(package)` fix attempted; rejected by Sui's
+  `compatible` upgrade policy (Compatibility E01001); documented as a reasoned,
+  bounded deferral (exposure is AdminCap-holder-only and audited).
 
 ## Key IDs (for reproduction)
 - v6 package: `0xb579914d317ebd8bb6ef6d0b59d2f80a4a81fc731917840dd01a4daa64180899`
