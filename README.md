@@ -2,7 +2,7 @@
 
 Implementation companion to the AUS × Sui presentation
 *Blockchain-Enhanced oneM2M IoT Architecture: Integrating Sui
-Blockchain for Trustworthy IoT Interoperability* (Mouaz Kassoumeh,
+Blockchain for Trustworthy IoT Interoperability* (Mouaz Kassouma,
 Hamza AlCharif; supervisors Dr. Anastassia Gharib, Eng. Wissam Abou
 Khreibe).
 
