@@ -50,6 +50,11 @@ public final class SuiDasService implements InterworkingService {
     private volatile NativePtbBuilder nativePtb;
     private final String apocPath;
 
+    // Decision cache (opt-in via sui.das.cache.ttl.ms; 0 = off). Caches GRANTs only,
+    // never DENYs (fail-closed). Key = originator|resource|op, value = expiry epoch ms.
+    private final java.util.concurrent.ConcurrentHashMap<String,Long> grantCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private NativePtbBuilder ensureNative() throws java.io.IOException {
         NativePtbBuilder n = nativePtb;
         if (n == null) {
@@ -171,9 +176,25 @@ public final class SuiDasService implements InterworkingService {
 
         byte op = mapOperation(operation);
 
-        // 5. Execute the atomic 6-step PTB on Sui.
+        // 4b. Decision-cache check (opt-in). A recent GRANT is reusable within the
+        //      TTL window; the chain call is skipped entirely on a hit. DENYs are
+        //      never cached, so a stale entry can never turn a denial into a grant.
+        final String cacheKey = originator + "|" + resourceId + "|" + op;
+        boolean cacheHit = false;
+        if (cfg.cacheTtlMs > 0) {
+            Long expiry = grantCache.get(cacheKey);
+            if (expiry != null && System.currentTimeMillis() < expiry) {
+                cacheHit = true;
+            } else if (expiry != null) {
+                grantCache.remove(cacheKey); // expired; evict
+            }
+        }
+
+        // 5. Execute the atomic 6-step PTB on Sui (skipped on a cache hit).
         AccessResult result;
-        if (cfg.useNativeRpc) {
+        if (cacheHit) {
+            result = AccessResult.granted(0L, "cached");
+        } else if (cfg.useNativeRpc) {
             try {
                 NativePtbBuilder.Result nr = ensureNative().evaluate(
                         requesterAddress, tokenObjectId, resourceId, op);
@@ -208,7 +229,16 @@ public final class SuiDasService implements InterworkingService {
             return response;
         }
 
-        LOG.info("Sui GRANT originator=" + originator + " resource=" + resourceId + " op=" + op + " digest=" + result.digestOrError + " (" + result.elapsedMs + " ms)");
+        if (cfg.cacheTtlMs > 0 && !cacheHit) {
+            grantCache.put(cacheKey, System.currentTimeMillis() + cfg.cacheTtlMs);
+        }
+        if (cacheHit) {
+            LOG.info("Sui GRANT (cached) originator=" + originator + " resource=" + resourceId
+                     + " op=" + op);
+        } else {
+            LOG.info("Sui GRANT originator=" + originator + " resource=" + resourceId
+                     + " op=" + op + " digest=" + result.digestOrError + " (" + result.elapsedMs + " ms)");
+        }
         // Trust observer hook: record this access decision against the requester.
         try {
             BehaviourObserver obs = TrustScoringEngine.activeObserver();

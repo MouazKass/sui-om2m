@@ -37,6 +37,7 @@ public final class SuiConfig {
     public final String dasApocPath;     // CSE NOTIFY dispatch path for this DAS
     public final long   minTrust;        // trust gate fed into the PTB
     public final boolean useNativeRpc;   // true = bypass CLI, use BCS+RPC
+    public final long    cacheTtlMs;       // decision-cache TTL in ms; 0 = disabled (default)
     public final String  rpcUrl;          // fullnode RPC endpoint (testnet/mainnet)
     public final String  keystorePath;    // path to sui.keystore file
     public final String  parentPoa;        // this node's HTTP PoA when acting as parent
@@ -69,6 +70,7 @@ public final class SuiConfig {
         this.dasApocPath         = p.getProperty("sui.das.apoc.path", "sui-das");
         this.minTrust            = Long.parseLong(p.getProperty("sui.min.trust", "50"));
         this.useNativeRpc        = Boolean.parseBoolean(p.getProperty("sui.use.native.rpc", "false"));
+        this.cacheTtlMs          = Long.parseLong(p.getProperty("sui.das.cache.ttl.ms", "0"));
         this.rpcUrl              = p.getProperty("sui.rpc.url", "https://fullnode.testnet.sui.io:443");
         this.keystorePath        = p.getProperty("sui.keystore.path",
                                      System.getProperty("user.home") + "/.sui/sui_config/sui.keystore");
