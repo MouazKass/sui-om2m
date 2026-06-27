@@ -38,3 +38,13 @@ package). To recover a node from the image alone:
 ## The old :rpi1 tag is STALE — do not use
 mouazkass/om2m-sui-in:rpi1 has cseType=IN (FM4 bug, 5103 loop), an old plugin
 JAR (63690955...), and v1 package config. Superseded by the :rpiN-v6 tags above.
+
+## UPDATE 2026-06-27 — reboot durability (set up, pending reboot test)
+Applied to all 3 nodes:
+  - ~/sui-runtime-config/{sui.properties,sui.mappings.properties} synced to the
+    live v6 config (durable source of truth)
+  - docker update --restart=unless-stopped om2m-active (auto-recover)
+  - @reboot cron: restores /tmp config from ~/sui-runtime-config, starts the
+    container (so volatile /tmp survives a reboot)
+NOT YET reboot-tested. The startup-script fallback to /root/baked-* (full image
+self-sufficiency) is still TODO.
