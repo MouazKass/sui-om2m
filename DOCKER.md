@@ -48,3 +48,9 @@ Applied to all 3 nodes:
     container (so volatile /tmp survives a reboot)
 NOT YET reboot-tested. The startup-script fallback to /root/baked-* (full image
 self-sufficiency) is still TODO.
+
+## REBOOT TEST PASSED 2026-06-27 (rpi2)
+Power-cycled rpi2. Recovery confirmed: container auto-started (Up 21s after
+boot), /tmp/sui.properties restored to v6 + native, CSE responding (in-cse 200)
+on the v6 package. Durability stack (restart=unless-stopped + @reboot cron +
+self-sufficient image) verified working end-to-end.
