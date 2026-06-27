@@ -39,7 +39,7 @@ fi
 TOKEN="$1"
 
 # ----------------------------- config ---------------------------------------
-PKG_V4=0x7208dd4bcd25a69007317185524538cc44f00909a9bce8a9ea0b0976a30ad099
+PKG_V4=0xb579914d317ebd8bb6ef6d0b59d2f80a4a81fc731917840dd01a4daa64180899
 TRUST_REG=0xce9bb88e09fa044eca1365f167cab3e12ed427429a311c1bf1bd96b08cfbef0f
 TRUST_ADMIN_CAP=0xd858c23d4e333843bc09114985c752a7f482b8950db1059fee07b0478c58f568
 CLOCK=0x6

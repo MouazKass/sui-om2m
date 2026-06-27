@@ -27,3 +27,8 @@ export CLUSTER_CAP=0xa65caeaebeed5488e3002cd60a02db6004c9359e602abd373736b3dcde9
 export RPI1=0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9
 export RPI2=0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
 export RPI3=0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+
+# v6 package (current deployed) - use for FUNCTION CALLS.
+# Note: $PKG above (v1) is the type-root and stays fixed across upgrades;
+# function calls must target the latest package id (v6).
+export PKG_V6=0xb579914d317ebd8bb6ef6d0b59d2f80a4a81fc731917840dd01a4daa64180899
