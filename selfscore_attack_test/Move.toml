@@ -1,16 +1,11 @@
 [package]
-name = "om2m_access"
+name = "selfscore_attack"
 edition = "2024.beta"
-version = "0.1.0"
-license = "Apache-2.0"
-authors = ["Mouaz Kassouma <mouazmoayad10@gmail.com>"]
+version = "0.0.1"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
+om2m_access = { local = "../move" }
 
 [addresses]
-om2m_access = "0x0"
-
-[dev-dependencies]
-
-[dev-addresses]
+selfscore_attack = "0x0"

@@ -104,7 +104,7 @@ module om2m_access::trust {
         event::emit(NodeAdded { node_addr, initial_score: s });
     }
 
-    public fun increase(
+    public(package) fun increase(
         _admin: &AdminCap,
         registry: &mut TrustRegistry,
         node_addr: address,
@@ -125,7 +125,7 @@ module om2m_access::trust {
         });
     }
 
-    public fun decrease(
+    public(package) fun decrease(
         _admin: &AdminCap,
         registry: &mut TrustRegistry,
         node_addr: address,
