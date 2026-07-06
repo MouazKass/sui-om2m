@@ -1,61 +1,47 @@
 #!/usr/bin/env bash
-# CONCEPT 2 - TRUST ENGINE / PEER SCORING (TR1,TR3-TR6). Peers score peers; only
-# an AdminCap holder can write a score; scores live on-chain.
+# CONCEPT 2 - TRUST ENGINE / PEER SCORING (TR1,TR3-TR6). Peers score peers via the
+# guarded path; the self-scoring guard blocks a node from scoring itself.
 cd "$(dirname "$0")/.." && source scripts/env.sh
+clean() { sed 's/[│|]//g; s/  */ /g; s/^ *//; /^$/d; s/^/    /'; }
 echo
 echo "################################################################################"
 echo "#  CONCEPT 2 - TRUST ENGINE / PEER SCORING"
 echo "################################################################################"
 echo
-echo "=== rpi2's on-chain score BEFORE ==="
-echo
-echo "\$ sui client call --package \$PKG_V7 --module trust --function score_of \\"
-echo "    --args $TRUST_REG $RPI2 0x6   (dev-inspect read)"
-echo
-BEFORE=$(sui client call --package "$PKG_V7" --module trust --function score_of \
-    --args "$TRUST_REG" "$RPI2" 0x6 --dev-inspect 2>/dev/null \
-    | grep -iE "return|value" | head -1)
-echo "    rpi2 score before: ${BEFORE:-<read via object below>}"
-sui client object "$TRUST_REG" --json 2>/dev/null | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-print('    (TrustRegistry object:', d.get('objectId','')[:20]+'...)')" 2>/dev/null
-echo
-echo "=== THE OPERATION: rpi1 raises rpi2's score (sender=rpi1, node=rpi2: valid) ==="
+echo "=== A PEER RAISES ANOTHER PEER'S SCORE (valid: sender=rpi1, target=rpi2) ==="
+echo "    rpi1 uses its own AdminCap to raise rpi2's trust via increase_guarded."
+echo "    The guard permits this because the signer (rpi1) != the target (rpi2)."
 echo
 echo "\$ docker exec om2m-active sui client call \\"
-echo "    --package $PKG_V7 \\"
-echo "    --module trust --function increase_guarded \\"
-echo "    --args $ADMINCAP_RPI1 \\"
-echo "           $TRUST_REG \\"
-echo "           $RPI2 3 0x6 \\"
-echo "    --gas-budget 50000000"
+echo "    --package $PKG_V7 --module trust --function increase_guarded \\"
+echo "    --args <rpi1_admincap> $TRUST_REG $RPI2 3 0x6   (signed by rpi1)"
 echo
 sshpass -p user ssh user@10.25.96.200 \
   "docker exec om2m-active sui client call \
      --package $PKG_V7 --module trust --function increase_guarded \
      --args $ADMINCAP_RPI1 $TRUST_REG $RPI2 3 0x6 \
-     --gas-budget 50000000 2>&1 | grep -iE 'Transaction Digest|Status|MoveAbort' | head -3 | sed 's/^/    /'"
+     --gas-budget 50000000 2>&1 | grep -iE 'Transaction Digest|Status:|ScoreChanged|new_score|MoveAbort' | head -5" | clean
 echo
-echo "=== rpi2's on-chain score AFTER ==="
+echo "=== THE SAME NODE CANNOT RAISE ITS OWN SCORE (self-scoring guard) ==="
+echo "    rpi2 signs a call to raise rpi2's own score. signer == target, so the"
+echo "    guard aborts with E_SELF_SCORING (code 4)."
 echo
-AFTER=$(sui client call --package "$PKG_V7" --module trust --function score_of \
-    --args "$TRUST_REG" "$RPI2" 0x6 --dev-inspect 2>/dev/null \
-    | grep -iE "return|value" | head -1)
-echo "    rpi2 score:  before ${BEFORE:-?}  ->  after ${AFTER:-?}"
+echo "\$ docker exec om2m-active sui client call \\"
+echo "    --package $PKG_V7 --module trust --function increase_guarded \\"
+echo "    --args <rpi2_admincap> $TRUST_REG $RPI2 3 0x6   (signed by rpi2)"
 echo
-echo "=== A CALLER WITHOUT THE CAP CANNOT SCORE ==="
-echo "    The publisher tries to use rpi3's AdminCap, which it does not own."
-echo
-echo "\$ sui client call --package \$PKG_V7 --module trust --function increase_guarded \\"
-echo "    --args $ADMINCAP_RPI3 $TRUST_REG $RPI2 3 0x6 --gas-budget 50000000"
-echo
-sui client call --package "$PKG_V7" --module trust --function increase_guarded \
-    --args "$ADMINCAP_RPI3" "$TRUST_REG" "$RPI2" 3 0x6 \
-    --gas-budget 50000000 2>&1 | grep -iE "not signed by|owned by|InvalidArgument" | head -1 | sed 's/^/    /'
+SELF=$(sshpass -p user ssh user@10.25.96.201 \
+  "docker exec om2m-active sui client call \
+     --package $PKG_V7 --module trust --function increase_guarded \
+     --args $ADMINCAP_RPI2 $TRUST_REG $RPI2 3 0x6 \
+     --gas-budget 50000000 2>&1")
+echo "$SELF" | grep -iE "aborted within|with code [0-9]|Error executing" | clean
+CODE=$(echo "$SELF" | grep -oE 'with code [0-9]+' | grep -oE '[0-9]+' | head -1)
+[ "$CODE" = "4" ] && echo "    (abort code 4 = E_SELF_SCORING - a node cannot score itself)"
 echo
 echo "--------------------------------------------------------------------------------"
-echo "WHAT THIS SHOWS: scores are on-chain state; a peer can raise a DIFFERENT peer's"
-echo "score (digest above, before->after); a caller cannot use a capability it does"
-echo "not own, so scoring is gated by capability ownership."
+echo "WHAT THIS SHOWS: trust scores are written on-chain through the guarded path;"
+echo "a peer can raise a DIFFERENT peer's score (Success, digest above), but the same"
+echo "node signing to raise its OWN score is rejected (code 4). Peer-driven scoring"
+echo "with a structural self-scoring guard."
 echo "--------------------------------------------------------------------------------"

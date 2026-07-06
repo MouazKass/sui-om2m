@@ -20,7 +20,7 @@ print('    fields  :', json.dumps(f)[:300])
 " 2>/dev/null
 echo "    (policy for /in-cse/in-name/sui-protected-cnt: min_trust=50, ops=3)"
 echo
-echo "=== A REQUEST FROM A NODE THAT IS NOT THE TOKEN OWNER = DENY (fail-closed) ==="
+echo "=== A REQUEST WITH NO MATCHING CAPABILITY = DENY (fail-closed) ==="
 echo "    rpi1 asks for a decision on the resource whose token rpi3 owns."
 echo
 echo "\$ curl -X POST .../sui-das -H 'X-M2M-Operation: 5'   (from rpi1)"
