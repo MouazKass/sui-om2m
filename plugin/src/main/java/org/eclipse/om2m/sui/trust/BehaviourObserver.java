@@ -7,8 +7,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Records raw behavioural events for every peer node and converts them, on
- * demand, into the eight direct-observation health values plus the three raw
- * attestation flags that make up a {@link NodeObservation}.
+ * demand, into the seven direct-observation health values plus the single raw
+ * attestation flag that make up a {@link NodeObservation}.
  *
  * <p>One instance lives on each CSE. The OM2M request path and the failover
  * manager call the {@code record*} hooks as events happen; the engine calls
@@ -23,16 +23,29 @@ import java.util.concurrent.atomic.AtomicLong;
  * learned during a warm-up period: every resource a node touches in the first
  * {@code baselineWarmupMs} is added to its allowed set; after warm-up, requests
  * to resources outside that set count against the node.
+ *
+ * <p><b>B11/B12.</b> Three recorders were removed here:
+ * {@code recordPtbResult} (it was fed the same {@code granted} boolean as
+ * {@link #recordRequest}, so a single denied decision was counted twice — once
+ * as a denied-burst event, once as a PTB abort; the signal is now carried
+ * solely by the denied-decisions health), {@code setMqttMismatchFlag} (dead
+ * code — zero call sites, so the signal was a constant) and
+ * {@code setImpersonationFlag} (its only writer attributed a forged observation
+ * to the impersonated victim rather than the forger — see B2 in
+ * {@code TrustGossip.messageArrived}).
  */
 public final class BehaviourObserver {
 
     private final TrustConfig cfg;
     private final String selfAddr;
     private final long startedAtMs;
+    /** B6: this process's restart epoch, stamped on every observation we gossip. */
+    private final long epoch;
 
-    BehaviourObserver(TrustConfig cfg, String selfAddr) {
+    BehaviourObserver(TrustConfig cfg, String selfAddr, long epoch) {
         this.cfg = cfg;
         this.selfAddr = selfAddr;
+        this.epoch = epoch;
         this.startedAtMs = System.currentTimeMillis();
     }
 
@@ -42,8 +55,6 @@ public final class BehaviourObserver {
         final RollingWindow.Events requests;
         final RollingWindow.Events malformed;
         final RollingWindow.Events denied;
-        final RollingWindow.Events ptbTotal;
-        final RollingWindow.Events ptbAbort;
         final RollingWindow.Events outOfBaseline;
         final RollingWindow.Events inactiveHits;
         final RollingWindow.Values  clockDrift;
@@ -51,18 +62,14 @@ public final class BehaviourObserver {
         final Set<String> baselineResources = ConcurrentHashMap.newKeySet();
         final AtomicLong lastRequestMs = new AtomicLong(0);
 
-        // Group-3 raw flags this observer currently asserts about the target.
-        volatile boolean impersonationFlag;
+        // The one Group-3 raw flag this observer still asserts about the target.
         volatile boolean garbageFlag;
-        volatile boolean mqttMismatchFlag;
 
         Peer(long windowMs) {
             heartbeats    = new RollingWindow.Events(windowMs);
             requests      = new RollingWindow.Events(windowMs);
             malformed     = new RollingWindow.Events(windowMs);
             denied        = new RollingWindow.Events(windowMs);
-            ptbTotal      = new RollingWindow.Events(windowMs);
-            ptbAbort      = new RollingWindow.Events(windowMs);
             outOfBaseline = new RollingWindow.Events(windowMs);
             inactiveHits  = new RollingWindow.Events(windowMs);
             clockDrift    = new RollingWindow.Values(windowMs);
@@ -83,7 +90,13 @@ public final class BehaviourObserver {
     // Recording hooks — called from the OM2M request path / failover loop.
     // ===================================================================
 
-    /** A heartbeat from {@code target} arrived (on time, by definition of the caller). */
+    /**
+     * A heartbeat from {@code target} arrived (on time, by definition of the
+     * caller). B9: the failover manager records this for <i>every</i>
+     * middleware node that beats, not only the current parent — gating it on
+     * the parent address pinned every other node's heartbeat health at 0 and
+     * capped their trust score below the top tier.
+     */
     public void recordHeartbeat(String target, long nowMs) {
         peer(target).heartbeats.add(nowMs);
     }
@@ -101,6 +114,8 @@ public final class BehaviourObserver {
         p.requests.add(nowMs);
 
         if (malformed) p.malformed.add(nowMs);
+        // B12: the single home for "this node's access decisions were denied",
+        // whether the denial came from the policy evaluation or from a PTB abort.
         if (!granted)  p.denied.add(nowMs);
 
         // Baseline learning / enforcement.
@@ -119,24 +134,13 @@ public final class BehaviourObserver {
         }
     }
 
-    /** Result of a Sui access PTB involving {@code target}. */
-    public void recordPtbResult(String target, boolean success, long nowMs) {
-        Peer p = peer(target);
-        p.ptbTotal.add(nowMs);
-        if (!success) p.ptbAbort.add(nowMs);
-    }
-
     /** Observed clock drift (ms, absolute) for {@code target}. */
     public void recordClockDrift(String target, double driftMs, long nowMs) {
         peer(target).clockDrift.add(nowMs, Math.abs(driftMs));
     }
 
-    /** Raise/clear this observer's impersonation flag for {@code target}. */
-    public void setImpersonationFlag(String target, boolean v) { peer(target).impersonationFlag = v; }
     /** Raise/clear this observer's garbage-payload flag for {@code target}. */
     public void setGarbageFlag(String target, boolean v)       { peer(target).garbageFlag = v; }
-    /** Raise/clear this observer's MQTT-mismatch flag for {@code target}. */
-    public void setMqttMismatchFlag(String target, boolean v)  { peer(target).mqttMismatchFlag = v; }
 
     // ===================================================================
     // Snapshot — called once per tick by the engine.
@@ -170,16 +174,8 @@ public final class BehaviourObserver {
         double clkHealth = clamp01(1.0 - drift / cfg.maxClockDriftMs);
 
         // ---- Group 2: access-pattern ----
+        // B12: denied decisions (policy DENY and PTB abort alike), 1 - d/20.
         double denHealth = clamp01(1.0 - (double) p.denied.count(nowMs) / cfg.deniedBurstThreshold);
-
-        int ptbN = p.ptbTotal.count(nowMs);
-        double abortRate = (ptbN == 0) ? 0.0 : (double) p.ptbAbort.count(nowMs) / ptbN;
-        // Health is 1 while at/below the expected baseline, ramping to 0 as the
-        // abort rate climbs from baseline to 1.0.
-        double abortExcess = (abortRate <= cfg.expectedAbortRate)
-            ? 0.0
-            : (abortRate - cfg.expectedAbortRate) / (1.0 - cfg.expectedAbortRate);
-        double ptbHealth = clamp01(1.0 - abortExcess);
 
         double histHealth = (totalReq == 0)
             ? 1.0
@@ -189,12 +185,12 @@ public final class BehaviourObserver {
             ? 1.0
             : clamp01(1.0 - (double) p.inactiveHits.count(nowMs) / totalReq);
 
-        // ---- Group 3: raw flags (peer agreement applied later) ----
+        // ---- Group 3: raw flag (peer agreement applied later) ----
         return new NodeObservation(
-            selfAddr, target, nowMs,
+            selfAddr, target, epoch, nowMs,
             hbHealth, malHealth, rateHealth, clkHealth,
-            denHealth, ptbHealth, histHealth, inactHealth,
-            p.impersonationFlag, p.garbageFlag, p.mqttMismatchFlag);
+            denHealth, histHealth, inactHealth,
+            p.garbageFlag);
     }
 
     private static double clamp01(double v) {

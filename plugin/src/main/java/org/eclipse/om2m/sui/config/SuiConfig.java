@@ -38,7 +38,8 @@ public final class SuiConfig {
     public final long   minTrust;        // trust gate fed into the PTB
     public final boolean useNativeRpc;   // true = bypass CLI, use BCS+RPC
     public final long    cacheTtlMs;       // decision-cache TTL in ms; 0 = disabled (default)
-    public final String  rpcUrl;          // fullnode RPC endpoint (testnet/mainnet)
+    public final String  rpcUrl;          // legacy fullnode JSON-RPC endpoint (kept for compatibility; no longer used for on-chain reads/writes)
+    public final String  graphqlUrl;      // Sui GraphQL endpoint used for all on-chain reads, simulate and execute
     public final String  keystorePath;    // path to sui.keystore file
     public final String  parentPoa;        // this node's HTTP PoA when acting as parent
     public final String  poaFilePath;      // where to persist the current parent PoA for followers
@@ -72,6 +73,12 @@ public final class SuiConfig {
         this.useNativeRpc        = Boolean.parseBoolean(p.getProperty("sui.use.native.rpc", "false"));
         this.cacheTtlMs          = Long.parseLong(p.getProperty("sui.das.cache.ttl.ms", "0"));
         this.rpcUrl              = p.getProperty("sui.rpc.url", "https://fullnode.testnet.sui.io:443");
+        // Public fullnodes no longer serve JSON-RPC. sui.graphql.url wins; if
+        // unset it is derived from sui.rpc.url for the public Sui hosts, and
+        // otherwise defaults to testnet GraphQL.
+        String gq = p.getProperty("sui.graphql.url", "").trim();
+        this.graphqlUrl          = !gq.isEmpty() ? gq
+                                 : org.eclipse.om2m.sui.sdk.SuiGraphQlClient.deriveFromRpcUrl(this.rpcUrl);
         this.keystorePath        = p.getProperty("sui.keystore.path",
                                      System.getProperty("user.home") + "/.sui/sui_config/sui.keystore");
         this.parentPoa           = p.getProperty("sui.parent.poa", "");
@@ -97,6 +104,10 @@ public final class SuiConfig {
             throw new IllegalStateException("Cannot read " + file, e);
         }
         SuiConfig cfg = new SuiConfig(p);
+        // Components that are handed the legacy sui.rpc.url (NativePtbBuilder
+        // via SuiDasService/activator, IdentityRegistryMembers via TrustConfig)
+        // resolve it through the SDK to this endpoint.
+        org.eclipse.om2m.sui.sdk.SuiGraphQlClient.setConfiguredEndpoint(cfg.graphqlUrl);
         // Optionally load originator->address and originator+resource->token
         // mappings from sui.mappings.properties (siblings to sui.properties).
         // Keys:

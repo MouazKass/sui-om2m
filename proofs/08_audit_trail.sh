@@ -19,7 +19,11 @@ print('    owner   :', d.get('owner'))
 print('    type    :', d.get('objType','')[-45:])
 " 2>/dev/null
 echo
-echo "=== A FRESH DECISION EMITS AN EVENT (read the tx's events) ==="
+echo "=== A FRESH DECISION EMITS AN EVENT (inspect the tx's events) ==="
+echo "    ('op':1 is the oneM2M CREATE code, so this asks the DAS to authorize a"
+echo "     WRITE on the container - it maps to the OP_WRITE bit of the token mask;"
+echo "     'X-M2M-Operation: 5' is NOTIFY, the header OM2M needs to route the"
+echo "     decision request into the DAS. Neither of them is a read.)"
 echo
 DIGEST=$(sshpass -p user ssh user@10.25.96.203 bash <<'EOF'
 BASE=http://127.0.0.1:8282; ORIG=admin:admin

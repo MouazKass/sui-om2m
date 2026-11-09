@@ -14,7 +14,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
 /**
- * Native RPC implementation of the 6-step access-evaluation PTB.
+ * Native RPC implementation of the 5-command access-evaluation PTB
+ * (identity -> trust -> cap_token -> policy -> evaluator receipt chain).
  * Bypasses the Sui CLI entirely: BCS-encodes the transaction in-process,
  * signs locally, submits to fullnode RPC with WaitForEffectsCert.
  *
@@ -82,9 +83,37 @@ public final class NativePtbBuilder {
 
     /**
      * Evaluate access for (requesterAddress, resourceId, requestedOp) using tokenObjectId.
-     * Submits the 6-step PTB on-chain with cert-wait finality.
+     * Submits the access PTB on-chain with cert-wait finality.
+     *
+     * <p>v8 receipt chain (A3/A4/A5/A6): each command returns a non-droppable
+     * receipt struct that the next command consumes by value. On the wire that
+     * is {@code Argument::Result(cmdIdx)} — see {@code SuiPtbEncoder.Arg.result}.
+     * {@code Result(i)} (not {@code NestedResult}) is correct because every one
+     * of these functions returns exactly one value.
+     *
+     * <pre>
+     *   cmd 0  identity::verify(id_reg)                        -> IdentityReceipt
+     *   cmd 1  trust::require_min(R0, trust_reg, res_id, min, clock) -> TrustReceipt
+     *   cmd 2  cap_token::validate_for_use(R1, token, op, clock)     -> TokenReceipt
+     *   cmd 3  policy::evaluate(R2, pol_reg, trust_reg, clock)       -> PolicyReceipt
+     *   cmd 4  evaluator::decide_and_log(R3, audit_trail, clock)
+     * </pre>
+     *
+     * <p>{@code &TxContext} / {@code &mut TxContext} parameters are implicit in
+     * Sui and are never PTB arguments, so the A3/A4 "ctx added" changes need
+     * nothing encoded here.
+     *
+     * <p>{@code requesterAddress} is no longer a Move argument anywhere: the
+     * requester is {@code tx_context::sender}. It is still used to pick the
+     * signing keypair and as the transaction sender, which is exactly what
+     * makes the new on-chain checks pass.
      */
     public Result evaluate(String requesterAddress, String tokenObjectId,
+                           String resourceId, byte requestedOp) {
+        return withStaleRetry(() -> evaluateOnce(requesterAddress, tokenObjectId, resourceId, requestedOp));
+    }
+
+    private Result evaluateOnce(String requesterAddress, String tokenObjectId,
                            String resourceId, byte requestedOp) {
         long t0 = System.nanoTime();
         try {
@@ -111,70 +140,76 @@ public final class NativePtbBuilder {
 
             // Build PTB inputs in this exact order:
             //   0: identity_reg (shared imm)
-            //   1: requester (pure address)
-            //   2: trust_reg (shared imm)
+            //   1: trust_reg (shared imm)   <- referenced twice (cmd 1 and cmd 3)
+            //   2: resource_id (pure string)
             //   3: min_trust (pure u64)
             //   4: clock (shared imm)
             //   5: token (owned)
-            //   6: resource_id (pure string)
-            //   7: requested_op (pure u8)
-            //   8: policy_reg (shared imm)
-            //   9: audit_trail (shared mut)
+            //   6: requested_op (pure u8)
+            //   7: policy_reg (shared imm)
+            //   8: audit_trail (shared mut)
+            //
+            // The old "requester (pure address)" input is GONE: A3/A4 removed
+            // every caller-supplied address from these signatures.
             SuiPtbEncoder enc = new SuiPtbEncoder();
             int iIdReg    = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
                     new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.identityRegistryId), idReg.version, false)));
-            int iReq      = enc.addInput(SuiPtbEncoder.CallArg.pure(encAddress(requesterAddr)));
             int iTrustReg = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
                     new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.trustRegistryId), trustReg.version, false)));
+            int iResId    = enc.addInput(SuiPtbEncoder.CallArg.pure(encString(resourceId)));
             int iMinTrust = enc.addInput(SuiPtbEncoder.CallArg.pure(encU64(cfg.minTrustRequired)));
             int iClock    = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
                     new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.suiClockId), clock.version, false)));
             int iToken    = enc.addInput(SuiPtbEncoder.CallArg.ownedObject(
                     new SuiPtbEncoder.ObjectRef(BcsEncoder.hexTo32(tokenObjectId), token.version, token.digestRaw32)));
-            int iResId    = enc.addInput(SuiPtbEncoder.CallArg.pure(encString(resourceId)));
             int iOp       = enc.addInput(SuiPtbEncoder.CallArg.pure(encU8(requestedOp)));
             int iPolReg   = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
                     new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.policyRegistryId), polReg.version, false)));
             int iAudit    = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
                     new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.auditTrailId), auditTr.version, true)));
 
-            // Commands (6-step PTB)
-            //  1: identity::verify(id_reg, requester)
+            // Commands — the A6 receipt chain. Command indices are 0-based and
+            // Arg.result(i) refers to command i's single return value.
+            //  cmd 0: identity::verify(id_reg, &TxContext) -> IdentityReceipt
             enc.addMoveCall(new SuiPtbEncoder.MoveCall(
                     cfg.packageId, "identity", "verify",
-                    Arrays.asList(SuiPtbEncoder.Arg.input(iIdReg),
-                                  SuiPtbEncoder.Arg.input(iReq))));
-            //  2: trust::require_min(trust_reg, requester, min_trust, clock) -> $trust (Result(1))
+                    Arrays.asList(SuiPtbEncoder.Arg.input(iIdReg))));
+            //  cmd 1: trust::require_min(IdentityReceipt=Result(0), trust_reg,
+            //                            resource_id, min_trust, clock) -> TrustReceipt
             enc.addMoveCall(new SuiPtbEncoder.MoveCall(
                     cfg.packageId, "trust", "require_min",
-                    Arrays.asList(SuiPtbEncoder.Arg.input(iTrustReg),
-                                  SuiPtbEncoder.Arg.input(iReq),
+                    Arrays.asList(SuiPtbEncoder.Arg.result(0),
+                                  SuiPtbEncoder.Arg.input(iTrustReg),
+                                  SuiPtbEncoder.Arg.input(iResId),
                                   SuiPtbEncoder.Arg.input(iMinTrust),
                                   SuiPtbEncoder.Arg.input(iClock))));
-            //  3: cap_token::validate_for_use(token, res_id, op, clock)
+            //  cmd 2: cap_token::validate_for_use(TrustReceipt=Result(1), token,
+            //                                     requested_op, clock, &TxContext)
+            //         -> TokenReceipt   (resource_id arg deleted; it rides the receipt)
             enc.addMoveCall(new SuiPtbEncoder.MoveCall(
                     cfg.packageId, "cap_token", "validate_for_use",
-                    Arrays.asList(SuiPtbEncoder.Arg.input(iToken),
-                                  SuiPtbEncoder.Arg.input(iResId),
+                    Arrays.asList(SuiPtbEncoder.Arg.result(1),
+                                  SuiPtbEncoder.Arg.input(iToken),
                                   SuiPtbEncoder.Arg.input(iOp),
                                   SuiPtbEncoder.Arg.input(iClock))));
-            //  4: policy::evaluate(pol_reg, res_id, op, trust=Result(1), clock)
+            //  cmd 3: policy::evaluate(TokenReceipt=Result(2), pol_reg, trust_reg, clock)
+            //         -> PolicyReceipt
+            //         A5: the bare `requester_trust: u64` argument is replaced by the
+            //         TrustRegistry object — the score is read on-chain via
+            //         trust::score_of. resource_id / requested_op args deleted.
             enc.addMoveCall(new SuiPtbEncoder.MoveCall(
                     cfg.packageId, "policy", "evaluate",
-                    Arrays.asList(SuiPtbEncoder.Arg.input(iPolReg),
-                                  SuiPtbEncoder.Arg.input(iResId),
-                                  SuiPtbEncoder.Arg.input(iOp),
-                                  SuiPtbEncoder.Arg.result(1),
+                    Arrays.asList(SuiPtbEncoder.Arg.result(2),
+                                  SuiPtbEncoder.Arg.input(iPolReg),
+                                  SuiPtbEncoder.Arg.input(iTrustReg),
                                   SuiPtbEncoder.Arg.input(iClock))));
-            //  5+6: evaluator::decide_and_log(audit, requester, res_id, op, trust, token, clock)
+            //  cmd 4 (steps 5+6): evaluator::decide_and_log(PolicyReceipt=Result(3),
+            //                                               audit_trail, clock)
+            //         The token object argument is gone (token_uses rides the receipt).
             enc.addMoveCall(new SuiPtbEncoder.MoveCall(
                     cfg.packageId, "evaluator", "decide_and_log",
-                    Arrays.asList(SuiPtbEncoder.Arg.input(iAudit),
-                                  SuiPtbEncoder.Arg.input(iReq),
-                                  SuiPtbEncoder.Arg.input(iResId),
-                                  SuiPtbEncoder.Arg.input(iOp),
-                                  SuiPtbEncoder.Arg.result(1),
-                                  SuiPtbEncoder.Arg.input(iToken),
+                    Arrays.asList(SuiPtbEncoder.Arg.result(3),
+                                  SuiPtbEncoder.Arg.input(iAudit),
                                   SuiPtbEncoder.Arg.input(iClock))));
 
             LOG.info("PTB DEBUG inputs:");
@@ -185,7 +220,8 @@ public final class NativePtbBuilder {
             LOG.info("  clock shared ver=" + clock.version);
             LOG.info("  token owned ver=" + token.version + " digest_len=" + (token.digestRaw32 == null ? -1 : token.digestRaw32.length));
             LOG.info("  gasCoin id_len=" + gasCoin.objectId.length + " ver=" + gasCoin.version + " digest_len=" + gasCoin.digest.length);
-            LOG.info("  requester len=" + requesterAddr.length);
+            LOG.info("  sender/requester len=" + requesterAddr.length
+                     + " (not a Move arg since v8 A3/A4; derived from tx sender)");
             LOG.info("  gasPrice=" + gasPrice + " gasBudget=" + cfg.gasBudget);
             byte[] txBytes = enc.encodeTransactionData(
                     requesterAddr,
@@ -218,6 +254,51 @@ public final class NativePtbBuilder {
     }
 
     // ---------------------------------------------------------------
+    //  Stale object versions (GraphQL indexer lag)
+    // ---------------------------------------------------------------
+    /** Attempts, including the first, for a transaction built on stale versions. */
+    static final int STALE_ATTEMPTS = 4;
+    static final long STALE_RETRY_BASE_MS = 750L;
+
+    /**
+     * True if the network refused the transaction because an input object
+     * (typically the gas coin) was read at a version that has since been
+     * consumed. Every object ref comes from the GraphQL indexer, which can trail
+     * a just-finalised write, so back-to-back transactions from one address
+     * (claim -> anchor -> PoA, or two DAS decisions in quick succession) can
+     * build on an outdated gas-coin version. Nothing was executed and no gas was
+     * charged; rebuilding with fresh reads fixes it.
+     */
+    static boolean isStaleObjectVersion(String error) {
+        if (error == null) return false;
+        return error.contains("needs to be rebuilt")
+            || error.contains("unavailable for consumption")
+            || error.contains("ObjectVersionUnavailableForConsumption");
+    }
+
+    /**
+     * Run a build-sign-execute operation, rebuilding it (fresh object reads)
+     * after a short, growing delay while it fails on a stale version.
+     * Observed live on 2026-11-10: a new parent's first lease anchor failed
+     * this way right after its claim, leaving the 1-minute post-claim lease to
+     * expire. Any other outcome, success or a real abort, returns immediately.
+     */
+    static Result withStaleRetry(java.util.function.Supplier<Result> op) {
+        Result r = op.get();
+        for (int attempt = 1; attempt < STALE_ATTEMPTS && !r.granted && isStaleObjectVersion(r.error); attempt++) {
+            try {
+                Thread.sleep(STALE_RETRY_BASE_MS * attempt);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return r;
+            }
+            LOG.info("Rebuilding transaction after stale object version (attempt " + (attempt + 1) + ")");
+            r = op.get();
+        }
+        return r;
+    }
+
+    // ---------------------------------------------------------------
     //  Trust-Gated Parent Failover claim
     // ---------------------------------------------------------------
     /**
@@ -225,6 +306,10 @@ public final class NativePtbBuilder {
      * Inputs: cluster (mut shared), identity_reg, trust_reg, clock (imm shared).
      */
     public Result claimParent(String requesterAddress, String clusterId) {
+        return withStaleRetry(() -> claimParentOnce(requesterAddress, clusterId));
+    }
+
+    private Result claimParentOnce(String requesterAddress, String clusterId) {
         long t0 = System.nanoTime();
         try {
             Ed25519Signer.Keypair kp = keystore.get(requesterAddress);
@@ -282,11 +367,84 @@ public final class NativePtbBuilder {
     }
 
     /**
+     * Submit failover::renew_lease(cluster, new_lease_ms, clock) as the
+     * current parent. This is the lease anchor.
+     *
+     * <p>It used to go through the sui CLI binary baked into the container
+     * (FailoverManager.anchorLease -> cli.runJson). That made the anchor
+     * depend on a separate 200 MB binary pinned to an old protocol version
+     * (1.73.0 in the image, network at protocol 140), a different transport
+     * from every other on-chain write, and a failure mode that is visible
+     * only in logs. If the anchor silently fails, the lease expires, a peer
+     * claims, and the parent is deposed, so it now uses the same verified
+     * native path as {@link #claimParent}.
+     *
+     * <p>Move enforces {@code sender == cluster.current_parent} and, since
+     * A10, {@code new_lease_ms <= MAX_LEASE_MS} (3_600_000).
+     */
+    public Result renewLease(String requesterAddress, String clusterId, long newLeaseMs) {
+        return withStaleRetry(() -> renewLeaseOnce(requesterAddress, clusterId, newLeaseMs));
+    }
+
+    private Result renewLeaseOnce(String requesterAddress, String clusterId, long newLeaseMs) {
+        long t0 = System.nanoTime();
+        try {
+            Ed25519Signer.Keypair kp = keystore.get(requesterAddress);
+            if (kp == null) kp = keystore.get(requesterAddress.toLowerCase());
+            if (kp == null) {
+                return new Result(false, null, ms(t0), "no keypair for " + requesterAddress);
+            }
+
+            SuiObjectFetcher.ObjectInfo cluster = fetcher.getObject(clusterId);
+            SuiObjectFetcher.ObjectInfo clock   = fetcher.getObject(cfg.suiClockId);
+            long gasPrice = fetcher.getReferenceGasPrice();
+            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(requesterAddress, cfg.gasBudget);
+
+            SuiPtbEncoder enc = new SuiPtbEncoder();
+            int iCluster = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(clusterId), cluster.version, true)));
+            int iLease   = enc.addInput(SuiPtbEncoder.CallArg.pure(encU64(newLeaseMs)));
+            int iClock   = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.suiClockId), clock.version, false)));
+
+            enc.addMoveCall(new SuiPtbEncoder.MoveCall(
+                    cfg.packageId, "failover", "renew_lease",
+                    java.util.Arrays.asList(
+                        SuiPtbEncoder.Arg.input(iCluster),
+                        SuiPtbEncoder.Arg.input(iLease),
+                        SuiPtbEncoder.Arg.input(iClock))));
+
+            byte[] txBytes = enc.encodeTransactionData(
+                    BcsEncoder.hexTo32(requesterAddress),
+                    java.util.Collections.singletonList(gasCoin),
+                    gasPrice,
+                    cfg.gasBudget);
+
+            String txB64 = java.util.Base64.getEncoder().encodeToString(txBytes);
+            String sigB64 = Ed25519Signer.signTransaction(txBytes, kp);
+            JsonNode result = rpc.executeTransactionBlock(txB64, java.util.Collections.singletonList(sigB64));
+            String digest = result.path("digest").asText();
+            String status = result.path("effects").path("status").path("status").asText();
+            long elapsed = ms(t0);
+            if ("success".equals(status)) {
+                return new Result(true, digest, elapsed, null);
+            }
+            return new Result(false, digest, elapsed, result.path("effects").path("status").path("error").asText());
+        } catch (Exception e) {
+            return new Result(false, null, ms(t0), e.getMessage());
+        }
+    }
+
+    /**
      * Submit failover::set_parent_poa via native RPC. Used by the new
      * parent immediately after CLAIM ACCEPTED to advertise its HTTP
      * Point-of-Access to followers via the Cluster object's dynamic field.
      */
     public Result setParentPoa(String requesterAddress, String clusterId, String poaUrl) {
+        return withStaleRetry(() -> setParentPoaOnce(requesterAddress, clusterId, poaUrl));
+    }
+
+    private Result setParentPoaOnce(String requesterAddress, String clusterId, String poaUrl) {
         long t0 = System.nanoTime();
         try {
             Ed25519Signer.Keypair kp = keystore.get(requesterAddress.toLowerCase());
@@ -343,65 +501,57 @@ public final class NativePtbBuilder {
      * Read the current parent's PoA from chain via the Cluster's dynamic field.
      * Returns the URL string or null if no PoA has been set yet.
      */
+    /**
+     * The ParentPoaKey field on clusters created under the v2 package
+     * (0x1583a958...) keeps that frozen type tag even when later versions
+     * update it in place. Clusters created by a fresh publish (v7, v8) carry
+     * the configured package's tag instead, so both are tried.
+     */
+    static final String LEGACY_V2_PKG =
+        "0x1583a958b1e6afa8a996dbd0933be1b1d2bdbe01f0c7d04322b9dacb22464699";
+    /** BCS of {@code ParentPoaKey {}}: Move gives empty structs a dummy_field: bool = false. */
+    static final String PARENT_POA_KEY_BCS_B64 = "AA==";
+
     public String fetchParentPoa(String clusterId) {
         try {
-            LOG.info("[fetchParentPoa] start clusterId=" + clusterId + " rpc=" + cfg.rpcUrl);
-            com.fasterxml.jackson.databind.ObjectMapper m =
-                new com.fasterxml.jackson.databind.ObjectMapper();
-            com.fasterxml.jackson.databind.node.ObjectNode req = m.createObjectNode();
-            req.put("jsonrpc", "2.0");
-            req.put("id", 1);
-            req.put("method", "suix_getDynamicFieldObject");
-            com.fasterxml.jackson.databind.node.ArrayNode params = req.putArray("params");
-            params.add(clusterId);
-            com.fasterxml.jackson.databind.node.ObjectNode key = params.addObject();
             StringBuilder pkgHex = new StringBuilder("0x");
             for (byte b : cfg.packageId) pkgHex.append(String.format("%02x", b & 0xFF));
-            // The ParentPoaKey field was originally created under v2 (0x1583a958...)
-            // and its on-chain type tag is frozen at that address. v3 calls update
-            // the field in place but the tag stays v2.
-            String pkgForKey = "0x1583a958b1e6afa8a996dbd0933be1b1d2bdbe01f0c7d04322b9dacb22464699";
-            key.put("type", pkgForKey + "::failover::ParentPoaKey");
-            com.fasterxml.jackson.databind.node.ObjectNode keyValue = m.createObjectNode();
-            keyValue.put("dummy_field", false);
-            key.set("value", keyValue);
-
-            java.net.HttpURLConnection conn =
-                (java.net.HttpURLConnection) new java.net.URL(cfg.rpcUrl).openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(5000);
-            conn.setReadTimeout(5000);
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setDoOutput(true);
-            byte[] reqBody = m.writeValueAsBytes(req);
-            LOG.info("[fetchParentPoa] request: " + new String(reqBody, java.nio.charset.StandardCharsets.UTF_8));
-            conn.getOutputStream().write(reqBody);
-            int rc = conn.getResponseCode();
-            LOG.info("[fetchParentPoa] http status=" + rc);
-            if (rc < 200 || rc >= 300) return null;
-            java.io.InputStream in = conn.getInputStream();
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-            byte[] buf = new byte[8192]; int n;
-            while ((n = in.read(buf)) > 0) baos.write(buf, 0, n);
-            com.fasterxml.jackson.databind.JsonNode resp = m.readTree(baos.toByteArray());
-            LOG.info("[fetchParentPoa] response: " + new String(baos.toByteArray(), java.nio.charset.StandardCharsets.UTF_8).substring(0, Math.min(500, baos.size())));
-            // The dynamic field's value is the vector<u8> we wrote.
-            // Path: result.data.content.fields.value
-            com.fasterxml.jackson.databind.JsonNode v = resp
-                .path("result").path("data").path("content").path("fields").path("value");
-            LOG.info("[fetchParentPoa] value node: isMissing=" + v.isMissingNode() + " isNull=" + v.isNull() + " isArray=" + v.isArray() + " isTextual=" + v.isTextual());
-            if (v.isMissingNode() || v.isNull()) return null;
-            // value can be either an array of numeric bytes or a string. Handle both.
-            if (v.isArray()) {
-                byte[] out = new byte[v.size()];
-                for (int i = 0; i < v.size(); i++) out[i] = (byte) v.get(i).asInt();
-                return new String(out, java.nio.charset.StandardCharsets.UTF_8);
+            String[] pkgs = pkgHex.toString().equalsIgnoreCase(LEGACY_V2_PKG)
+                ? new String[] { LEGACY_V2_PKG }
+                : new String[] { pkgHex.toString(), LEGACY_V2_PKG };
+            LOG.info("[fetchParentPoa] start clusterId=" + clusterId + " graphql=" + fetcher.endpoint());
+            for (String pkg : pkgs) {
+                JsonNode v = fetcher.getDynamicFieldJson(
+                    clusterId, pkg + "::failover::ParentPoaKey", PARENT_POA_KEY_BCS_B64);
+                if (v == null) continue;               // no field under this tag
+                String poa = decodeVecU8String(v);
+                LOG.info("[fetchParentPoa] found under " + pkg + ": " + poa);
+                return poa;
             }
-            if (v.isTextual()) return v.asText();
+            LOG.info("[fetchParentPoa] no ParentPoaKey field on " + clusterId);
             return null;
         } catch (Exception e) {
+            LOG.warn("[fetchParentPoa] read failed for " + clusterId + ": " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Decode a {@code vector<u8>} holding UTF-8. GraphQL renders vector&lt;u8&gt;
+     * as base64 (JSON-RPC used a numeric array); both are accepted.
+     */
+    static String decodeVecU8String(JsonNode v) {
+        if (v == null || v.isMissingNode() || v.isNull()) return null;
+        if (v.isArray()) {
+            byte[] out = new byte[v.size()];
+            for (int i = 0; i < v.size(); i++) out[i] = (byte) v.get(i).asInt();
+            return new String(out, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        if (v.isTextual()) {
+            byte[] raw = java.util.Base64.getDecoder().decode(v.asText());
+            return new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return null;
     }
 
     // ---- BCS pre-encoding for Pure args ----
@@ -487,6 +637,12 @@ public final class NativePtbBuilder {
      *   decrease(...) same shape
      */
     public Result submitTrustDelta(String submitterAddr, String targetAddr,
+                                   long magnitude, boolean increase,
+                                   String adminCapId) {
+        return withStaleRetry(() -> submitTrustDeltaOnce(submitterAddr, targetAddr, magnitude, increase, adminCapId));
+    }
+
+    private Result submitTrustDeltaOnce(String submitterAddr, String targetAddr,
                                    long magnitude, boolean increase,
                                    String adminCapId) {
         long t0 = System.nanoTime();

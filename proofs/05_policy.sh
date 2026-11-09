@@ -24,6 +24,10 @@ echo "=== A REQUEST WITH NO MATCHING CAPABILITY = DENY (fail-closed) ==="
 echo "    rpi1 asks for a decision on the resource whose token rpi3 owns."
 echo
 echo "\$ curl -X POST .../sui-das -H 'X-M2M-Operation: 5'   (from rpi1)"
+echo "    ('op':1 is the oneM2M CREATE code, so this asks the DAS to authorize a"
+echo "     WRITE on the container - it maps to the OP_WRITE bit of the token mask;"
+echo "     'X-M2M-Operation: 5' is NOTIFY, the header OM2M needs to route the"
+echo "     decision request into the DAS. Neither of them is a read.)"
 echo
 sshpass -p user ssh user@10.25.96.200 bash <<'EOF' | sed 's/^/    /'
 BASE=http://127.0.0.1:8282; ORIG=admin:admin

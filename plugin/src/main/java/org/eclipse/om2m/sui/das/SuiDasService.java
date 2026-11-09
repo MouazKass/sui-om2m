@@ -39,7 +39,33 @@ import org.apache.commons.logging.LogFactory;
  * privileges (on PTB success) or ACCESS_DENIED (on PTB abort).
  *
  * <p>No modification of OM2M core is required: this plugs into the CSE
- * through oneM2M's own dynamic-authorization extension point.
+ * through oneM2M's own dynamic-authorization extension point. The OSGi
+ * registration used here ({@code registerService(InterworkingService.class,
+ * ..)}) is exactly the registration OM2M's own DAS conformance suite uses
+ * (org.eclipse.om2m.das.testsuite.ae.AbstractDASServiceTest).
+ *
+ * <p><b>Verified enforcement contract</b> (org.eclipse.om2m.core, bundle
+ * version 1.1.0 -- the version shipped by OM2M releases 1.3.0 through 1.5.0):
+ *
+ * <ul>
+ * <li>{@code Controller.checkPermissions} consults DACs <em>only after the
+ *     static ACP check has already failed</em>. Dynamic authorization can
+ *     therefore only ever ADD access, never revoke a static grant. Making this
+ *     DAS authoritative requires the protecting ACP to grant the originator
+ *     nothing.</li>
+ * <li>Only resource types whose controller calls {@code checkPermissions} are
+ *     DAC-enforced: AE, AEAnnc, FlexContainer, FlexContainerAnnc, MgmtObj,
+ *     MgmtObjAnnc, Node and Discovery. {@code ContainerController},
+ *     {@code ContentInstanceController}, {@code GroupController} and
+ *     {@code SubscriptionController} call the plain {@code checkACP} and are
+ *     NEVER consulted dynamically -- a {@code <container>} cannot be protected
+ *     by a DAS on this stack.</li>
+ * <li>{@code DynamicAuthorizationSelector.checkACPs} compares the granted
+ *     {@code accessControlOperations} to the requested operation with
+ *     {@code equals()}, not a bitwise AND. The granted privilege must echo the
+ *     requested operation exactly; a permissive {@code acop=63} would be
+ *     REJECTED. See the grant built in step 6 below.</li>
+ * </ul>
  */
 public final class SuiDasService implements InterworkingService {
 
@@ -163,6 +189,40 @@ public final class SuiDasService implements InterworkingService {
         BigInteger operation = dasRequest.getOperation();
         String resourceId = dasRequest.getTargetedResourceID();
 
+        // 3b. Record which of the two inbound routes this decision came from.
+        //
+        // This is the one log line that distinguishes the claim under test:
+        //
+        //   "Sui DAC consult"    - the CSE itself asked us, in-JVM, because a
+        //                          <dynamicAuthorizationConsultation> named this
+        //                          DAS after a static ACP check failed. Content
+        //                          arrives as a typed SecurityInfo because
+        //                          DynamicAuthorizationSelector sets
+        //                          MimeMediaType.OBJ and Redirector hands the
+        //                          object straight to IpeSelector.
+        //   "Sui NOTIFY consult" - an external HTTP NOTIFY with a JSON body,
+        //                          i.e. the synthetic route used by proofs/*.sh
+        //                          and bench/*. Proves the decision engine, not
+        //                          the CSE's enforcement wiring.
+        //
+        // Note on resource identifiers: on the DAC route, targetedResourceID is
+        // resourceEntity.getResourceID() - the NON-hierarchical id - whereas the
+        // NOTIFY route hand-writes a hierarchical uri. The two only agree if the
+        // on-chain policy is keyed by the non-hierarchical id. That id is stable
+        // across reboots only when the resource was created by an originator
+        // beginning with "C": AEController then sets
+        // aeid = request.getFrom() and resourceID = "/" + CSE_ID + "/" + aeid,
+        // instead of generating a fresh random id. bench/provision_das.sh
+        // relies on exactly that, so /in-cse/Csui-dac-ae survives a reboot and
+        // can be provisioned on-chain once. Do NOT create the DAC-protected
+        // resource as admin:admin or its id - and therefore its on-chain policy
+        // key - will change on every CSE restart.
+        final boolean viaDac = (content instanceof SecurityInfo);
+        LOG.info((viaDac ? "Sui DAC consult" : "Sui NOTIFY consult")
+                 + ": originator=" + originator
+                 + " resource=" + resourceId
+                 + " op=" + operation);
+
         // 4. Resolve Sui-side identifiers. The originator -> Sui address and
         //    (originator,resource) -> CapToken mappings are provisioned by the
         //    IN-CSE when tokens are minted (see SuiConfig / token index).
@@ -221,7 +281,6 @@ public final class SuiDasService implements InterworkingService {
             if (obs != null && requesterAddress != null) {
                 long _now = System.currentTimeMillis();
                 obs.recordRequest(requesterAddress, resourceId, result.granted, false, _now);
-                obs.recordPtbResult(requesterAddress, result.granted, _now);
             }
         } catch (Throwable _t) { /* never let trust break access path */ }
 
@@ -245,7 +304,6 @@ public final class SuiDasService implements InterworkingService {
             if (obs != null && requesterAddress != null) {
                 long _now = System.currentTimeMillis();
                 obs.recordRequest(requesterAddress, resourceId, result.granted, false, _now);
-                obs.recordPtbResult(requesterAddress, result.granted, _now);
             }
         } catch (Throwable _t) { /* never let trust break access path */ }
 

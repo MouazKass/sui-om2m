@@ -36,7 +36,30 @@ failover.heartbeat.period.ms=5000
 failover.heartbeat.timeout.ms=15000
 failover.lease.anchor.period.ms=600000
 
-# Use native BCS+JSON-RPC for the DAS access PTB instead of shelling out to
+# --- On-chain endpoint ---
+# Sui GraphQL endpoint used for ALL on-chain reads (objects, coins, gas price,
+# dynamic fields), read-only simulation (identity::is_registered,
+# trust::score_of) and transaction execution. Public fullnodes have
+# deprecated JSON-RPC, so sui.rpc.url is no longer used for these calls.
+# If unset: derived from sui.rpc.url for the public fullnode hosts
+# (fullnode.<net>.sui.io -> graphql.<net>.sui.io/graphql), else this default.
+sui.graphql.url=https://graphql.testnet.sui.io/graphql
+
+# Legacy fullnode JSON-RPC URL. Kept for compatibility only.
+#sui.rpc.url=https://fullnode.testnet.sui.io:443
+
+# Use native BCS+GraphQL (formerly JSON-RPC) for the DAS access PTB instead of shelling out to
 # the sui CLI. ~2.5x faster and reports precise on-chain Move abort codes on
 # DENY (vs the opaque "sui CLI exited 1"). See NATIVE_DAS_EVIDENCE.md.
 sui.use.native.rpc=true
+
+# --- Trust engine on-chain write discipline (must match move/sources/trust.move) ---
+# Largest score change one write may carry; must equal trust::MAX_DELTA (15).
+# Bigger changes are applied as several capped steps.
+#trust.max.delta=15
+# Minimum gap (ms) between two writes for the same target. trust.move aborts a
+# write <60000 ms after the previous one (E_RATE_LIMITED); +5 s for clock skew.
+#trust.min.write.interval.ms=65000
+# How often (ms) the submitter re-writes a live target to re-anchor on-chain
+# decay (1 point per full day without a write). Must stay under one day.
+#trust.reattest.period.ms=43200000

@@ -40,6 +40,23 @@ module om2m_access::failover {
     const E_NOT_PARENT_ROLE:    u64 = 4;
     const E_SAME_PARENT:        u64 = 5;
     const E_NOT_PARENT:         u64 = 6;
+    // A10: requested lease exceeds MAX_LEASE_MS.
+    const E_LEASE_TOO_LONG:     u64 = 7;
+
+    // === Bounds ===
+    // A10: upper bound on how far into the future a single renewal may push
+    // `lease_expires_ms`. Without it the current parent could renew for
+    // u64::MAX and permanently block the takeover path in `claim_parent`
+    // (which requires `now >= lease_expires_ms`) — a one-transaction,
+    // irreversible denial of service against the whole failover mechanism.
+    //
+    // Sized against the deployed heartbeat cadence: the proxy anchors a
+    // renewal every failover.lease.anchor.period.ms = 600_000 (10 min) and
+    // asks for 2x that (1_200_000) per renewal, while the MQTT heartbeat
+    // period/timeout are 5_000/15_000 ms. One hour is ~3x the largest
+    // legitimate request, so honest renewals are unaffected and a hostile
+    // parent can stall a takeover by at most an hour.
+    const MAX_LEASE_MS: u64 = 3_600_000;
 
     // === Cluster (shared object — one per failover group) ===
     // A cluster is the set of MN-CSEs that share a parent (and possibly
@@ -108,6 +125,11 @@ module om2m_access::failover {
         clock: &Clock,
         ctx: &mut TxContext,
     ) {
+        // A10: `lease_expires_ms` is written here and in `renew_lease`, so the
+        // bound has to hold in both places. Without it a cluster could be
+        // created with an unbounded initial lease, which blocks the takeover
+        // path in `claim_parent` just as effectively as an unbounded renewal.
+        assert!(initial_lease_ms <= MAX_LEASE_MS, E_LEASE_TOO_LONG);
         let now = clock::timestamp_ms(clock);
         let cluster = Cluster {
             id: object::new(ctx),
@@ -151,6 +173,10 @@ module om2m_access::failover {
         // Only the current parent can renew its own lease.
         let sender = tx_context::sender(ctx);
         assert!(sender == cluster.current_parent, E_NOT_PARENT_ROLE);
+
+        // A10: bounded renewal — see MAX_LEASE_MS. Also makes the
+        // `now + new_lease_ms` addition below non-overflowing.
+        assert!(new_lease_ms <= MAX_LEASE_MS, E_LEASE_TOO_LONG);
 
         let now = clock::timestamp_ms(clock);
         cluster.lease_expires_ms = now + new_lease_ms;

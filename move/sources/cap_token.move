@@ -23,11 +23,15 @@ module om2m_access::cap_token {
     use sui::clock::{Self, Clock};
     use sui::event;
 
+    use om2m_access::trust::{Self, TrustReceipt};
+
     // === Errors ===
     const E_TOKEN_EXPIRED: u64 = 1;
     const E_TOKEN_EXHAUSTED: u64 = 2;
     const E_RESOURCE_MISMATCH: u64 = 3;
     const E_OP_NOT_ALLOWED: u64 = 4;
+    // A4: the signer is not the address this token was issued to.
+    const E_NOT_TOKEN_OWNER: u64 = 5;
 
     // === Op codes (bitmask) ===
     // Same scheme is reused by token_evolution to widen permissions over time.
@@ -52,6 +56,14 @@ module om2m_access::cap_token {
         id: UID,
         // Sui address of the IN-CSE that minted this token.
         issuer: address,
+        // A4: Sui address this token was issued TO. Sui object ownership
+        // already restricts who can pass the token into a transaction, but
+        // that fact is not readable from Move, so the binding is recorded
+        // explicitly here and asserted in validate_for_use against the
+        // chain-derived requester. Consequence: a token that is transferred
+        // to a third party stops validating (fail-closed) — capabilities are
+        // not bearer instruments in this design.
+        owner: address,
         // The OM2M resource URI this token authorises (e.g.
         // "/cse-mn-1/AE-1/cnt-temp"). Kept as String so we can pass the
         // full oneM2M-style path without parsing on-chain.
@@ -87,6 +99,18 @@ module om2m_access::cap_token {
         new_use_count: u64,
     }
 
+    // === A6: hot-potato receipt (step 3 -> step 4) ===
+    // No `drop`, `store`, `copy` or `key`. Built only by validate_for_use
+    // from a consumed TrustReceipt, so `requester` and `resource_id` are
+    // still the values that cleared steps 1 and 2.
+    public struct TokenReceipt {
+        requester: address,
+        resource_id: String,
+        requested_op: u8,
+        token_id: address,
+        token_uses: u64,
+    }
+
     // === Init ===
     // Runs once when the package is published. Mints the singleton
     // IssuerCap and transfers it to the publisher (which on our testbed is
@@ -113,6 +137,7 @@ module om2m_access::cap_token {
         let token = CapToken {
             id: object::new(ctx),
             issuer: tx_context::sender(ctx),
+            owner,
             resource_id,
             allowed_ops,
             expiry_ms,
@@ -139,18 +164,32 @@ module om2m_access::cap_token {
     // access request. Aborts on any failure, which causes the entire PTB
     // (all six Move calls — slide 9) to roll back.
     //
-    // The token is taken as `&mut` because we tick `current_uses`. It is
-    // returned by reference; ownership stays with the caller. The Move
-    // borrow checker keeps anyone else from seeing the mutated token mid
-    // PTB.
+    // The token is taken as `&mut` because we tick `current_uses`.
+    //
+    // A4 + A6: the function used to take neither a ctx nor any proof of who
+    // was asking, so it validated "some token" against "some resource id"
+    // the caller typed in. It now:
+    //   * consumes the step-2 TrustReceipt by value, so the requester and
+    //     resource id are the chain-derived ones (not arguments);
+    //   * asserts the transaction signer IS that requester;
+    //   * asserts the token was issued to that requester;
+    //   * matches the token's resource against the receipt's resource.
     public fun validate_for_use(
+        trust_receipt: TrustReceipt,
         token: &mut CapToken,
-        resource_id: &String,
         requested_op: u8,
         clock: &Clock,
-    ) {
-        // Resource scope.
-        assert!(&token.resource_id == resource_id, E_RESOURCE_MISMATCH);
+        ctx: &TxContext,
+    ): TokenReceipt {
+        let (requester, resource_id) = trust::consume_trust_receipt(trust_receipt);
+
+        // Ownership: the signer must be the verified requester, and the token
+        // must be the one issued to that requester.
+        assert!(tx_context::sender(ctx) == requester, E_NOT_TOKEN_OWNER);
+        assert!(token.owner == requester, E_NOT_TOKEN_OWNER);
+
+        // Resource scope — compared against the receipt, not a bare arg.
+        assert!(&token.resource_id == &resource_id, E_RESOURCE_MISMATCH);
 
         // Op allowed by bitmask.
         assert!((token.allowed_ops & requested_op) == requested_op, E_OP_NOT_ALLOWED);
@@ -163,12 +202,36 @@ module om2m_access::cap_token {
         assert!(token.current_uses < token.max_uses, E_TOKEN_EXHAUSTED);
 
         token.current_uses = token.current_uses + 1;
+        let token_id = object::uid_to_address(&token.id);
 
         event::emit(TokenUsed {
-            token_id: object::uid_to_address(&token.id),
+            token_id,
             new_use_count: token.current_uses,
         });
+
+        TokenReceipt {
+            requester,
+            resource_id,
+            requested_op,
+            token_id,
+            token_uses: token.current_uses,
+        }
     }
+
+    // Package-internal unwrap of a TokenReceipt ->
+    // (requester, resource_id, requested_op, token_id, token_uses).
+    public(package) fun consume_token_receipt(
+        receipt: TokenReceipt,
+    ): (address, String, u8, address, u64) {
+        let TokenReceipt { requester, resource_id, requested_op, token_id, token_uses } = receipt;
+        (requester, resource_id, requested_op, token_id, token_uses)
+    }
+
+    // Read-only peeks (do not consume).
+    public fun token_receipt_requester(receipt: &TokenReceipt): address { receipt.requester }
+    public fun token_receipt_resource(receipt: &TokenReceipt): &String { &receipt.resource_id }
+    public fun token_receipt_op(receipt: &TokenReceipt): u8 { receipt.requested_op }
+    public fun token_receipt_uses(receipt: &TokenReceipt): u64 { receipt.token_uses }
 
     // === Revoke ===
     // Consuming the token destroys it. Because there is no `drop` ability,
@@ -182,6 +245,7 @@ module om2m_access::cap_token {
         let CapToken {
             id,
             issuer: _,
+            owner: _,
             resource_id: _,
             allowed_ops: _,
             expiry_ms: _,
@@ -199,6 +263,7 @@ module om2m_access::cap_token {
 
     // === Public accessors (used by other modules in this package) ===
     public fun issuer(token: &CapToken): address { token.issuer }
+    public fun owner(token: &CapToken): address { token.owner }
     public fun resource_id(token: &CapToken): &String { &token.resource_id }
     public fun allowed_ops(token: &CapToken): u8 { token.allowed_ops }
     public fun expiry_ms(token: &CapToken): u64 { token.expiry_ms }

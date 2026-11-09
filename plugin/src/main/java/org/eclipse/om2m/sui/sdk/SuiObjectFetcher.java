@@ -1,17 +1,10 @@
 package org.eclipse.om2m.sui.sdk;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import java.math.BigInteger;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -20,11 +13,12 @@ import java.util.Map;
  *  - Shared objects: their initialSharedVersion (stable, cached)
  *  - Owned/gas objects: current version and digest (changes per tx)
  *
- * Calls sui_getObject / suix_getCoins / suix_getReferenceGasPrice on the fullnode.
+ * <p>Transport: Sui GraphQL (see {@link SuiGraphQlClient}). This replaces the
+ * former sui_getObject / suix_getCoins / suix_getReferenceGasPrice JSON-RPC
+ * calls, which public fullnodes no longer serve. The constructor still accepts
+ * the legacy {@code sui.rpc.url} value and resolves it to a GraphQL endpoint.
  */
 public final class SuiObjectFetcher {
-
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public static final class ObjectInfo {
         public final boolean isShared;
@@ -38,48 +32,75 @@ public final class SuiObjectFetcher {
         }
     }
 
-    private final String rpcUrl;
-    private final int timeoutMs;
+    static final String Q_OBJECT =
+        "query($id:SuiAddress!){ object(address:$id){ address version digest"
+        + " owner { __typename ... on Shared { initialSharedVersion } } } }";
+
+    static final String Q_OBJECT_JSON =
+        "query($id:SuiAddress!){ object(address:$id){ address version"
+        + " asMoveObject { contents { type { repr } json } } } }";
+
+    static final String SUI_COIN_TYPE = "0x2::coin::Coin<0x2::sui::SUI>";
+
+    static final String Q_COINS =
+        "query($owner:SuiAddress!,$type:String!,$after:String){ address(address:$owner){"
+        + " objects(first:50, after:$after, filter:{type:$type}){"
+        + " pageInfo { hasNextPage endCursor }"
+        + " nodes { address version digest contents { json } } } } }";
+
+    static final String Q_RGP = "{ epoch { epochId referenceGasPrice } }";
+
+    static final String Q_DYNAMIC_FIELD =
+        "query($id:SuiAddress!,$type:String!,$bcs:Base64!){ object(address:$id){ address"
+        + " dynamicField(name:{type:$type, bcs:$bcs}){"
+        + " value { __typename ... on MoveValue { json } ... on MoveObject { contents { json } } } } } }";
+
+    /** Upper bound on coin pages scanned by {@link #pickGasCoin} (50 coins/page). */
+    static final int MAX_COIN_PAGES = 4;
+
+    private final SuiGraphQlClient gql;
     private final Map<String, Long> sharedVersionCache = new HashMap<>();
 
     public SuiObjectFetcher(String rpcUrl) { this(rpcUrl, 15_000); }
     public SuiObjectFetcher(String rpcUrl, int timeoutMs) {
-        this.rpcUrl = rpcUrl;
-        this.timeoutMs = timeoutMs;
+        this.gql = new SuiGraphQlClient(rpcUrl, timeoutMs);
     }
+
+    public String endpoint() { return gql.endpoint(); }
 
     public ObjectInfo getObject(String objectId0x) throws IOException {
         Long cached = sharedVersionCache.get(objectId0x);
         if (cached != null) return new ObjectInfo(true, cached, null);
 
-        ObjectNode req = MAPPER.createObjectNode();
-        req.put("jsonrpc", "2.0");
-        req.put("id", 1);
-        req.put("method", "sui_getObject");
-        ArrayNode params = req.putArray("params");
-        params.add(objectId0x);
-        ObjectNode opts = params.addObject();
-        opts.put("showOwner", true);
+        ObjectNode v = SuiGraphQlClient.vars();
+        v.put("id", objectId0x);
+        ObjectInfo info = parseObjectInfo(gql.execute(Q_OBJECT, v), objectId0x);
+        if (info.isShared) sharedVersionCache.put(objectId0x, info.version);
+        return info;
+    }
 
-        byte[] resp = post(MAPPER.writeValueAsString(req));
-        JsonNode root = MAPPER.readTree(resp);
-        if (root.has("error")) {
-            throw new IOException("getObject error for " + objectId0x + ": " + root.get("error"));
+    /** Pure parser for {@link #Q_OBJECT}'s data. */
+    static ObjectInfo parseObjectInfo(JsonNode data, String objectId0x) throws IOException {
+        JsonNode obj = data.path("object");
+        if (obj.isMissingNode() || obj.isNull()) {
+            throw new IOException("getObject: no data for " + objectId0x + " (object not found)");
         }
-        JsonNode data = root.path("result").path("data");
-        if (data.isMissingNode() || data.isNull()) {
-            throw new IOException("getObject: no data for " + objectId0x);
+        JsonNode owner = obj.path("owner");
+        String kind = owner.path("__typename").asText("");
+        if (kind.isEmpty()) {
+            throw new IOException("getObject: no owner information for " + objectId0x);
         }
-
-        JsonNode owner = data.path("owner");
-        if (owner.has("Shared")) {
-            long initSharedVer = owner.path("Shared").path("initial_shared_version").asLong();
-            sharedVersionCache.put(objectId0x, initSharedVer);
+        if ("Shared".equals(kind)) {
+            long initSharedVer = SuiGraphQlClient.requireLong(
+                    owner.path("initialSharedVersion"), "initialSharedVersion of " + objectId0x);
             return new ObjectInfo(true, initSharedVer, null);
         }
 
-        long version = data.path("version").asLong();
-        String digestB58 = data.path("digest").asText();
+        long version = SuiGraphQlClient.requireLong(obj.path("version"), "version of " + objectId0x);
+        String digestB58 = obj.path("digest").asText("");
+        if (digestB58.isEmpty()) {
+            throw new IOException("getObject: no digest for " + objectId0x);
+        }
         byte[] digestRaw = BcsEncoder.base58Decode(digestB58);
         if (digestRaw.length != 32) {
             throw new IOException("expected 32-byte digest, got " + digestRaw.length + " for " + objectId0x);
@@ -87,68 +108,125 @@ public final class SuiObjectFetcher {
         return new ObjectInfo(false, version, digestRaw);
     }
 
-    public SuiPtbEncoder.ObjectRef pickGasCoin(String sender0x, long minBalance) throws IOException {
-        ObjectNode req = MAPPER.createObjectNode();
-        req.put("jsonrpc", "2.0");
-        req.put("id", 1);
-        req.put("method", "suix_getCoins");
-        ArrayNode params = req.putArray("params");
-        params.add(sender0x);
-        params.add("0x2::sui::SUI");
+    /**
+     * Current contents of a Move object as GraphQL JSON (u64 as decimal
+     * strings, addresses canonical 0x-hex, vector&lt;u8&gt; as base64).
+     * Throws if the object does not exist or is not a Move object.
+     */
+    public JsonNode getMoveObjectJson(String objectId0x) throws IOException {
+        ObjectNode v = SuiGraphQlClient.vars();
+        v.put("id", objectId0x);
+        return parseMoveObjectJson(gql.execute(Q_OBJECT_JSON, v), objectId0x);
+    }
 
-        byte[] resp = post(MAPPER.writeValueAsString(req));
-        JsonNode root = MAPPER.readTree(resp);
-        if (root.has("error")) {
-            throw new IOException("getCoins error: " + root.get("error"));
+    static JsonNode parseMoveObjectJson(JsonNode data, String objectId0x) throws IOException {
+        JsonNode obj = data.path("object");
+        if (obj.isMissingNode() || obj.isNull()) {
+            throw new IOException("getObject: no data for " + objectId0x + " (object not found)");
         }
-        for (JsonNode coin : root.path("result").path("data")) {
-            long balance = coin.path("balance").asLong();
-            if (balance < minBalance) continue;
-            String id = coin.path("coinObjectId").asText();
-            long version = coin.path("version").asLong();
-            String digestB58 = coin.path("digest").asText();
+        JsonNode json = obj.path("asMoveObject").path("contents").path("json");
+        if (json.isMissingNode() || json.isNull()) {
+            throw new IOException("getObject: " + objectId0x + " has no Move contents");
+        }
+        return json;
+    }
+
+    /**
+     * Value of the dynamic field named ({@code nameType}, BCS {@code nameBcsB64})
+     * on {@code parentId0x}. MoveValue and MoveObject values are both handled.
+     *
+     * @return the value's GraphQL JSON, or {@code null} if the parent exists
+     *         but has no field with that name.
+     * @throws IOException if the parent object does not exist or the query fails.
+     */
+    public JsonNode getDynamicFieldJson(String parentId0x, String nameType, String nameBcsB64)
+            throws IOException {
+        ObjectNode v = SuiGraphQlClient.vars();
+        v.put("id", parentId0x);
+        v.put("type", nameType);
+        v.put("bcs", nameBcsB64);
+        return parseDynamicField(gql.execute(Q_DYNAMIC_FIELD, v), parentId0x);
+    }
+
+    static JsonNode parseDynamicField(JsonNode data, String parentId0x) throws IOException {
+        JsonNode obj = data.path("object");
+        if (obj.isMissingNode() || obj.isNull()) {
+            throw new IOException("getDynamicField: parent " + parentId0x + " not found");
+        }
+        JsonNode df = obj.path("dynamicField");
+        if (df.isMissingNode() || df.isNull()) return null;   // field absent
+        JsonNode val = df.path("value");
+        String kind = val.path("__typename").asText("");
+        if ("MoveValue".equals(kind)) return val.path("json");
+        if ("MoveObject".equals(kind)) return val.path("contents").path("json");
+        throw new IOException("getDynamicField: unexpected value shape on " + parentId0x + ": " + val);
+    }
+
+    public SuiPtbEncoder.ObjectRef pickGasCoin(String sender0x, long minBalance) throws IOException {
+        String after = null;
+        for (int page = 0; page < MAX_COIN_PAGES; page++) {
+            ObjectNode v = SuiGraphQlClient.vars();
+            v.put("owner", sender0x);
+            v.put("type", SUI_COIN_TYPE);
+            if (after == null) v.putNull("after"); else v.put("after", after);
+            JsonNode data = gql.execute(Q_COINS, v);
+            SuiPtbEncoder.ObjectRef ref = pickFromCoinPage(data, sender0x, minBalance);
+            if (ref != null) return ref;
+            JsonNode pi = data.path("address").path("objects").path("pageInfo");
+            if (!pi.path("hasNextPage").asBoolean(false)) break;
+            after = pi.path("endCursor").asText(null);
+            if (after == null) break;
+        }
+        throw new IOException("no gas coin with balance >= " + minBalance + " for " + sender0x);
+    }
+
+    /** Pure parser: first coin on the page with balance >= minBalance, else null. */
+    static SuiPtbEncoder.ObjectRef pickFromCoinPage(JsonNode data, String sender0x, long minBalance)
+            throws IOException {
+        JsonNode addr = data.path("address");
+        if (addr.isMissingNode() || addr.isNull()) {
+            throw new IOException("getCoins: no address data for " + sender0x);
+        }
+        JsonNode nodes = addr.path("objects").path("nodes");
+        if (!nodes.isArray()) {
+            throw new IOException("getCoins: no coin list for " + sender0x);
+        }
+        BigInteger min = BigInteger.valueOf(minBalance);
+        for (JsonNode coin : nodes) {
+            JsonNode bal = coin.path("contents").path("json").path("balance");
+            if (!bal.isTextual() && !bal.isNumber()) {
+                throw new IOException("getCoins: coin without balance: " + coin);
+            }
+            BigInteger balance;
+            try {
+                balance = new BigInteger(bal.asText().trim());
+            } catch (NumberFormatException e) {
+                throw new IOException("getCoins: non-numeric balance: " + bal);
+            }
+            if (balance.compareTo(min) < 0) continue;
+            String id = coin.path("address").asText("");
+            long version = SuiGraphQlClient.requireLong(coin.path("version"), "coin version");
+            String digestB58 = coin.path("digest").asText("");
+            if (id.isEmpty() || digestB58.isEmpty()) {
+                throw new IOException("getCoins: incomplete coin ref: " + coin);
+            }
             return new SuiPtbEncoder.ObjectRef(
                     BcsEncoder.hexTo32(id),
                     version,
                     BcsEncoder.base58Decode(digestB58));
         }
-        throw new IOException("no gas coin with balance >= " + minBalance + " for " + sender0x);
+        return null;
     }
 
     public long getReferenceGasPrice() throws IOException {
-        ObjectNode req = MAPPER.createObjectNode();
-        req.put("jsonrpc", "2.0");
-        req.put("id", 1);
-        req.put("method", "suix_getReferenceGasPrice");
-        req.putArray("params");
-        byte[] resp = post(MAPPER.writeValueAsString(req));
-        JsonNode root = MAPPER.readTree(resp);
-        if (root.has("error")) throw new IOException("getReferenceGasPrice error: " + root.get("error"));
-        return root.path("result").asLong();
+        return parseReferenceGasPrice(gql.execute(Q_RGP, null));
     }
 
-    private byte[] post(String body) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(rpcUrl).openConnection();
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(timeoutMs);
-        conn.setReadTimeout(timeoutMs);
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setDoOutput(true);
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(body.getBytes(StandardCharsets.UTF_8));
+    static long parseReferenceGasPrice(JsonNode data) throws IOException {
+        JsonNode epoch = data.path("epoch");
+        if (epoch.isMissingNode() || epoch.isNull()) {
+            throw new IOException("getReferenceGasPrice: no epoch data");
         }
-        int code = conn.getResponseCode();
-        InputStream in = (code >= 200 && code < 300) ? conn.getInputStream() : conn.getErrorStream();
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        if (in != null) {
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) baos.write(buf, 0, n);
-        }
-        byte[] out = baos.toByteArray();
-        if (code < 200 || code >= 300) {
-            throw new IOException("HTTP " + code + ": " + new String(out, StandardCharsets.UTF_8));
-        }
-        return out;
+        return SuiGraphQlClient.requireLong(epoch.path("referenceGasPrice"), "referenceGasPrice");
     }
 }

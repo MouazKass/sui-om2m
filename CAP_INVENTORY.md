@@ -42,3 +42,74 @@ burn_admin (self-burn AdminCap destructor) deployed in v6.
 - Node duplicate caps (0x0807e2b1/rpi1, 0xbac06c37/rpi2, 0xb01a5e5b/rpi3) left
   in place: owned by node wallets (self-burn requires each node's key), and
   inert/harmless. Documented, not burned.
+
+## UPDATE 2026-11-09 — v8 security batch: ALL ids above become obsolete
+
+### Every capability object id in this file is historical as of v8
+
+The security-fixes-v8 batch is a **fresh publish**, not an upgrade, so it has
+its own type root. The AdminCaps, PolicyAdminCap and UpgradeCap listed above are
+`trust::AdminCap` / `policy::PolicyAdminCap` of the **v1-v6 package**, and the
+v7 deployment had its own separate set again. None of them is accepted by a v8
+function: passing one is a type/argument error, not a clean Move abort.
+
+Keep this inventory for provenance — the TR7 revocation demo and the v6
+burn_admin lifecycle are cited in evidence files — but after the v8 publish:
+
+- do not put any id from this file into a node's `sui.properties`
+  (`trust.admin.cap.id`);
+- a new inventory section must be written listing the v8 genesis AdminCap, the
+  v8 per-node caps, and the new PolicyAdminCap / AuditAdminCap / UpgradeCap.
+
+### `grant_admin` and `grant_admin_registered` now share one mint path
+
+In v6/v7 these were two different implementations, and only one of them was
+revocable:
+
+- `grant_admin(_admin, recipient, ctx)` minted a bare AdminCap and **never
+  touched `tr7_valid_caps`**. Since revocation works by removing an id from that
+  set, a cap minted this way could never be revoked — it was permanently outside
+  TR7. The two signatures had to diverge because TR7 shipped as a compatible
+  upgrade, which forbids changing an existing public signature (see
+  TR7_EVIDENCE.md).
+- `grant_admin_registered(_admin, registry, recipient, ctx)` did register the
+  new id, but took the granting cap as `_admin` and never validated it, so a
+  **revoked** admin could keep minting fresh valid-looking caps indefinitely.
+
+In v8 both are one-line delegations to a single private
+`mint_and_register(admin, registry, recipient, ctx)` which:
+
+1. calls `assert_cap_valid(admin, registry)` on the **granting** cap first, so a
+   revoked admin cannot launder its lost authority into a new cap; then
+2. mints, inserts the new cap's id into `tr7_valid_caps`, and transfers.
+
+`grant_admin` therefore gained a `&mut TrustRegistry` parameter. That is a
+breaking signature change, admissible only because v8 is a fresh publish. Any
+script calling `grant_admin` (e.g. `scripts/grant-admins.sh`) must be updated to
+pass the TRUST_REG object.
+
+Net effect: there is exactly one way to mint an AdminCap on v8, every cap it
+produces is tracked in the validity set, and every cap it produces is therefore
+revocable via `revoke_admin`. See A8 in `SECBATCH-2026-11_EVIDENCE.md`
+(tests `a8_grant_admin_registers_new_cap_in_validity_set` and
+`a8_cap_minted_by_grant_admin_is_revocable`).
+
+### Cap validity is FAIL-CLOSED from genesis on v8
+
+On v5-v7, `assert_cap_valid` was fail-open until an operator ran
+`bootstrap_valid_caps` once, because TR7 arrived as an upgrade onto a live
+cluster and could not be allowed to brick caps already in use.
+
+v8's `trust::init` registers the genesis AdminCap and sets the
+`tr7_bootstrapped` marker **in the publish transaction itself**. So:
+
+- enforcement is armed before any other transaction can run; the fail-open
+  window is not merely unused on v8, it is not observable;
+- **no `bootstrap_valid_caps` call belongs in the v8 runbook**;
+- any cap not in `tr7_valid_caps` aborts `trust::E_CAP_REVOKED` (code 5) — and
+  in v8 that now includes `add_node` (A1), the bootstrap path (A2) and both
+  grant paths (A8), not only the guarded score writes.
+
+This matters operationally: on v8 a wrong `trust.admin.cap.id` fails closed
+immediately with abort 5, whereas on a pre-bootstrap v5-v7 registry the same
+mistake would have silently succeeded.

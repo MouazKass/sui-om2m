@@ -1,4 +1,7 @@
 # === Sui testnet object IDs — Mouaz's deployment, 2026-05-23 ===
+# RETIRED: type-root of the old v1..v6 package line. NOT the type root of the
+# package in use (see PKG_V7 and its comment block below). Kept only to resolve
+# historical digests/objects. Do not use it for calls.
 export PKG=0xcba39e8bc98f6a7a40dc67aef7f150294b8a88fc5c72026fd8ed421b94419360
 
 # Shared registries (anyone can read; only AdminCap holders can mutate)
@@ -28,9 +31,35 @@ export RPI1=0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9
 export RPI2=0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
 export RPI3=0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
 
-# v6 package (current deployed) - use for FUNCTION CALLS.
-# Note: $PKG above (v1) is the type-root and stays fixed across upgrades;
-# function calls must target the latest package id (v6).
+# ---------------------------------------------------------------------------
+# CURRENT DEPLOYED PACKAGE - use this for ALL FUNCTION CALLS and for types.
+#
+# PKG_V7 is a FRESH, INDEPENDENT PUBLISH, not an upgrade of $PKG above.
+# Verified against move/Published.toml, which for this package records
+#   published-at = original-id = 0x5660169520...0213d43   and   version = 1
+# i.e. its own type root, its own object lineage, its own UpgradeCap
+# ($UPGRADE_CAP above). The old v1..v6 line is a SEPARATE package whose
+# original-id is $PKG (0xcba39e8b...); see move/Published.toml.v6-backup,
+# which records published-at = 0xb5799...0899 / original-id = 0xcba39e8b... /
+# version = 6. So:
+#   * $PKG is NOT the type-root of PKG_V7. It is the type-root of the retired
+#     v1..v6 package only. Types minted under $PKG (old CapTokens, old
+#     registries) are NOT accepted by PKG_V7 functions, and vice versa.
+#   * There is no upgrade relationship between $PKG and PKG_V7, so the usual
+#     "call the newest id, keep the original id for types" rule does not
+#     apply here: for PKG_V7 both are the same id.
+#   * $PKG is kept only so old digests/objects in the evidence files can
+#     still be resolved. Do not use it for new calls.
+#
+# TODO (v8): the security-fixes-v8 batch publishes ANOTHER fresh package
+# (move/Move.toml now declares "v8: fresh publish (NOT an upgrade of the
+# v6/v7 package)", version 0.8.0). Once that publish actually happens this
+# whole file must be rewritten: new package id, new shared registries
+# (IDENTITY_REG / TRUST_REG / POLICY_REG / AUDIT_TRAIL), new admin caps, new
+# UpgradeCap, new CapTokens, new cluster object. None of the ids below carry
+# over, because a fresh publish creates a new type root. Until that happens
+# every id in this file still points at the v7 deployment.
+# ---------------------------------------------------------------------------
 export PKG_V7=0x56601695204350f97a90cb283da19682aa6fcaeab876ea736060afea40213d43
 
 export CLOCK=0x6

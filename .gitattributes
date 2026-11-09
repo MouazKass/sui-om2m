@@ -1,0 +1,4 @@
+# Shell scripts run on the Raspberry Pis and in WSL. A CRLF line ending makes
+# bash fail outright ("set: pipefail\r: invalid option"), so pin them to LF
+# regardless of the checkout platform or editor.
+*.sh text eol=lf

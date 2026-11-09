@@ -35,6 +35,10 @@ echo
 echo "=== ACCESS WITH THE VALID TOKEN SUCCEEDS (live GRANT, real digest) ==="
 echo
 echo "\$ curl -X POST .../sui-das -H 'X-M2M-Operation: 5'   (decision request)"
+echo "    ('op':1 is the oneM2M CREATE code, so this asks the DAS to authorize a"
+echo "     WRITE on the container - it maps to the OP_WRITE bit of the token mask;"
+echo "     'X-M2M-Operation: 5' is NOTIFY, the header OM2M needs to route the"
+echo "     decision request into the DAS. Neither of them is a read.)"
 echo
 sshpass -p user ssh user@10.25.96.203 bash <<'EOF' | clean
 BASE=http://127.0.0.1:8282; ORIG=admin:admin

@@ -1,5 +1,6 @@
 package org.eclipse.om2m.sui.failover;
 
+import org.eclipse.om2m.sui.trust.SignedBeacon;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.eclipse.om2m.sui.config.SuiConfig;
 import org.eclipse.om2m.sui.trust.TrustScoringEngine;
@@ -67,7 +68,12 @@ public final class FailoverManager implements MqttCallback {
     private MqttClient mqtt;
     private final AtomicLong lastHeartbeatMs = new AtomicLong(System.currentTimeMillis());
     private final AtomicReference<String> currentParentAddr = new AtomicReference<>("");
-    private ScheduledFuture<?> heartbeatTask;
+    // B9: the heartbeat publisher is a NODE-level duty, not a parent-only one.
+    // Non-parent nodes have to beat as well, otherwise there is nothing for
+    // their peers to record and their heartbeat health stays 0 forever. The
+    // beat carries no authority: followers only feed the watchdog from the
+    // address the chain names parent (see messageArrived).
+    private ScheduledFuture<?> presenceTask;
     private ScheduledFuture<?> watchdogTask;
     private ScheduledFuture<?> anchorTask;
     private ScheduledFuture<?> parentSelfCheckTask;
@@ -99,6 +105,10 @@ public final class FailoverManager implements MqttCallback {
             cfg.heartbeatPeriodMs,
             TimeUnit.MILLISECONDS);
 
+        // B9: beat unconditionally, parent or not, so every node's heartbeat
+        // health is observable by its peers.
+        startPresenceBeats();
+
         if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
             startParentDuties();
         }
@@ -107,7 +117,7 @@ public final class FailoverManager implements MqttCallback {
     }
 
     public void stop() {
-        if (heartbeatTask != null) heartbeatTask.cancel(false);
+        if (presenceTask != null) presenceTask.cancel(false);
         if (watchdogTask  != null) watchdogTask.cancel(false);
         if (anchorTask    != null) anchorTask.cancel(false);
         if (parentSelfCheckTask != null) parentSelfCheckTask.cancel(false);
@@ -128,40 +138,78 @@ public final class FailoverManager implements MqttCallback {
             opts.setKeepAliveInterval(30);
             mqtt.setCallback(this);
             mqtt.connect(opts);
-            mqtt.subscribe(HEARTBEAT_TOPIC_PREFIX + cfg.clusterId);
+            // Per-origin topics (see TrustGossip): subscribe to every node's
+            // subtree, publish only on our own, so the mesh never re-forwards.
+            mqtt.subscribe(HEARTBEAT_TOPIC_PREFIX + cfg.clusterId + "/+");
             LOG.info("MQTT connected to " + cfg.mqttBrokerUrl);
         } catch (MqttException e) {
             LOG.error("Failed to connect to MQTT broker", e);
         }
     }
 
+    /**
+     * Heartbeat payload format: {@code "<sender-addr>|<epoch>|<ts-ms>"}.
+     *
+     * <p><b>B9.</b> The two things this method does are now separated, because
+     * they need different trust models:
+     * <ul>
+     *   <li><i>Failover liveness</i> ({@link #lastHeartbeatMs}) still only
+     *       accepts beats from the address the chain currently names parent.
+     *       That gate is a security property: without it any node could
+     *       suppress failover forever by spamming fake beats.</li>
+     *   <li><i>Trust telemetry</i> (heartbeat health + clock drift) is now
+     *       recorded for <b>every</b> middleware node that beats. Gating it on
+     *       the parent address meant every non-parent node's heartbeat health
+     *       was pinned at 0.0 for its whole lifetime, which alone cost it 25 of
+     *       100 trust points under the B11/B12 weights and capped it below the
+     *       top tier no matter how well it behaved.</li>
+     * </ul>
+     * Note the sender address here is self-declared and unauthenticated, so it
+     * only ever feeds the trust signals (where a liar can at most forge beats
+     * attributed to itself, i.e. improve its own apparent health, and the peer
+     * median in {@code TrustScoringEngine.aggregateAndScore} is what decides) --
+     * never the failover decision.
+     */
     @Override
     public void messageArrived(String topic, MqttMessage message) {
-        // Heartbeat payload format: "<parent-addr>|<epoch>|<ts-ms>"
-        String payload = new String(message.getPayload());
-        String[] parts = payload.split("\\|");
-        if (parts.length < 3) return;
-        String parentAddr = parts[0];
+        // Only signed beats, bound to the key of the address they name, count
+        // for anything (see SignedBeacon). Unsigned or forged beats are dropped.
+        SignedBeacon.Verified v = SignedBeacon.verify(
+            new String(message.getPayload(), java.nio.charset.StandardCharsets.UTF_8));
+        if (v == null) return;
+        String senderAddr = v.sender;
+        long localNow = System.currentTimeMillis();
 
-        // Only count heartbeats that come from the addr the chain
-        // currently considers parent. Stops a malicious node from
-        // suppressing failover by spamming fake beats.
-        if (parentAddr.equalsIgnoreCase(currentParentAddr.get())) {
-            long localNow = System.currentTimeMillis();
+        // Failover liveness: only the chain-designated parent's beats count,
+        // and only FRESH ones, so a captured or looped beat cannot keep a dead
+        // parent looking alive.
+        if (countsForLiveness(v, currentParentAddr.get(), localNow, cfg.heartbeatTimeoutMs)) {
             lastHeartbeatMs.set(localNow);
-            try {
-                BehaviourObserver obs = TrustScoringEngine.activeObserver();
-                if (obs != null) {
-                    obs.recordHeartbeat(parentAddr, localNow);
-                    // Clock drift: how far the peer thinks "now" is from our "now".
-                    // payload[2] is the peer's ts-ms from the heartbeat publish.
-                    try {
-                        long peerTs = Long.parseLong(parts[2]);
-                        obs.recordClockDrift(parentAddr, (double) (localNow - peerTs), localNow);
-                    } catch (NumberFormatException _nfe) { /* malformed ts, ignore */ }
-                }
-            } catch (Throwable _t) { /* never let trust break failover */ }
         }
+
+        // B9: trust telemetry from every middleware node, parent or not.
+        try {
+            BehaviourObserver obs = TrustScoringEngine.activeObserver();
+            if (obs != null) {
+                obs.recordHeartbeat(senderAddr, localNow);
+                // Clock drift: how far the peer thinks "now" is from our "now".
+                obs.recordClockDrift(senderAddr, (double) (localNow - v.tsMs), localNow);
+            }
+        } catch (Throwable _t) { /* never let trust break failover */ }
+    }
+
+    /**
+     * Pure liveness rule, kept static so it is unit-testable without MQTT: a beat
+     * keeps the parent alive only if it is verified, comes from the address the
+     * chain names as parent, and its own timestamp is within {@code maxSkewMs} of
+     * local time. The freshness bound turns any replayed or bridge-looped beat
+     * into a no-op once it is older than the heartbeat timeout.
+     */
+    static boolean countsForLiveness(SignedBeacon.Verified v, String currentParent,
+                                     long localNowMs, long maxSkewMs) {
+        return v != null && currentParent != null
+            && v.sender.equalsIgnoreCase(currentParent)
+            && Math.abs(localNowMs - v.tsMs) <= maxSkewMs;
     }
 
     @Override public void connectionLost(Throwable cause) {
@@ -169,32 +217,72 @@ public final class FailoverManager implements MqttCallback {
     }
     @Override public void deliveryComplete(IMqttDeliveryToken token) { /* unused */ }
 
+    /**
+     * B9: node-level heartbeat ("presence") publisher. Every node beats, so
+     * every node's heartbeat health is measurable by its peers. Started once in
+     * {@link #start()} and never cancelled by {@link #stopParentDuties()} --
+     * a beat asserts "I am alive", not "I am parent"; who is parent is decided
+     * by the chain and read back in {@link #refreshCurrentParent()}.
+     */
+    private synchronized void startPresenceBeats() {
+        if (presenceTask != null) { presenceTask.cancel(false); presenceTask = null; }
+        presenceTask = scheduler.scheduleAtFixedRate(() -> {
+            // Catch Throwable: scheduleAtFixedRate silently cancels a task
+            // whose run() throws, which would end this node's heartbeats for
+            // good and get it deposed after one bad tick.
+            try {
+                SignedBeacon b = beacon();
+                if (b == null) return;   // cannot sign -> cannot assert liveness (fails safe)
+                String payload = b.beat(0L, System.currentTimeMillis());
+                MqttMessage m = new MqttMessage(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                m.setQos(0);
+                if (mqtt != null && mqtt.isConnected()) {
+                    mqtt.publish(HEARTBEAT_TOPIC_PREFIX + cfg.clusterId + "/"
+                                 + cfg.nodeAddress.toLowerCase(), m);
+                }
+            } catch (Throwable t) {
+                LOG.warn("Heartbeat publish failed: " + t);
+            }
+        }, 0, cfg.heartbeatPeriodMs, TimeUnit.MILLISECONDS);
+    }
+
+    private volatile SignedBeacon beacon;
+    private volatile boolean beaconMissingLogged;
+
+    /** This node's heartbeat signer, loaded once from the node keystore. */
+    private SignedBeacon beacon() {
+        SignedBeacon b = beacon;
+        if (b == null) {
+            b = SignedBeacon.fromKeystore(cfg.keystorePath, cfg.nodeAddress);
+            if (b == null) {
+                if (!beaconMissingLogged) {
+                    beaconMissingLogged = true;
+                    LOG.error("Heartbeat signing key unavailable (" + cfg.keystorePath
+                              + " must hold the key for " + cfg.nodeAddress + "). This node"
+                              + " cannot assert liveness, so peers will treat it as silent.");
+                }
+                return null;
+            }
+            beacon = b;
+        }
+        return b;
+    }
+
     // === Parent duties ===
     private synchronized void startParentDuties() {
         // Idempotency guard: cancel any existing tasks before (re)scheduling.
-        if (heartbeatTask != null) { heartbeatTask.cancel(false); heartbeatTask = null; }
         if (anchorTask    != null) { anchorTask.cancel(false);    anchorTask    = null; }
         if (parentSelfCheckTask != null) { parentSelfCheckTask.cancel(false); parentSelfCheckTask = null; }
-        // Heartbeat publisher.
-        heartbeatTask = scheduler.scheduleAtFixedRate(() -> {
-            try {
-                long now = System.currentTimeMillis();
-                String payload = cfg.nodeAddress + "|0|" + now;
-                MqttMessage m = new MqttMessage(payload.getBytes());
-                m.setQos(0);
-                if (mqtt != null && mqtt.isConnected()) {
-                    mqtt.publish(HEARTBEAT_TOPIC_PREFIX + cfg.clusterId, m);
-                }
-            } catch (MqttException e) {
-                LOG.warn("Heartbeat publish failed: " + e.getMessage());
-            }
-        }, 0, cfg.heartbeatPeriodMs, TimeUnit.MILLISECONDS);
+        // NB (B9): the heartbeat publisher is no longer a parent duty -- see
+        // startPresenceBeats(), scheduled for every node in start().
 
-        // Periodic lease anchor on-chain. Optional but it keeps the
-        // chain's view of liveness fresh for any new joiners.
+        // Periodic lease anchor on-chain. The FIRST anchor runs immediately:
+        // after any downtime the lease has usually expired, and waiting a full
+        // period would leave a window in which a peer can legitimately claim.
+        // Each anchor also re-checks the advertised PoA (publishPoaIfNeeded).
         anchorTask = scheduler.scheduleAtFixedRate(
             this::anchorLease,
-            cfg.leaseAnchorPeriodMs,
+            0L,
             cfg.leaseAnchorPeriodMs,
             TimeUnit.MILLISECONDS);
 
@@ -239,28 +327,142 @@ public final class FailoverManager implements MqttCallback {
 
     private synchronized void stopParentDuties() {
         boolean wasParent = false;
-        if (heartbeatTask != null) { heartbeatTask.cancel(false); heartbeatTask = null; wasParent = true; }
         if (anchorTask    != null) { anchorTask.cancel(false);    anchorTask    = null; wasParent = true; }
         if (parentSelfCheckTask != null) { parentSelfCheckTask.cancel(false); parentSelfCheckTask = null; }
+        // B9: the presence beat deliberately keeps running. It no longer asserts
+        // parenthood (followers only credit beats from the chain's
+        // current_parent), and stopping it would blank this node's heartbeat
+        // health in every peer's trust score the moment it was deposed.
         if (wasParent) {
             lastHeartbeatMs.set(System.currentTimeMillis());
-            LOG.info("Parent duties stopped (deposed): heartbeat + lease anchor cancelled.");
+            LOG.info("Parent duties stopped (deposed): lease anchor + self-check cancelled"
+                     + " (presence heartbeat continues).");
         }
     }
 
+    /** Mirrors failover::MAX_LEASE_MS (A10). renew_lease aborts above it. */
+    static final long MAX_LEASE_MS = 3_600_000L;
+
+    /**
+     * Lease anchor. Runs on the native path (see NativePtbBuilder.renewLease
+     * for why it no longer shells out to the sui CLI). Catches Throwable:
+     * scheduleAtFixedRate silently cancels a task whose run() throws, which
+     * would stop all future anchors with no error after the first failure.
+     */
     private void anchorLease() {
         try {
-            long newLeaseMs = cfg.leaseAnchorPeriodMs * 2L; // generous overlap
-            List<String> argv = List.of(
-                "client", "call",
-                "--package",  cfg.packageId,
-                "--module",   "failover",
-                "--function", "renew_lease",
-                "--args", cfg.clusterId, Long.toString(newLeaseMs), cfg.suiClockId,
-                "--gas-budget", Long.toString(cfg.gasBudget));
-            cli.runJson(argv);
-        } catch (SuiCliException e) {
-            LOG.warn("Lease anchor failed (will retry next period): " + e.getMessage());
+            // Generous overlap, but never above Move's bound, or every renewal
+            // would abort with E_LEASE_TOO_LONG.
+            long newLeaseMs = Math.min(cfg.leaseAnchorPeriodMs * 2L, MAX_LEASE_MS);
+            org.eclipse.om2m.sui.sdk.NativePtbBuilder.Result r =
+                nativePtb().renewLease(cfg.nodeAddress, cfg.clusterId, newLeaseMs);
+            if (r.granted) {
+                LOG.info("Lease anchored for " + newLeaseMs + " ms digest=" + r.digest
+                         + " (" + r.elapsedMs + " ms)");
+            } else if (isGasExhaustion(r.error)) {
+                surfaceGasExhaustion(r.error);
+            } else {
+                LOG.warn("Lease anchor failed: " + r.error);
+                scheduleAnchorRetry();
+            }
+            if (r.granted) anchorRetries = 0;
+            // Keep the advertised PoA correct; this is a cheap read when it already is.
+            publishPoaIfNeeded();
+        } catch (Throwable t) {
+            LOG.warn("Lease anchor error: " + t);
+            scheduleAnchorRetry();
+        }
+    }
+
+    /**
+     * A failed anchor must be retried within seconds, not at the next 10 min
+     * period: claim_parent grants only a short lease, so a new parent whose
+     * first anchor fails loses the role to a peer before the next period
+     * (observed live on 2026-11-10). Retries every ANCHOR_RETRY_MS, bounded,
+     * and only while this node is still parent.
+     */
+    static final long ANCHOR_RETRY_MS = 5_000L;
+    static final int  ANCHOR_RETRY_MAX = 24;          // ~2 min of quick retries
+    private volatile int anchorRetries;
+
+    private void scheduleAnchorRetry() {
+        if (!cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) return;
+        if (anchorRetries >= ANCHOR_RETRY_MAX) {
+            LOG.warn("Lease anchor: quick retries exhausted; next attempt at the regular period");
+            anchorRetries = 0;
+            return;
+        }
+        anchorRetries++;
+        scheduler.schedule(this::anchorLease, ANCHOR_RETRY_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /** Lazily build the native PTB client (shared by claim, anchor and PoA). */
+    private org.eclipse.om2m.sui.sdk.NativePtbBuilder nativePtb() throws java.io.IOException {
+        org.eclipse.om2m.sui.sdk.NativePtbBuilder n = nativePtb;
+        if (n == null) {
+            synchronized (this) {
+                n = nativePtb;
+                if (n == null) {
+                    org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config nc =
+                        new org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config(
+                            cfg.rpcUrl, cfg.packageId,
+                            cfg.identityRegistryId, cfg.trustRegistryId,
+                            cfg.policyRegistryId, cfg.auditTrailId,
+                            cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
+                    n = new org.eclipse.om2m.sui.sdk.NativePtbBuilder(
+                        nc, java.nio.file.Paths.get(cfg.keystorePath));
+                    nativePtb = n;
+                }
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Make sure the chain advertises this node's PoA while it is the parent.
+     *
+     * <p>Previously the PoA was published only on the claim-success path, so a
+     * node that was ALREADY parent at startup (the initial parent, or any parent
+     * after a restart) never advertised itself and followers could not find it.
+     * Now it runs whenever this node holds the parent role: on taking up duties
+     * and on every lease anchor. It writes only when the on-chain value differs,
+     * so in steady state it costs one read and no gas.
+     */
+    private void publishPoaIfNeeded() {
+        String poa = cfg.parentPoa;
+        if (poa == null || poa.isEmpty()) return;
+        if (!cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) return;
+        try {
+            org.eclipse.om2m.sui.sdk.NativePtbBuilder n = nativePtb();
+            if (poa.equals(n.fetchParentPoa(cfg.clusterId))) {
+                writeLocalPoa(poa);
+                return;
+            }
+            org.eclipse.om2m.sui.sdk.NativePtbBuilder.Result pr =
+                n.setParentPoa(cfg.nodeAddress, cfg.clusterId, poa);
+            if (pr.granted) {
+                LOG.info("PoA published on-chain: " + poa + " digest=" + pr.digest
+                         + " (" + pr.elapsedMs + " ms)");
+                writeLocalPoa(poa);
+            } else {
+                LOG.warn("Failed to publish PoA on-chain (retry at next anchor): " + pr.error);
+            }
+        } catch (Throwable t) {
+            LOG.warn("PoA publication error (retry at next anchor): " + t);
+        }
+    }
+
+    /** Also write the PoA locally, for a co-located MN-CSE container if any. */
+    private void writeLocalPoa(String poa) {
+        try {
+            String fp = cfg.poaFilePath;
+            if (fp != null && !fp.isEmpty()) {
+                java.nio.file.Path target = java.nio.file.Paths.get(fp);
+                if (target.getParent() != null) java.nio.file.Files.createDirectories(target.getParent());
+                java.nio.file.Files.write(target, poa.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } catch (Exception fe) {
+            LOG.warn("Local PoA write failed: " + fe.getMessage());
         }
     }
 
@@ -271,9 +473,10 @@ public final class FailoverManager implements MqttCallback {
         if (elapsed < cfg.heartbeatTimeoutMs) return;
 
         // We're a child node and the parent has gone quiet. Try to take
-        // over. (If we are the parent, our own heartbeat publisher
-        // updates lastHeartbeatMs implicitly via the broker, so we
-        // never reach this branch unless our own MQTT broke too.)
+        // over. (If we are the parent, our own presence beat updates
+        // lastHeartbeatMs implicitly via the broker -- the sender address
+        // equals current_parent -- so we never reach this branch unless our own
+        // MQTT broke too.)
         if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
             // FM3b: before assuming our own MQTT is broken, re-check the chain.
             // We may have been deposed while still believing we are parent;
@@ -284,61 +487,101 @@ public final class FailoverManager implements MqttCallback {
             }
             return;
         }
-        LOG.warn("Parent silence detected (" + elapsed + " ms). Submitting Sui claim.");
-        attemptClaim();
+        // Look before claiming. claim_parent aborts unless the on-chain lease
+        // has expired and our trust clears the gate, and every abort is a
+        // PAID failed transaction. Submitting on every 5 s tick while a 20 min
+        // lease runs out would burn ~240 aborted claims per follower per
+        // failover. All of the checks below are free reads.
+        long ownScore = -1L, leaseExpires = Long.MAX_VALUE, gate = Long.MAX_VALUE;
+        String chainParent = currentParentAddr.get();
+        try {
+            com.fasterxml.jackson.databind.JsonNode c =
+                new org.eclipse.om2m.sui.sdk.SuiObjectFetcher(cfg.graphqlUrl, 5000)
+                    .getMoveObjectJson(cfg.clusterId);
+            chainParent  = c.path("current_parent").asText(chainParent);
+            leaseExpires = Long.parseLong(c.path("lease_expires_ms").asText());
+            gate         = Long.parseLong(c.path("trust_gate").asText());
+            ownScore     = nativePtb().readTrustScore(cfg.nodeAddress);
+        } catch (Throwable t) {
+            LOG.warn("Pre-claim read failed (will retry next tick): " + t);
+            return;
+        }
+        if (chainParent != null && !chainParent.equalsIgnoreCase(currentParentAddr.get())) {
+            refreshCurrentParent();   // someone else already took over; follow them
+            return;
+        }
+        ClaimGate g = gateClaim(now, leaseExpires, ownScore, gate, chainParent,
+                                cfg.nodeAddress, claimBackoffUntilMs, claimInFlight.get());
+        if (g != lastClaimGate) {     // log state changes, not every tick
+            lastClaimGate = g;
+            LOG.warn("Parent silence detected (" + elapsed + " ms); claim gate: " + g
+                     + " (lease_expires_ms=" + leaseExpires + ", trust=" + ownScore
+                     + ", gate=" + gate + ")");
+        }
+        if (g == ClaimGate.CLAIM) attemptClaim();
+    }
+
+    /** Result of the pre-claim check, mirroring failover::claim_parent. */
+    enum ClaimGate { CLAIM, IN_FLIGHT, BACKOFF, ALREADY_PARENT, LEASE_VALID, TRUST_UNKNOWN, TRUST_BELOW_GATE }
+
+    /** Claim only once chain time is this far past expiry (absorbs clock skew). */
+    static final long LEASE_MARGIN_MS = 2_000L;
+    static final long CLAIM_BACKOFF_MIN_MS = 15_000L;
+    static final long CLAIM_BACKOFF_MAX_MS = 300_000L;
+
+    /**
+     * Pure claim decision, testable without a chain. It mirrors the on-chain
+     * conditions that change over time (lease expiry, trust >= gate); identity
+     * registration and role are fixed by the bootstrap.
+     */
+    static ClaimGate gateClaim(long nowMs, long leaseExpiresMs, long ownScore, long trustGate,
+                               String chainParent, String self, long backoffUntilMs, boolean inFlight) {
+        if (inFlight) return ClaimGate.IN_FLIGHT;
+        if (nowMs < backoffUntilMs) return ClaimGate.BACKOFF;
+        if (chainParent != null && chainParent.equalsIgnoreCase(self)) return ClaimGate.ALREADY_PARENT;
+        if (nowMs < leaseExpiresMs + LEASE_MARGIN_MS) return ClaimGate.LEASE_VALID;
+        if (ownScore < 0) return ClaimGate.TRUST_UNKNOWN;
+        if (ownScore < trustGate) return ClaimGate.TRUST_BELOW_GATE;
+        return ClaimGate.CLAIM;
+    }
+
+    /** Exponential backoff after consecutive rejected claims: 15 s doubling to 5 min. */
+    static long claimBackoffMs(int consecutiveFailures) {
+        long b = CLAIM_BACKOFF_MIN_MS;
+        for (int i = 1; i < consecutiveFailures && b < CLAIM_BACKOFF_MAX_MS; i++) b *= 2;
+        return Math.min(b, CLAIM_BACKOFF_MAX_MS);
+    }
+
+    private final java.util.concurrent.atomic.AtomicBoolean claimInFlight =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile long claimBackoffUntilMs;
+    private volatile int claimFailures;
+    private volatile ClaimGate lastClaimGate;
+
+    private void recordClaimFailure() {
+        claimFailures++;
+        claimBackoffUntilMs = System.currentTimeMillis() + claimBackoffMs(claimFailures);
     }
 
     /** The on-chain part of slide 10. Calls failover::claim_parent. */
         private void attemptClaim() {
+        if (!claimInFlight.compareAndSet(false, true)) return;   // one claim at a time
         // Submit off-thread so watchdog stays responsive
         scheduler.submit(() -> {
             try {
-                org.eclipse.om2m.sui.sdk.NativePtbBuilder n = nativePtb;
-                if (n == null) {
-                    synchronized (this) {
-                        n = nativePtb;
-                        if (n == null) {
-                            org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config nc =
-                                new org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config(
-                                    cfg.rpcUrl, cfg.packageId,
-                                    cfg.identityRegistryId, cfg.trustRegistryId,
-                                    cfg.policyRegistryId, cfg.auditTrailId,
-                                    cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
-                            n = new org.eclipse.om2m.sui.sdk.NativePtbBuilder(
-                                nc, java.nio.file.Paths.get(cfg.keystorePath));
-                            nativePtb = n;
-                        }
-                    }
-                }
+                org.eclipse.om2m.sui.sdk.NativePtbBuilder n = nativePtb();
                 org.eclipse.om2m.sui.sdk.NativePtbBuilder.Result r =
                     n.claimParent(cfg.nodeAddress, cfg.clusterId);
                 if (r.granted) {
                     LOG.info("CLAIM ACCEPTED — we are now parent of cluster " + cfg.clusterId
                              + " digest=" + r.digest + " (" + r.elapsedMs + " ms)");
+                    claimFailures = 0;
                     currentParentAddr.set(cfg.nodeAddress);
-                    // Broadcast our HTTP PoA to followers via the Cluster dynamic field.
-                    // OM2M IN-CSE PoA convention is http://<host>:<port>/
+                    // PoA publication now happens in startParentDuties ->
+                    // anchorLease -> publishPoaIfNeeded, which covers the claim
+                    // path AND a node that is already parent at startup.
                     String poa = cfg.parentPoa;
                     if (poa != null && !poa.isEmpty()) {
-                        org.eclipse.om2m.sui.sdk.NativePtbBuilder.Result pr =
-                            n.setParentPoa(cfg.nodeAddress, cfg.clusterId, poa);
-                        if (pr.granted) {
-                            LOG.info("PoA published on-chain: " + poa + " digest=" + pr.digest + " (" + pr.elapsedMs + " ms)");
-                        } else {
-                            LOG.warn("Failed to publish PoA on-chain: " + pr.error);
-                        }
-                        // Also write to local file (for parent's own local MN-CSE container, if any)
-                        try {
-                            String fp = cfg.poaFilePath;
-                            if (fp != null && !fp.isEmpty()) {
-                                java.nio.file.Path target = java.nio.file.Paths.get(fp);
-                                if (target.getParent() != null) java.nio.file.Files.createDirectories(target.getParent());
-                                java.nio.file.Files.write(target, poa.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                                LOG.info("PoA written locally to " + fp);
-                            }
-                        } catch (Exception fe) {
-                            LOG.warn("Local PoA write failed: " + fe.getMessage());
-                        }
                         // Trigger role-switch to IN-CSE
                         invokeRoleSwitch("in", null);
                     }
@@ -346,57 +589,36 @@ public final class FailoverManager implements MqttCallback {
                 } else if (isGasExhaustion(r.error)) {
                     // FM5: funding failure, not an ordinary rejection. Surface it.
                     surfaceGasExhaustion(r.error);
+                    recordClaimFailure();
                     refreshCurrentParent();
                 } else {
                     LOG.info("Claim rejected on-chain: " + r.error + " (digest=" + r.digest + ")");
+                    recordClaimFailure();
                     refreshCurrentParent();
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
+                recordClaimFailure();
                 if (isGasExhaustion(e.getMessage())) {
                     surfaceGasExhaustion(e.getMessage());
                 } else {
-                    LOG.warn("Claim submission failed: " + e.getMessage());
+                    LOG.warn("Claim submission failed: " + e);
                 }
+            } finally {
+                claimInFlight.set(false);
             }
         });
     }
 
     /** Read the cluster object and cache current_parent. */
     private void refreshCurrentParent() {
-        // Direct RPC fetch — avoid blocking the OSGi Activator on a CLI fork.
+        // Direct GraphQL fetch — avoid blocking the OSGi Activator on a CLI fork.
+        // HTTP errors, GraphQL errors and a missing object all throw (logged
+        // below as a read failure); they are never read as "no parent".
         try {
-            com.fasterxml.jackson.databind.ObjectMapper m =
-                new com.fasterxml.jackson.databind.ObjectMapper();
-            com.fasterxml.jackson.databind.node.ObjectNode req = m.createObjectNode();
-            req.put("jsonrpc", "2.0");
-            req.put("id", 1);
-            req.put("method", "sui_getObject");
-            com.fasterxml.jackson.databind.node.ArrayNode params = req.putArray("params");
-            params.add(cfg.clusterId);
-            com.fasterxml.jackson.databind.node.ObjectNode opts = params.addObject();
-            opts.put("showContent", true);
-
-            java.net.HttpURLConnection conn =
-                (java.net.HttpURLConnection) new java.net.URL(cfg.rpcUrl).openConnection();
-            conn.setRequestMethod("POST");
-            conn.setConnectTimeout(5000);
-            conn.setReadTimeout(5000);
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setDoOutput(true);
-            byte[] body = m.writeValueAsString(req).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            conn.getOutputStream().write(body);
-            int rc = conn.getResponseCode();
-            if (rc < 200 || rc >= 300) {
-                LOG.warn("refreshCurrentParent HTTP " + rc);
-                return;
-            }
-            java.io.InputStream in = conn.getInputStream();
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-            byte[] buf = new byte[8192]; int n;
-            while ((n = in.read(buf)) > 0) baos.write(buf, 0, n);
-            com.fasterxml.jackson.databind.JsonNode resp = m.readTree(baos.toByteArray());
-            String parent = resp.path("result").path("data").path("content")
-                .path("fields").path("current_parent").asText("");
+            com.fasterxml.jackson.databind.JsonNode fields =
+                new org.eclipse.om2m.sui.sdk.SuiObjectFetcher(cfg.graphqlUrl, 5000)
+                    .getMoveObjectJson(cfg.clusterId);
+            String parent = fields.path("current_parent").asText("");
             if (!parent.isEmpty()) {
                 String previous = currentParentAddr.get();
                 currentParentAddr.set(parent);

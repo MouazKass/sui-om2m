@@ -99,7 +99,14 @@ module om2m_access::audit {
 
     // === PTB step 6: Audit log ===
     // Called from evaluator.move as the last step of every access PTB.
-    public fun log(
+    //
+    // A7: this was `public fun`, so any external transaction could append a
+    // fully-attacker-controlled record (including decision = GRANTED) to the
+    // canonical audit trail and emit a matching AccessLogged event. It is now
+    // `public(package)`: the only ways in are evaluator::decide_and_log
+    // (which requires an unforgeable policy::PolicyReceipt) and
+    // evaluator::log_denied_authorized (which requires the AuditAdminCap).
+    public(package) fun log(
         trail: &mut AuditTrail,
         requester: address,
         resource_id: String,
@@ -151,4 +158,6 @@ module om2m_access::audit {
     // === Decision constants ===
     public fun decision_granted(): u8 { DECISION_GRANTED }
     public fun decision_denied():  u8 { DECISION_DENIED  }
+
+    #[test_only] public fun init_for_testing(ctx: &mut sui::tx_context::TxContext) { init(ctx) }
 }

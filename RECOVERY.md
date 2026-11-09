@@ -1,5 +1,27 @@
 # Testbed Recovery Runbook
 
+## CURRENT (v8, 2026-11-10) — recovery quick reference
+
+Most of the manual steps further down are **no longer needed**. They're kept as history.
+- **After any reboot or container restart:** nothing to do. The containers restart
+  themselves; config comes from durable mounts; `sui-das-provision.service` (at boot) and
+  `das-watchdog.timer` (whenever a resource is missing) recreate the DAS **and** the C2
+  DAC wiring (`acp_sui_dac`, `sui-dac` ty=34, `sui-dac-ae`). Verified by a real reboot.
+- **Health check:** `scripts/v8/04_cutover.sh verify` (read-only).
+- **Roll back to v7:** `scripts/v8/04_cutover.sh rollback` (works until `cleanup` removes the
+  `*-v7-old` containers; after that, recreate from `:rpiN-v7-final` and `v7-backup-20261110/`).
+- **On-chain transport is GraphQL** (`sui.graphql.url`). Sui removed JSON-RPC from public
+  fullnodes; anything still using `sui.rpc.url` / JSON-RPC will fail with `-32601`.
+- **Failover now** waits for the on-chain lease to expire before claiming (free reads, no
+  paid aborts), heartbeats are Ed25519-signed (`hb2`), and the parent anchors natively
+  right away when it takes over. A takeover after a parent dies takes up to one lease
+  (≤ 20 min); this is by design, not a hang.
+- **Never** grant an originator static access on `acp_admin` or `acp_sui_dac`.
+  DynamicAuthorizationConsultation is only consulted when the static check FAILS, so a
+  static grant silently bypasses the chain.
+
+---
+
 How to bring the OM2M-Sui cluster back up after nodes go down (e.g. reboot,
 power loss). Written after a full recovery on 2026-06-22 where all three nodes
 had been down ~2 weeks and lost runtime config to a /tmp wipe.
@@ -258,3 +280,127 @@ On-chain access logic is independently proven (real GRANTs/DENYs with correct
 abort codes, capability isolation across nodes) in the evidence files, and the
 Evaluation section has five real measured numbers. Re-triggering a live GRANT is
 a system-reliability task, not a prerequisite for the written paper.
+
+## sui.mappings.properties - escape every colon in a KEY (C6, 2026-11-08)
+
+`config/sui.mappings.properties` now exists in the repo as the annotated
+template for the per-node file that lives at
+`$OM2M_HOME/configuration/sui.mappings.properties` (mounted from
+`/tmp/sui.mappings.properties`, durable copy in `~/sui-runtime-config/`).
+
+**The trap:** that file is read by `java.util.Properties`, for which `:` is a
+key/value separator just like `=`. The key format documented in
+`SuiConfig.load()` is
+
+    addr.<originator>=<0x sui address>
+    token.<originator>::<resource-id>=<0x token object id>
+
+so the keys contain colons by design - and this testbed's main originator is
+`admin:admin`, which contains one too. Every literal colon in a KEY must be
+written `\:`, which makes the `::` separator `\:\:`.
+
+    WRONG: token.admin:admin::/in-cse/in-name/sui-protected-cnt=0x5a35...
+    RIGHT: token.admin\:admin\:\:/in-cse/in-name/sui-protected-cnt=0x5a35...
+
+    WRONG: addr.admin:admin=0x27da...
+    RIGHT: addr.admin\:admin=0x27da...
+
+**Why it is nasty:** there is no parse error and no log line. Verified against
+java.util.Properties (JDK 21) with SuiConfig's exact parsing logic:
+
+* `token.admin:admin::...` becomes key `token.admin`, so `indexOf("::")` fails,
+  the entry is dropped, `resolveToken()` returns `null`, and `SuiDasService`
+  answers `ACCESS_DENIED` with `No Sui mapping for originator=...` on every
+  single request - for the rest of the node's life.
+* `addr.admin:admin=0xdef` is worse: it becomes key `addr.admin` with the value
+  `admin=0xdef`, so `resolveAddress("admin:admin")` is `null` *and* a junk
+  originator `admin` is registered holding the literal string `admin=0xdef` as
+  its Sui address.
+
+**Diagnosis:** if a known-good originator suddenly DENYs with
+`No Sui mapping`, check the colon escaping in this file BEFORE suspecting the
+chain, the token owner, or the package id:
+
+    docker logs om2m-active 2>&1 | grep -i "No Sui mapping"
+
+**Also note:** `SuiConfig` splits the token key on the FIRST `::` in the
+unescaped key. That is fine for `admin:admin` (single colons only), but an
+originator containing a literal `::` cannot be expressed in this format at
+all - rename the originator instead.
+
+## v8 fresh publish — EVERY object id is invalidated (security-fixes-v8)
+
+The security-fixes-v8 batch publishes a **fresh, independent package**, not an
+upgrade (`move/Move.toml` declares version 0.8.0 with that note; several A-items
+change public signatures and delete public items, which a compatible upgrade
+forbids). A fresh publish creates a **new type root**, so nothing from the v6 or
+v7 deployments carries over. After `sui client publish` you must re-provision,
+in this order:
+
+1. New package id -> `scripts/env.sh` and every Pi's
+   `configuration/sui.properties` (`sui.package.id`).
+2. New shared registries: IDENTITY_REG, TRUST_REG, POLICY_REG, AUDIT_TRAIL.
+   The old object ids still exist on chain but hold v7 types, which v8 functions
+   reject. Re-register every node in the new `identity::Registry`.
+3. New AdminCap / PolicyAdminCap / AuditAdminCap / UpgradeCap. Every id in
+   `CAP_INVENTORY.md` becomes historical — see the v8 note appended there.
+   `trust.admin.cap.id` in each node's `sui.properties` must be repointed.
+4. New CapTokens. Tokens minted under v6/v7 are the old package's type and
+   cannot be passed to v8 `cap_token::validate_for_use`. Re-mint per
+   originator/resource and re-register the mappings in
+   `sui.mappings.properties` (escaping colons — see the section above).
+5. New cluster object for failover (`sui.failover.cluster.id`). Note the v8
+   lease bound: `MAX_LEASE_MS = 3_600_000`, so `create_cluster` now **aborts
+   with failover code 7 (`E_LEASE_TOO_LONG`)** if `initial_lease_ms` exceeds one
+   hour. Any provisioning script that passed a large "effectively forever"
+   initial lease must be lowered.
+6. No `bootstrap_valid_caps` call is needed or wanted. v8's `trust::init`
+   registers the genesis cap and arms fail-closed enforcement in the publish
+   transaction. Running a bootstrap afterwards is not part of the v8 runbook.
+
+Do not mix ids across versions while debugging: a v7 registry passed to a v8
+function fails as a type/argument error, not as a clean Move abort, and the
+resulting message does not point at the real cause.
+
+## v8 DEPLOYMENT-MODEL CHANGE: each CSE must sign its own access PTB
+
+**This is a behavioural change in who signs, not just new ids. Read it before
+re-provisioning.**
+
+In v8 the requester is **derived from the transaction signer** instead of being
+passed in as an argument. `identity::verify` lost its `claimed: address`
+parameter and now uses `tx_context::sender(ctx)`; `cap_token::validate_for_use`
+then requires `sender == requester == token.owner`; `evolution::evolve` likewise
+reads the signer's own score (A3 / A4 / A9 in
+`SECBATCH-2026-11_EVIDENCE.md`).
+
+Consequence: **a proxy can no longer sign an access PTB on behalf of a node with
+its own key.** If the DAS or any script currently submits access PTBs using a
+single shared/proxy keypair while naming the node in an argument, those PTBs
+will abort on v8 with:
+
+* `identity::E_NOT_REGISTERED` (code 1) — the signing address is not in the
+  identity registry (the node it was acting for is, but the signer is not); or
+* `cap_token::E_NOT_TOKEN_OWNER` (code 5) — the signer is registered but the
+  CapToken belongs to a different address.
+
+Both appear as "Access PTB aborted" with no digest, which looks exactly like a
+policy denial. Check the abort module and code before suspecting policy.
+
+What this requires on every CSE:
+
+* each node must have **its own keypair in its own keystore**, and that address
+  must be the one registered in `identity::Registry` and the one holding the
+  node's CapToken;
+* `sui.node.address` in `sui.properties` must match the **first entry** of the
+  keystore at `sui.keystore.path` (the same constraint the trust gossip signing
+  check already enforces and logs about at startup);
+* the address used for access PTBs and the address used for gossip signing must
+  be the same address — there is now only one identity per node;
+* each node needs its own gas coins. A single funded proxy wallet no longer
+  suffices, because the proxy is no longer the signer.
+
+If a centralized-signing deployment is unavoidable for some path, the correct
+answer is to give that path its own registered identity and its own tokens, not
+to re-add a caller-supplied requester argument — removing it is the A3/A4/A9
+fix.

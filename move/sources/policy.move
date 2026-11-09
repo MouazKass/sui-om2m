@@ -25,6 +25,9 @@ module om2m_access::policy {
     use sui::clock::{Self, Clock};
     use sui::event;
 
+    use om2m_access::cap_token::{Self, TokenReceipt};
+    use om2m_access::trust::{Self, TrustRegistry};
+
     // === Errors ===
     const E_POLICY_MISSING: u64 = 1;
     const E_OP_DENIED:      u64 = 2;
@@ -52,6 +55,21 @@ module om2m_access::policy {
         id: UID,
         // resource_id (OM2M URI) -> Policy
         policies: Table<String, Policy>,
+    }
+
+    // === A6: hot-potato receipt (step 4 -> step 5/6) ===
+    // No `drop`, `store`, `copy` or `key`. The last link in the chain: the
+    // only way to obtain one is to have passed identity, trust, token and
+    // policy checks in this very transaction, in order. `trust_score` is the
+    // score this module read out of the TrustRegistry itself (A5), so the
+    // audit record cannot be seeded with an invented number.
+    public struct PolicyReceipt {
+        requester: address,
+        resource_id: String,
+        requested_op: u8,
+        trust_score: u64,
+        min_trust: u64,
+        token_uses: u64,
     }
 
     // === Events ===
@@ -153,29 +171,73 @@ module om2m_access::policy {
     }
 
     // === PTB step 4: Policy ===
-    // Called after steps 1-3 have already passed. Aborts the PTB on any
-    // violation, rolling everything back per slide 9.
+    // Called after steps 1-3 have already passed — now provably so, because
+    // the only way in is a TokenReceipt that step 3 produced.
     //
-    // Returns the policy's min_trust value so the evaluator can also
-    // log it in the audit step.
+    // A5: the old signature took `requester_trust: u64` straight from the
+    // caller and compared *that* against min_trust, so any PTB could pass
+    // 100 and clear the gate. The score is now read here, inside the
+    // function, from the TrustRegistry, for the requester the chain carried
+    // forward. There is no trust argument left to forge.
+    //
+    // A6: consumes the TokenReceipt by value and returns a PolicyReceipt for
+    // the final decision/audit step.
     public fun evaluate(
+        token_receipt: TokenReceipt,
         registry: &PolicyRegistry,
-        resource_id: &String,
-        requested_op: u8,
-        requester_trust: u64,
+        trust_reg: &TrustRegistry,
         clock: &Clock,
-    ): u64 {
-        assert!(table::contains(&registry.policies, *resource_id), E_POLICY_MISSING);
-        let p = table::borrow(&registry.policies, *resource_id);
+    ): PolicyReceipt {
+        let (requester, resource_id, requested_op, _token_id, token_uses) =
+            cap_token::consume_token_receipt(token_receipt);
 
-        assert!(requester_trust >= p.min_trust, E_TRUST_BELOW_MIN);
+        assert!(table::contains(&registry.policies, resource_id), E_POLICY_MISSING);
+
+        // Authoritative trust score: read from the registry, not supplied.
+        let trust_score = trust::score_of(trust_reg, requester, clock);
+
+        let p = table::borrow(&registry.policies, resource_id);
+        assert!(trust_score >= p.min_trust, E_TRUST_BELOW_MIN);
         assert!((p.allowed_ops_mask & requested_op) == requested_op, E_OP_DENIED);
 
         let now = clock::timestamp_ms(clock);
         assert!(!in_blackout(p, now), E_IN_BLACKOUT);
 
-        p.min_trust
+        let min_trust = p.min_trust;
+
+        PolicyReceipt {
+            requester,
+            resource_id,
+            requested_op,
+            trust_score,
+            min_trust,
+            token_uses,
+        }
     }
+
+    // Package-internal unwrap of a PolicyReceipt ->
+    // (requester, resource_id, requested_op, trust_score, min_trust, token_uses).
+    public(package) fun consume_policy_receipt(
+        receipt: PolicyReceipt,
+    ): (address, String, u8, u64, u64, u64) {
+        let PolicyReceipt {
+            requester,
+            resource_id,
+            requested_op,
+            trust_score,
+            min_trust,
+            token_uses,
+        } = receipt;
+        (requester, resource_id, requested_op, trust_score, min_trust, token_uses)
+    }
+
+    // Read-only peeks (do not consume).
+    public fun policy_receipt_requester(receipt: &PolicyReceipt): address { receipt.requester }
+    public fun policy_receipt_resource(receipt: &PolicyReceipt): &String { &receipt.resource_id }
+    public fun policy_receipt_op(receipt: &PolicyReceipt): u8 { receipt.requested_op }
+    public fun policy_receipt_trust(receipt: &PolicyReceipt): u64 { receipt.trust_score }
+    public fun policy_receipt_min_trust(receipt: &PolicyReceipt): u64 { receipt.min_trust }
+    public fun policy_receipt_token_uses(receipt: &PolicyReceipt): u64 { receipt.token_uses }
 
     // === Reads ===
     public fun has_policy(registry: &PolicyRegistry, resource_id: &String): bool {

@@ -6,6 +6,11 @@
 # issuing a DAS access request to the decision returning. Runs N times and
 # reports mean, stddev, min, max, p50, p95.
 #
+# WHAT IS MEASURED: a WRITE AUTHORIZATION decision (oneM2M CREATE). The request
+# body below carries "op":1, which is the oneM2M CREATE operation code, not a
+# read. See the BODY comment further down. Report the result as
+# "write-authorization (CREATE) decision latency", never as "read latency".
+#
 # This is the "what does one on-chain access decision cost in wall-clock time?"
 # number. Run it against a properly provisioned originator so every request is a
 # real GRANT (a DENY aborts earlier and would skew the numbers downward).
@@ -30,12 +35,21 @@ ORIGIN="${ORIGIN:-admin:admin}"
 # The DAS NOTIFY target (matches the testbed: sui-das AE under in-cse/in-name).
 URL="$NODE/~/in-cse/in-name/sui-das"
 
-# A real access request body: originator Csensor-001 reading the protected cnt.
+# A real access request body: originator Csensor-001 asking for WRITE
+# authorization (oneM2M CREATE) on the protected container.
+#
+# "op" is the oneM2M operation code (TS-0001): 1=CREATE, 2=RETRIEVE, 3=UPDATE,
+# 4=DELETE, 5=NOTIFY. So "op":1 is CREATE, which SuiDasService.mapOperation turns
+# into the OP_WRITE bit (2) of the capability token's ops mask. The installed
+# policy for sui-protected-cnt has ops=3 (READ|WRITE), so CREATE is permitted and
+# the request is a genuine GRANT.
+# DO NOT change the value to 2 "to make it a read" -- the published numbers were
+# measured with op=1; only the wording was ever wrong.
 read -r -d '' BODY <<'JSON'
 {"m2m:sec":{"sit":1,"dreq":{"or":"Csensor-001","op":1,"rid":"/in-cse/in-name/sui-protected-cnt","rty":4}}}
 JSON
 
-echo "# Access-decision latency, native path"
+echo "# Access-decision latency, native path (write authorization / oneM2M CREATE)"
 echo "# node=$NODE  runs=$N  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "# (warming up with 3 discarded requests...)"
 

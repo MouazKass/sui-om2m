@@ -2,28 +2,21 @@
 //
 // Layer 3 of slide 8: Self-Evolving Living Tokens.
 //
-// This module is the only one in the framework that touches the two
-// Sui-exclusive features called out in slide 7:
-//
-//   * Dynamic Fields — we attach a `BehaviourLog` and a `Tier` field to
-//     each CapToken at runtime, after mint. The token's struct doesn't
-//     need to know about them; they're added later without redeploying.
-//
-//   * Transfer-to-Object — sub-capability child objects are transferred
-//     to the token itself, making them owned by the token rather than
-//     by an address. When the parent token is revoked the children
-//     become unreachable.
+// This module uses the Sui-exclusive Dynamic Fields feature called out in
+// slide 7: we attach a `BehaviourLog` and a `Tier` field to each CapToken at
+// runtime, after mint. The token's struct doesn't need to know about them;
+// they're added later without redeploying.
 //
 // Evolution mutates a token's `allowed_ops` via the package-private
-// `grant_ops` / `revoke_ops` helpers in cap_token.move. The trust score
-// is the input signal; the output is a wider or narrower op-set, plus
-// optionally a child SubCapability for the highest tier.
+// `grant_ops` / `revoke_ops` helpers in cap_token.move. The trust score of
+// the transaction signer is the input signal; the output is a wider or
+// narrower op-set.
+//
+// (The Transfer-to-Object `SubCapability` demo that used to live here was
+// removed in v8 — see the A11 note further down.)
 
 module om2m_access::evolution {
-    use std::string::String;
-    use sui::object::{Self, UID};
     use sui::tx_context::{Self, TxContext};
-    use sui::transfer;
     use sui::clock::{Self, Clock};
     use sui::dynamic_field as df;
     use sui::event;
@@ -33,6 +26,8 @@ module om2m_access::evolution {
 
     // === Errors ===
     const E_NO_TIER_FIELD: u64 = 2;
+    // A9: the signer is not the address this token was issued to.
+    const E_NOT_TOKEN_OWNER: u64 = 3;
 
     // === Tier thresholds (trust score -> tier) ===
     // 0..=24   -> 0 (probation) : OP_READ
@@ -59,15 +54,6 @@ module om2m_access::evolution {
         last_evolved_ms: u64,
     }
 
-    // === Sub-capability (child object, transferred to the token) ===
-    // Holds finer-grained context for the custodian tier (slide 8
-    // Layer 3 "tokens adapt permissions autonomously").
-    public struct SubCapability has key, store {
-        id: UID,
-        granted_for: String, // free-form scope label
-        granted_at_ms: u64,
-    }
-
     // === Events ===
     public struct TierChanged has copy, drop {
         token_id: address,
@@ -75,12 +61,6 @@ module om2m_access::evolution {
         new_tier: u8,
         trust_score: u64,
         timestamp_ms: u64,
-    }
-
-    public struct SubCapabilityAttached has copy, drop {
-        token_id: address,
-        sub_cap_id: address,
-        scope: String,
     }
 
     // === Initialise evolution state on an existing token ===
@@ -111,12 +91,21 @@ module om2m_access::evolution {
     // Reads the requester's trust score, computes the target tier,
     // mutates the token's allowed_ops bitmask to match, and records the
     // change. No-op if the tier hasn't changed.
+    //
+    // A9: the old signature took `node_addr: address` with no ctx, so the
+    // holder of ANY token could pass a high-trust node's address and promote
+    // their own token to that node's tier. The score is now read for
+    // tx_context::sender(ctx), and the signer must be the address the token
+    // was issued to.
     public fun evolve(
         token: &mut CapToken,
         trust_reg: &TrustRegistry,
-        node_addr: address,
         clock: &Clock,
+        ctx: &TxContext,
     ) {
+        let node_addr = tx_context::sender(ctx);
+        assert!(cap_token::owner(token) == node_addr, E_NOT_TOKEN_OWNER);
+
         // Read everything we need from immutable views BEFORE taking the
         // mutable borrow on the token's UID for dynamic-field access.
         let score = trust::score_of(trust_reg, node_addr, clock);
@@ -170,34 +159,13 @@ module om2m_access::evolution {
         });
     }
 
-
-    // === Attach a child SubCapability via Transfer-to-Object ===
-    // Sui-exclusive: the child's owner is the *token object*, not an
-    // address. Revoking the parent token makes the child unreachable.
-    public fun attach_sub_capability(
-        token: &mut CapToken,
-        scope: String,
-        clock: &Clock,
-        ctx: &mut TxContext,
-    ) {
-        let now = clock::timestamp_ms(clock);
-        let sub = SubCapability {
-            id: object::new(ctx),
-            granted_for: scope,
-            granted_at_ms: now,
-        };
-        let sub_addr = object::uid_to_address(&sub.id);
-        let token_addr = cap_token::token_address(token);
-
-        event::emit(SubCapabilityAttached {
-            token_id: token_addr,
-            sub_cap_id: sub_addr,
-            scope: sub.granted_for,
-        });
-
-        // The Transfer-to-Object primitive.
-        transfer::public_transfer(sub, token_addr);
-    }
+    // A11: `attach_sub_capability`, `SubCapability` and the
+    // `SubCapabilityAttached` event were removed in v8. Nothing in the
+    // package, the Java plugin, the SDK or the scripts ever read a
+    // SubCapability's fields in an access decision — the only writer was the
+    // dead attach function itself, so the type was pure attack surface
+    // (an unauthenticated `public fun` that let any token holder mint child
+    // objects and emit events against someone else's token id).
 
     // === Tier table ===
     fun tier_for(score: u64): u8 {

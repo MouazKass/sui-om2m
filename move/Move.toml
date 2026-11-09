@@ -1,7 +1,10 @@
 [package]
 name = "om2m_access"
 edition = "2024.beta"
-version = "0.1.0"
+# v8: fresh publish (NOT an upgrade of the v6/v7 package) — carries the
+# A1-A12 security hardening: receipt-chained access evaluation, cap-validity
+# enforcement, sender-derived identity, package-private audit writes.
+version = "0.8.0"
 license = "Apache-2.0"
 authors = ["Mouaz Kassouma <mouazmoayad10@gmail.com>"]
 

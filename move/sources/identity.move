@@ -33,6 +33,22 @@ module om2m_access::identity {
     // === Capabilities ===
     public struct AdminCap has key, store { id: UID }
 
+    // === A6: hot-potato receipt (step 1 -> step 2) ===
+    // IdentityReceipt deliberately has NO abilities: no `drop`, no `store`,
+    // no `copy`, no `key`.
+    //   * It cannot be fabricated outside this module (struct construction is
+    //     module-private), so only a real `verify` call produces one.
+    //   * It cannot be dropped or stored, so a PTB that calls `verify` MUST
+    //     feed the receipt into `trust::require_min` or the whole transaction
+    //     fails to type-check at runtime. Steps can no longer be skipped,
+    //     reordered, or fed hand-rolled values.
+    //   * `requester` is derived from tx_context::sender, never from a
+    //     caller-supplied address, and is carried BY VALUE through the rest
+    //     of the chain.
+    public struct IdentityReceipt {
+        requester: address,
+    }
+
     // === Registry entry ===
     public struct Node has store, drop {
         cse_id: String, // OM2M-style CSE-ID, e.g. "in-cse" or "mn-cse-1"
@@ -109,10 +125,30 @@ module om2m_access::identity {
     }
 
     // === PTB step 1: Identity ===
-    // Called inside every access PTB. Aborts if `claimed` is not in the
-    // registry, which rolls back the whole 6-step transaction.
-    public fun verify(registry: &Registry, claimed: address) {
-        assert!(table::contains(&registry.nodes, claimed), E_NOT_REGISTERED);
+    // Called inside every access PTB. Aborts if the *transaction signer* is
+    // not in the registry, which rolls back the whole transaction.
+    //
+    // A3: the old signature took a caller-supplied `claimed: address` and
+    // trusted it, so any signer could assert any identity. The identity is
+    // now taken from tx_context::sender(ctx) and that address is the only
+    // one that travels down the chain (inside IdentityReceipt).
+    public fun verify(registry: &Registry, ctx: &TxContext): IdentityReceipt {
+        let requester = tx_context::sender(ctx);
+        assert!(table::contains(&registry.nodes, requester), E_NOT_REGISTERED);
+        IdentityReceipt { requester }
+    }
+
+    // Package-internal unwrap of an IdentityReceipt. Only modules inside
+    // om2m_access can open a receipt, so no external code can turn one back
+    // into a bare address it then re-supplies somewhere else.
+    public(package) fun consume_identity_receipt(receipt: IdentityReceipt): address {
+        let IdentityReceipt { requester } = receipt;
+        requester
+    }
+
+    // Read-only peek (does not consume). Useful for tests/monitoring.
+    public fun identity_receipt_requester(receipt: &IdentityReceipt): address {
+        receipt.requester
     }
 
     // === Reads (used by other modules and by clients) ===
@@ -134,4 +170,6 @@ module om2m_access::identity {
     public fun role_in_cse(): u8 { ROLE_IN_CSE }
     public fun role_mn_cse(): u8 { ROLE_MN_CSE }
     public fun role_ae():     u8 { ROLE_AE }
+
+    #[test_only] public fun init_for_testing(ctx: &mut sui::tx_context::TxContext) { init(ctx) }
 }

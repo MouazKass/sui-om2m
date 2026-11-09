@@ -130,6 +130,37 @@
                     </instructions>
                 </configuration>
             </plugin>
+            <!--
+              Enforce the Java 8 API, not just Java 8 bytecode.
+
+              The containers run Java 1.8.0_492. source/target=1.8 only sets the
+              bytecode version; javac still resolves calls against the BUILD
+              JDK's library, so a JDK 25 build compiled List.of (Java 9+) into
+              class files that fail at runtime with NoSuchMethodError. The usual
+              fix, <maven.compiler.release>8, is unavailable: JDK 25 no longer
+              supports release 8. animal-sniffer checks every referenced JDK API
+              against the official Java 8 signature, so the build fails instead,
+              whatever JDK runs it.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>animal-sniffer-maven-plugin</artifactId>
+                <version>1.24</version>
+                <configuration>
+                    <signature>
+                        <groupId>org.codehaus.mojo.signature</groupId>
+                        <artifactId>java18</artifactId>
+                        <version>1.0</version>
+                    </signature>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>check-java8-api</id>
+                        <phase>process-classes</phase>
+                        <goals><goal>check</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 </project>

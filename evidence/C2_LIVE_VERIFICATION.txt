@@ -1,0 +1,85 @@
+### C2 LIVE VERIFICATION — rpi3-iot — 2026-11-09T03:20:41Z
+### OM2M jars: 
+
+## Resources provisioned
+--- acp_sui_dac ---
+{
+   "m2m:acp" : {
+      "rn" : "acp_sui_dac",
+      "ty" : 1,
+      "ri" : "/in-cse/acp-612587139",
+      "pi" : "/in-cse",
+      "ct" : "20261109T031453",
+      "lt" : "20261109T031453",
+      "pv" : {
+         "acr" : [ {
+            "acor" : [ "admin:admin", "/in-cse" ],
+            "acop" : 63
+         } ]
+      },
+      "pvs" : {
+         "acr" : [ {
+            "acor" : [ "admin:admin", "/in-cse" ],
+            "acop" : 63
+         } ]
+      }
+   }
+}
+--- sui-dac ---
+{
+   "m2m:dac" : {
+      "rn" : "sui-dac",
+      "ty" : 34,
+      "ri" : "/in-cse/dac-131399267",
+      "pi" : "/in-cse",
+      "ct" : "20261109T031453",
+      "lt" : "20261109T031453",
+      "acpi" : [ "/in-cse/acp-624932098" ],
+      "dae" : true,
+      "dap" : "/in-cse/CAE942960294"
+   }
+}
+--- sui-dac-ae ---
+{
+   "m2m:ae" : {
+      "rn" : "sui-dac-ae",
+      "ty" : 2,
+      "ri" : "/in-cse/Csui-dac-ae",
+      "pi" : "/in-cse",
+      "ct" : "20261109T031454",
+      "lt" : "20261109T031538",
+      "acpi" : [ "/in-cse/acp-624932098", "/in-cse/acp-612587139" ],
+      "daci" : [ "/in-cse/dac-131399267" ],
+      "et" : "20271109T031454",
+      "api" : "N.sui-dac.0001",
+      "aei" : "Csui-dac-ae",
+      "rr" : false
+   }
+}
+
+## PROBE 1 — ordinary RETRIEVE, originator Cdacprobe, NO special headers
+$ curl http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H "X-M2M-Origin: Cdacprobe"
+{
+   "m2m:tqf" : {
+      "dasi" : [ {
+         "uri" : "/in-cse/CAE942960294",
+         "daq" : {
+            "og" : "Cdacprobe",
+            "tirt" : 2,
+            "op" : 2,
+            "trid" : "/in-cse/Csui-dac-ae"
+         }
+      } ]
+   }
+}
+HTTP 403
+
+## OM2M log (DAS consulted via DynamicAuthorizationSelector)
+[WARN] - org.eclipse.om2m.sui.failover.FailoverManager  
+Parent silence detected (296911478 ms). Submitting Sui claim.
+[INFO] - org.eclipse.om2m.sui.failover.FailoverManager  
+Claim rejected on-chain: getObject error for 0x1b6bc3b4010bc85fa6c021dd1b96e81747716275559b554bf258c7f88a364d38: {"code":-32601,"message":"Method not found. JSON-RPC on public fullnodes has been deprecated. Please migrate to gRPC or GraphQL endpoints. See https://docs.sui.io/develop/accessing-data/json-rpc-migration for more information."} (digest=null)
+[INFO] - org.eclipse.om2m.sui.failover.FailoverManager  
+[WARN] - org.eclipse.om2m.sui.failover.FailoverManager  
+Parent silence detected (296916478 ms). Submitting Sui claim.
+[INFO] - org.eclipse.om2m.sui.failover.FailoverManager  
