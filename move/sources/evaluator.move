@@ -46,6 +46,13 @@ module om2m_access::evaluator {
 
     use om2m_access::audit::{Self, AuditTrail, AuditAdminCap};
     use om2m_access::policy::{Self, PolicyReceipt};
+    use om2m_access::identity::{Self, IdentityReceipt, Registry as IdentityRegistry};
+    use om2m_access::trust::{Self, TrustRegistry, AdminCap as TrustAdminCap};
+
+    // v9 (F3) errors for log_deny_batch. They start at 100 so they cannot be
+    // confused with the abort codes of the modules this one calls.
+    const E_NOT_MIDDLEWARE: u64 = 100;
+    const E_NODE_CAP_INVALID: u64 = 101;
 
     // === PTB step 5 + 6: Decision (implicit) and Audit ===
     //
@@ -131,5 +138,37 @@ module om2m_access::evaluator {
         clock: &Clock,
     ) {
         log_denied(trail, requester, resource_id, requested_op, trust_at_check, clock);
+    }
+
+    // v9 (F3): anchor one window of this node's local DENY log on-chain.
+    //
+    // The PTB is `identity::verify(id_reg)` then this function with the
+    // receipt, so the node address is the transaction signer (A3) and is
+    // never a caller-supplied argument. Gated three ways:
+    //   * the signer is a registered IN-CSE or MN-CSE (not an AE);
+    //   * the signer passes a trust AdminCap that is currently valid in the
+    //     TrustRegistry (an owned object, so only its owner can pass it;
+    //     governed-aware via trust::is_cap_valid);
+    //   * audit::log_deny_batch limits each node to one batch per
+    //     DENY_BATCH_MIN_INTERVAL_MS and rejects overlapping windows.
+    public fun log_deny_batch(
+        identity_receipt: IdentityReceipt,
+        id_reg: &IdentityRegistry,
+        node_cap: &TrustAdminCap,
+        trust_reg: &TrustRegistry,
+        trail: &mut AuditTrail,
+        window_start_ms: u64,
+        window_end_ms: u64,
+        deny_count: u64,
+        distinct_keys: u64,
+        digest: vector<u8>,
+        clock: &Clock,
+    ) {
+        let node = identity::consume_identity_receipt(identity_receipt);
+        let role = identity::role_of(id_reg, node);
+        assert!(role == identity::role_in_cse() || role == identity::role_mn_cse(), E_NOT_MIDDLEWARE);
+        assert!(trust::is_cap_valid(trust_reg, sui::object::id(node_cap)), E_NODE_CAP_INVALID);
+        audit::log_deny_batch(trail, node, window_start_ms, window_end_ms,
+                              deny_count, distinct_keys, digest, clock);
     }
 }

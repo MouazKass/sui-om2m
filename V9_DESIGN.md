@@ -202,6 +202,52 @@ takeover.
   current parent.
 - After phase F every honest claim goes through v9.
 
+### 2.9 DENY batches on the audit trail (finding F3)
+
+**The finding.** Every DENY was a submitted transaction that aborted and still
+paid about 1 mSUI, so a sensor mapped to rpi3 could drain rpi3's gas by
+repeating a forbidden request. The abort also rolled back any audit write, so
+denials never reached the AuditTrail. The only external denial writer,
+`evaluator::log_denied_authorized`, needs the publisher's `AuditAdminCap`.
+
+**v8 half: fixed and deployed on 2026-11-10, no contract change.** The plugin
+simulates each decision for free and submits only a simulated GRANT. Repeat
+DENYs are answered from a 10 s local cache, an originator with 30 verdict
+DENYs in a minute is throttled for the rest of that minute, and every DENY goes
+to a JSON-lines log. See ROLLOUT_V8.md, "F3".
+
+**v9 half: this section.** One compact on-chain record per window of each
+node's DENY log:
+
+| Item | Change | Kind |
+|---|---|---|
+| `evaluator::log_deny_batch(IdentityReceipt, &identity::Registry, &trust::AdminCap, &TrustRegistry, &mut AuditTrail, window_start_ms, window_end_ms, deny_count, distinct_keys, digest, &Clock)` | The only way in. The node is the signer (the receipt comes from `identity::verify`), it must be an IN-CSE or MN-CSE (`E_NOT_MIDDLEWARE`, 100), and it must pass a trust AdminCap that `trust::is_cap_valid` accepts (`E_NODE_CAP_INVALID`, 101; governed-aware) | new public function |
+| `audit::log_deny_batch` | Validates and stores: 32-byte digest (`E_BAD_DIGEST`, 2), `0 < distinct <= count` (`E_EMPTY_BATCH`, 3), `start < end`, window at most 24 h and ending no more than 60 s ahead of the chain clock (`E_BAD_WINDOW`, 4), at most one batch per node per 5 min (`E_BATCH_TOO_SOON`, 5), no overlap with that node's previous window (`E_WINDOW_OVERLAP`, 6). Emits `DenialsLogged`, keeps a 256-entry ring | new `public(package)` function (A7) |
+| `DenyBatch`, `DenyLog`/`DenyLogKey`, `DenyNodeState`/`DenyNodeKey`, `DenialsLogged` | Stored as dynamic fields on the existing AuditTrail, so its layout is untouched | new structs |
+| `audit::deny_batch_count`, `latest_deny_batch`, `deny_batch_min_interval_ms` | Reads | new public functions |
+
+**What a batch proves.** The digest is the SHA-256 of the window's exact DENY
+log lines (each line's UTF-8 bytes plus `
+`, in order), and the log writes a
+`{"batch":{...}}` marker with the same digest at each window boundary. Anyone
+holding a node's log can recompute every anchored window, so a later edit or
+deletion is detectable, and the per-window count is public. The batch does
+not reveal originators or resources on-chain.
+
+**Cost.** One transaction per node per flush interval (default 15 min, floored
+at the contract's 5 min), and only for windows that contain a DENY. A flood of
+denials costs at most that single transaction, never one per request. The
+plugin pre-checks the batch like every decision, so a batch the contract would
+refuse is never paid for.
+
+**Plugin side (shipped in the v8 bundle, off).** `DenyBatchFlusher` closes the
+window on each tick and submits at most one pending batch, oldest first.
+Transport errors are kept for the next tick. A contract refusal is retried 3
+times, then dropped with a warning; the lines stay in the local log. The queue
+is bounded at 16. It is gated by `sui.das.deny.audit.flush.enabled=false`,
+which stays off on v8 because the function exists only in v9. It is turned on
+in phase F below.
+
 ## 3. Files
 
 | File | Change |
@@ -211,6 +257,9 @@ takeover.
 | `move/sources/failover.move` | new public read `cap_cluster(&ClusterAdminCap)`; F2: body changes in `claim_parent`, `set_parent_poa`, `parent_poa`; new struct `ParentPoaOwnerKey`, new public read `parent_poa_owner`, private `clear_poa` |
 | `move/tests/quorum_tests.move` | **new**: 41 tests |
 | `move/tests/parent_poa_tests.move` | **new**: 6 tests (F2) |
+| `move/sources/audit.move` | F3: errors 2-6, `DenyBatch`, `DenyLog`/`DenyLogKey`, `DenyNodeState`/`DenyNodeKey`, event `DenialsLogged`; `public(package) log_deny_batch`; public reads `deny_batch_count`, `latest_deny_batch`, `deny_batch_min_interval_ms` |
+| `move/sources/evaluator.move` | F3: errors 100/101; new public `log_deny_batch` (receipt-gated) |
+| `move/tests/deny_batch_tests.move` | **new**: 17 tests (F3) |
 
 `Move.lock`, `Move.toml` and `Published.toml` are unchanged. Everything was
 built in a WSL copy.
@@ -219,8 +268,8 @@ built in a WSL copy.
 
 - [x] `sui move build`: exit 0. The only warnings are W04037 deprecations
   (`exists_`, `size`), a style the package already uses.
-- [x] `sui move test`: **120 / 120** (was 73 / 73). The 73 existing tests
-  pass unchanged, plus 41 quorum tests and 6 F2 tests.
+- [x] `sui move test`: **137 / 137** (was 73 / 73). The 73 existing tests
+  pass unchanged, plus 41 quorum tests, 6 F2 tests and 17 F3 tests.
 - [x] **Mutation checks.** Each guard was reverted on its own; each time the
   targeted test failed and every other test passed:
 
@@ -233,12 +282,21 @@ built in a WSL copy.
   | peer guard removed | `single_cap_revoke_admin_rejected` |
   | F2: `claim_parent` doesn't clear | `takeover_clears_the_old_parents_poa` |
   | F2: owner not recorded | `poa_is_bound_to_the_parent_that_set_it`, `new_parent_readvertises_after_takeover` |
+  | F3: role check removed | `an_ae_cannot_anchor_batches` |
+  | F3: cap check removed | `a_revoked_cap_cannot_anchor_batches` |
+  | F3: 5 min interval removed | `a_second_batch_inside_the_interval_is_rejected` |
+  | F3: overlap check removed | `an_overlapping_window_is_rejected` |
+  | F3: digest length check removed | `a_short_digest_is_rejected` |
+  | F3: future-window check removed | `a_window_ending_in_the_future_is_rejected` |
 
 - [x] **Upgrade compatibility (offline).** Every struct (name, abilities,
   fields) and every `public` / `entry` signature of all 8 v8 modules is present
   unchanged in v9. Additions are `failover::cap_cluster`,
   `failover::parent_poa_owner`, the struct `failover::ParentPoaOwnerKey`,
-  `trust::is_governed` and the new module `quorum`. **RESULT: COMPATIBLE.** The baseline is the real
+  `trust::is_governed`, the new module `quorum`, and for F3
+  `evaluator::log_deny_batch`, `audit::{deny_batch_count, latest_deny_batch,
+  deny_batch_min_interval_ms}` and six new audit structs (re-checked
+  2026-11-10 against the deployed v8 source, b08b3e3). **RESULT: COMPATIBLE.** The baseline is the real
   deployed package: the 8 modules fetched from testnet over GraphQL are
   byte-identical to a build of git HEAD. Script in Appendix A.
 - [ ] **On-chain compatibility check** (`sui client upgrade --dry-run`).
@@ -362,12 +420,12 @@ sui client execute-signed-tx --tx-bytes "$TX" --signatures "$SIG"
 ## 6. Rollout runbook (mirrors ROLLOUT_V8.md)
 
 ### A. Code readiness (local): done
-- [x] 120 / 120 Move tests, mutation-checked; offline compatibility COMPATIBLE.
+- [x] 137 / 137 Move tests, mutation-checked; offline compatibility COMPATIBLE.
 
 ### B. Toolchain: [!] WSL on the publisher laptop
 - [ ] Install Sui CLI `testnet-v1.83.1`, e.g. `suiup install sui@testnet-1.83.1`
   or the release binary. Keep 1.74.0 aside until v9 is verified.
-- [ ] Re-run `sui move build && sui move test`: expect 120 / 120.
+- [ ] Re-run `sui move build && sui move test`: expect 137 / 137.
 - [ ] Check that `git diff move/Move.lock move/Published.toml` shows no
   backslash paths.
 
@@ -405,7 +463,15 @@ sui client execute-signed-tx --tx-bytes "$TX" --signatures "$SIG"
 - [ ] Verify: a C2 GRANT, a trust delta landing on-chain from each node, and a
   lease anchor. All of them must show the **v9** package in the tx's
   `MoveCall`.
-- [ ] Rollback until phase G: set the value back to `$PKG_V8`.
+- [ ] F3: once a v9 GRANT is verified, set `sui.das.deny.audit.flush.enabled=true`
+  in `03_gen_config.sh`, then `config` → `redeploy`. Trigger one forbidden
+  DELETE on rpi3, and after the next flush (≤ 15 min) check that
+  `audit::deny_batch_count` grew. Then check that the anchored digest equals
+  the `sha256` of the last `{"batch":...}` marker in
+  `~/sui-runtime-config/state/deny-log.jsonl`, and the SHA-256 recomputed
+  from the lines before it.
+- [ ] Rollback until phase G: set the value back to `$PKG_V8` (and the flush
+  flag back to false).
 
 ### G. Arm governance: [!] publisher, one PTB per line
 ```bash

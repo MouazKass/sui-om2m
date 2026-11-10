@@ -25,6 +25,7 @@ module om2m_access::audit {
     use sui::transfer;
     use sui::clock::{Self, Clock};
     use sui::event;
+    use sui::dynamic_field as df;
 
     // === Errors ===
     const E_BAD_RING_SIZE: u64 = 1;
@@ -150,6 +151,141 @@ module om2m_access::audit {
         };
         trail.next_slot = trail.next_slot + 1;
     }
+
+    // ===================================================================
+    // v9 (F3): batched DENY records.
+    //
+    // Since the plugin's free pre-check, a denied request is never submitted,
+    // so it leaves no on-chain trace at all (and before that, its abort rolled
+    // the audit write back anyway). Recording each DENY on-chain one by one
+    // would bring back the gas drain the pre-check closed. Instead a node
+    // anchors, at most every DENY_BATCH_MIN_INTERVAL_MS, ONE compact record
+    // per window of its local DENY log: the window bounds, the DENY count,
+    // the number of distinct originator/resource/op keys, and the SHA-256 of
+    // the window's exact log lines. Anyone holding the node's log can
+    // recompute the digest, so a later edit to it is detectable, and the
+    // count is public.
+    //
+    // Additive only (new structs, a dynamic field on the trail, new
+    // functions), so it ships in the v9 compatible upgrade. Entry is
+    // `public(package)` (A7): the only way in is evaluator::log_deny_batch,
+    // which needs an IdentityReceipt for a registered IN/MN-CSE and a valid
+    // trust AdminCap.
+    // ===================================================================
+    const E_BAD_DIGEST: u64 = 2;
+    const E_EMPTY_BATCH: u64 = 3;
+    const E_BAD_WINDOW: u64 = 4;
+    const E_BATCH_TOO_SOON: u64 = 5;
+    const E_WINDOW_OVERLAP: u64 = 6;
+
+    // Minimum time between two batches from the same node.
+    const DENY_BATCH_MIN_INTERVAL_MS: u64 = 300_000;
+    // Longest window a single batch may cover.
+    const DENY_BATCH_MAX_WINDOW_MS: u64 = 86_400_000;
+    // Tolerated node-clock lead over the chain clock for window_end.
+    const DENY_BATCH_MAX_SKEW_MS: u64 = 60_000;
+    // On-chain ring of the most recent batches (all nodes).
+    const DENY_BATCH_RING: u64 = 256;
+
+    public struct DenyBatch has store, copy, drop {
+        node:            address,
+        window_start_ms: u64,
+        window_end_ms:   u64,
+        deny_count:      u64,
+        distinct_keys:   u64,
+        digest:          vector<u8>,
+        logged_at_ms:    u64,
+    }
+
+    public struct DenyLogKey has copy, drop, store {}
+    public struct DenyLog has store {
+        next: u64,
+        batches: vector<DenyBatch>,
+    }
+
+    public struct DenyNodeKey has copy, drop, store { node: address }
+    public struct DenyNodeState has store, drop {
+        last_logged_ms: u64,
+        last_window_end_ms: u64,
+    }
+
+    // Canonical event for one anchored DENY window.
+    public struct DenialsLogged has copy, drop {
+        node:            address,
+        window_start_ms: u64,
+        window_end_ms:   u64,
+        deny_count:      u64,
+        distinct_keys:   u64,
+        digest:          vector<u8>,
+        logged_at_ms:    u64,
+    }
+
+    public(package) fun log_deny_batch(
+        trail: &mut AuditTrail,
+        node: address,
+        window_start_ms: u64,
+        window_end_ms: u64,
+        deny_count: u64,
+        distinct_keys: u64,
+        digest: vector<u8>,
+        clock: &Clock,
+    ) {
+        let now = clock::timestamp_ms(clock);
+        assert!(vector::length(&digest) == 32, E_BAD_DIGEST);
+        assert!(deny_count > 0 && distinct_keys > 0 && distinct_keys <= deny_count, E_EMPTY_BATCH);
+        assert!(window_start_ms < window_end_ms, E_BAD_WINDOW);
+        assert!(window_end_ms - window_start_ms <= DENY_BATCH_MAX_WINDOW_MS, E_BAD_WINDOW);
+        assert!(window_end_ms <= now + DENY_BATCH_MAX_SKEW_MS, E_BAD_WINDOW);
+
+        // Per-node rate limit and replay/overlap protection.
+        let nk = DenyNodeKey { node };
+        if (df::exists_(&trail.id, nk)) {
+            let st = df::borrow_mut<DenyNodeKey, DenyNodeState>(&mut trail.id, nk);
+            assert!(now >= st.last_logged_ms + DENY_BATCH_MIN_INTERVAL_MS, E_BATCH_TOO_SOON);
+            assert!(window_start_ms >= st.last_window_end_ms, E_WINDOW_OVERLAP);
+            st.last_logged_ms = now;
+            st.last_window_end_ms = window_end_ms;
+        } else {
+            df::add(&mut trail.id, nk, DenyNodeState { last_logged_ms: now, last_window_end_ms: window_end_ms });
+        };
+
+        let b = DenyBatch {
+            node, window_start_ms, window_end_ms, deny_count, distinct_keys,
+            digest, logged_at_ms: now,
+        };
+        event::emit(DenialsLogged {
+            node, window_start_ms, window_end_ms, deny_count, distinct_keys,
+            digest: b.digest, logged_at_ms: now,
+        });
+
+        if (!df::exists_(&trail.id, DenyLogKey {})) {
+            df::add(&mut trail.id, DenyLogKey {}, DenyLog { next: 0, batches: vector[] });
+        };
+        let log = df::borrow_mut<DenyLogKey, DenyLog>(&mut trail.id, DenyLogKey {});
+        if (vector::length(&log.batches) < DENY_BATCH_RING) {
+            vector::push_back(&mut log.batches, b);
+        } else {
+            let slot = log.next % DENY_BATCH_RING;
+            *vector::borrow_mut(&mut log.batches, slot) = b;
+        };
+        log.next = log.next + 1;
+    }
+
+    // Number of DENY batches ever anchored (all nodes).
+    public fun deny_batch_count(trail: &AuditTrail): u64 {
+        if (!df::exists_(&trail.id, DenyLogKey {})) return 0;
+        df::borrow<DenyLogKey, DenyLog>(&trail.id, DenyLogKey {}).next
+    }
+
+    // The most recent batch: (node, start, end, count, distinct, digest, logged_at).
+    public fun latest_deny_batch(trail: &AuditTrail): (address, u64, u64, u64, u64, vector<u8>, u64) {
+        let log = df::borrow<DenyLogKey, DenyLog>(&trail.id, DenyLogKey {});
+        let idx = (log.next - 1) % DENY_BATCH_RING;
+        let b = vector::borrow(&log.batches, idx);
+        (b.node, b.window_start_ms, b.window_end_ms, b.deny_count, b.distinct_keys, b.digest, b.logged_at_ms)
+    }
+
+    public fun deny_batch_min_interval_ms(): u64 { DENY_BATCH_MIN_INTERVAL_MS }
 
     // === Reads ===
     public fun ring_size(trail: &AuditTrail): u64 { trail.ring_size }
