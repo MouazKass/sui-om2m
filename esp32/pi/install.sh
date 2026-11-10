@@ -11,6 +11,16 @@ python3 -c 'import paho.mqtt, requests' 2>/dev/null || {
   DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-paho-mqtt python3-requests; }
 command -v mosquitto_pub >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q mosquitto-clients
 install -d /opt/om2m-ipe-bridge /etc/om2m-ipe-bridge
+# Upgrading from Hamza's v1 bridge (no [cluster] section): keep a copy of the v1
+# code and config, then start from the v2 template. Reverse with the backup dir.
+if [[ -f /etc/om2m-ipe-bridge/bridge.conf ]] && ! grep -q '^\[cluster\]' /etc/om2m-ipe-bridge/bridge.conf; then
+  B=/etc/om2m-ipe-bridge/v1-backup-$(date +%Y%m%d-%H%M%S)
+  install -d "$B"
+  cp -a /etc/om2m-ipe-bridge/bridge.conf "$B/"
+  [[ -f /opt/om2m-ipe-bridge/om2m_ipe_bridge.py ]] && cp -a /opt/om2m-ipe-bridge/om2m_ipe_bridge.py "$B/"
+  rm -f /etc/om2m-ipe-bridge/bridge.conf
+  echo "v1 bridge found: code + config backed up to $B"
+fi
 install -m 0755 om2m_ipe_bridge.py /opt/om2m-ipe-bridge/
 MEM=members.conf; [[ -f $MEM ]] || MEM=members.conf.example
 install -m 0644 "$MEM" /etc/om2m-ipe-bridge/members.conf

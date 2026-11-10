@@ -236,11 +236,11 @@ the test aimed at it failed. All 7 were caught:
 2. **`PUT` of an AE's `lbl` succeeds.** The C2 finding saw an AE PUT of `acpi` return
    200 but be ignored, so the stats `latest_label` and `latest_label_failed` should be
    checked.
-3. **Every node reaches every other node's `:8282`** (`deploy_to_pis.sh check` prints
-   the matrix). Writing to the parent needs it. Without it, set `target = local` and
-   accept per-node trees.
-4. **`provision-das.sh` Part B ran on every node**, since the bridge fails closed
-   without it (`check` prints `acp_sui_dac`, `sui-dac`).
+3. **CONFIRMED 2026-11-10 (read-only, `evidence/live_check_2026-11-10.txt`):** every
+   node reaches every other node's `:8282` (20/20 pairs HTTP 200, rpi4/rpi5
+   included), so writing to the parent works on the real network.
+4. **CONFIRMED 2026-11-10:** `acp_sui_dac`, `sui-dac` and `sui-das` return 200 on all
+   five nodes, so the bridge's fail-closed check passes everywhere.
 5. **A reader's RETRIEVE on the parent is granted on-chain** only after
    `das/protect_sensor.sh` has given that reader a mapping and a token on every node,
    and OM2M has been recreated through `scripts/v8/04_cutover.sh`.

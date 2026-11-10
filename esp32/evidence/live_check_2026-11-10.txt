@@ -1,0 +1,76 @@
+# deploy_to_pis.sh check, read-only, 2026-11-10T15:33:47Z, against origin/main 4974aa1 (v9 live, 5 nodes, rpi2 parent)
+== rpi1 (10.25.96.200)
+   SSH: ok (rpi1-iot)
+   OM2M: 200  (want 200)
+   acp_sui_dac: 200  (want 200: provision-das.sh Part B)
+   sui-dac: 200  (want 200: provision-das.sh Part B)
+   sui-das: 200  (want 200: provision-das.sh Part B)
+   containers: om2m-active mosquitto 
+   mqtt 1883: open
+   python deps: missing (install.sh adds them)
+   cluster id: 0xe49d6c5faf...
+   bridge: inactive
+   -> rpi2 :8282 from rpi1: 200
+   -> rpi3 :8282 from rpi1: 200
+   -> rpi4 :8282 from rpi1: 200
+   -> rpi5 :8282 from rpi1: 200
+== rpi2 (10.25.96.201)
+   SSH: ok (rpi2-iot)
+   OM2M: 200  (want 200)
+   acp_sui_dac: 200  (want 200: provision-das.sh Part B)
+   sui-dac: 200  (want 200: provision-das.sh Part B)
+   sui-das: 200  (want 200: provision-das.sh Part B)
+   containers: om2m-active mosquitto 
+   mqtt 1883: open
+   python deps: missing (install.sh adds them)
+   cluster id: 0xe49d6c5faf...
+   bridge: inactive
+   -> rpi1 :8282 from rpi2: 200
+   -> rpi3 :8282 from rpi2: 200
+   -> rpi4 :8282 from rpi2: 200
+   -> rpi5 :8282 from rpi2: 200
+== rpi3 (10.25.96.203)
+   SSH: ok (rpi3-iot)
+   OM2M: 200  (want 200)
+   acp_sui_dac: 200  (want 200: provision-das.sh Part B)
+   sui-dac: 200  (want 200: provision-das.sh Part B)
+   sui-das: 200  (want 200: provision-das.sh Part B)
+   containers: om2m-active mosquitto 
+   mqtt 1883: open
+   python deps: ok
+   cluster id: 0xe49d6c5faf...
+   bridge: active
+   -> rpi1 :8282 from rpi3: 200
+   -> rpi2 :8282 from rpi3: 200
+   -> rpi4 :8282 from rpi3: 200
+   -> rpi5 :8282 from rpi3: 200
+== rpi4 (10.25.96.204)
+   SSH: ok (rpi4-iot)
+   OM2M: 200  (want 200)
+   acp_sui_dac: 200  (want 200: provision-das.sh Part B)
+   sui-dac: 200  (want 200: provision-das.sh Part B)
+   sui-das: 200  (want 200: provision-das.sh Part B)
+   containers: om2m-active mosquitto 
+   mqtt 1883: open
+   python deps: missing (install.sh adds them)
+   cluster id: 0xe49d6c5faf...
+   bridge: inactive
+   -> rpi1 :8282 from rpi4: 200
+   -> rpi2 :8282 from rpi4: 200
+   -> rpi3 :8282 from rpi4: 200
+   -> rpi5 :8282 from rpi4: 200
+== rpi5 (10.25.96.205)
+   SSH: ok (rpi5-iot)
+   OM2M: 200  (want 200)
+   acp_sui_dac: 200  (want 200: provision-das.sh Part B)
+   sui-dac: 200  (want 200: provision-das.sh Part B)
+   sui-das: 200  (want 200: provision-das.sh Part B)
+   containers: om2m-active mosquitto 
+   mqtt 1883: open
+   python deps: missing (install.sh adds them)
+   cluster id: 0xe49d6c5faf...
+   bridge: inactive
+   -> rpi1 :8282 from rpi5: 200
+   -> rpi2 :8282 from rpi5: 200
+   -> rpi3 :8282 from rpi5: 200
+   -> rpi4 :8282 from rpi5: 200
