@@ -160,14 +160,33 @@ each step on the member's own Pi, with its own key and cap:
 
 ## 6. Open items
 
-1. **Faucet address balance is not spendable by the nodes.** Faucet v3 pays into the
-   recipient's address balance. The plugin's gas-coin picker and the 1.73 CLI need `Coin`
-   objects, and the gas watchdog compares `totalBalance` (coins + address balance) with its
-   threshold, so it can report a node funded while its spendable coins run out. Today:
-   rpi2 has 0.39 SUI in coins and 2 SUI it cannot spend; rpi4/rpi5 0.25 in coins and 1 SUI
-   unspendable. Real fix, not done: let the plugin pay gas from the address balance (newer
-   transaction format), or convert address balance to a coin with a node-signed
-   transaction after each payout; and have the watchdog alert on `coinBalance`.
+1. **Faucet address balance is not spendable by the nodes. FIXED in code (2026-11-10),
+   deploy pending.** Faucet v3 pays into the recipient's address balance; the plugin
+   could only pay gas with `Coin` objects, and the gas watchdog decided on `totalBalance`.
+   - *Plugin* (`sdk/GasPlan.java`, `SuiPtbEncoder.Expiration`, `SuiObjectFetcher.planGas`):
+     every transaction now picks its gas source. A coin covering the budget is used as before;
+     otherwise the SUI address balance pays, by leaving `GasData.payment` empty and setting
+     the expiration to `ValidDuring { min_epoch = current, max_epoch = current+1, chain =
+     genesis checkpoint digest, nonce = random u32 }` (sui-types `TransactionExpiration`
+     variant 2; enabled on testnet since protocol 108). Neither source covering the budget
+     still raises the FM5 "no gas coin" signal. `sui.gas.source=auto|coin|address` (default
+     auto) pins a source. No sweep transaction is needed.
+   - *Encoding check:* an independent encoder's bytes were accepted by testnet
+     `simulateTransaction`, and testnet rejected its negative controls (truncated nonce:
+     "unexpected end of input"; zero chain field: "chain ID … does not match network chain
+     ID"). The Java encoder reproduces those bytes exactly (`GasPlanTest` golden vector).
+     The simulator does **not** enforce the address-balance amount or the epoch window, so
+     only a live transaction proves the full path (deploy step below).
+   - *Watchdog:* reads `coinBalance` and `addressBalance` separately, logs both, and decides
+     on the spendable amount: coins + address balance unless `sui.gas.source=coin` in the
+     node's `sui.properties`. Dry run on rpi2: coins 0.3768, address balance 2.0000,
+     spendable 2.3768 SUI.
+   - *Tests:* 170/170 JUnit (13 new), Java 8 API check passes, 8/8 mutations caught.
+   - *Deploy* (after the ESP live tests): build, `04_cutover.sh prepare/redeploy/verify` on
+     all five, reinstall the watchdog, then confirm on rpi2 a transaction whose gas came from
+     the address balance (its log line "Paying gas from the SUI address balance").
+   - The container's 1.73 CLI is still coin-only; it is only used by legacy paths
+     (`ptb/PtbBuilder`), not by the native transaction builder.
 2. **The publisher's genesis trust cap is still valid** (bounded score writes, A12). The
    intended first governed action is revoking it:
    `scripts/v9/council.sh propose rpi1 trust-revoke-admin <TRUST_ADMIN_CAP>` then two

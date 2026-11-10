@@ -56,7 +56,7 @@ public final class SuiPluginActivator implements BundleActivator {
                     cfg.rpcUrl, cfg.packageId, cfg.packageOriginalId,
                     cfg.identityRegistryId, cfg.trustRegistryId,
                     cfg.policyRegistryId, cfg.auditTrailId,
-                    cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
+                    cfg.suiClockId, cfg.gasBudget, cfg.minTrust, cfg.gasSource);
                 NativePtbBuilder npb = new NativePtbBuilder(nc, Paths.get(cfg.keystorePath));
                 trustEngine = new TrustScoringEngine(
                     tcfg, npb, cfg.nodeAddress, cfg.trustAdminCapId,

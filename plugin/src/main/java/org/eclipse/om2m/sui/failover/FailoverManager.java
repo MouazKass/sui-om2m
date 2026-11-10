@@ -326,8 +326,8 @@ public final class FailoverManager implements MqttCallback {
         long n = gasFailureCount.incrementAndGet();
         lastGasFailureMs = System.currentTimeMillis();
         lastGasFailureDetail = detail;
-        LOG.error("FM5 GAS EXHAUSTED - claim could not be funded (need a SUI coin"
-                + " with balance >= gasBudget=" + cfg.gasBudget + "). This node cannot"
+        LOG.error("FM5 GAS EXHAUSTED - claim could not be funded (need a SUI coin or"
+                + " SUI address balance >= gasBudget=" + cfg.gasBudget + "). This node cannot"
                 + " participate in failover until its wallet is refunded."
                 + " failures=" + n + " detail=" + detail);
     }
@@ -434,7 +434,7 @@ public final class FailoverManager implements MqttCallback {
                             cfg.rpcUrl, cfg.packageId, cfg.packageOriginalId,
                             cfg.identityRegistryId, cfg.trustRegistryId,
                             cfg.policyRegistryId, cfg.auditTrailId,
-                            cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
+                            cfg.suiClockId, cfg.gasBudget, cfg.minTrust, cfg.gasSource);
                     n = new org.eclipse.om2m.sui.sdk.NativePtbBuilder(
                         nc, java.nio.file.Paths.get(cfg.keystorePath));
                     nativePtb = n;
@@ -689,7 +689,7 @@ public final class FailoverManager implements MqttCallback {
                                     cfg.rpcUrl, cfg.packageId, cfg.packageOriginalId,
                                     cfg.identityRegistryId, cfg.trustRegistryId,
                                     cfg.policyRegistryId, cfg.auditTrailId,
-                                    cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
+                                    cfg.suiClockId, cfg.gasBudget, cfg.minTrust, cfg.gasSource);
                             n = new org.eclipse.om2m.sui.sdk.NativePtbBuilder(
                                 nc, java.nio.file.Paths.get(cfg.keystorePath));
                             nativePtb = n;

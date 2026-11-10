@@ -44,6 +44,8 @@ public final class NativePtbBuilder {
         public final String suiClockId;
         public final long gasBudget;
         public final long minTrustRequired;
+        /** Where gas comes from (sui.gas.source); AUTO unless set. */
+        public final GasPlan.Mode gasSource;
 
         public Config(String rpcUrl, String packageHex,
                       String identityReg, String trustReg, String policyReg,
@@ -57,6 +59,15 @@ public final class NativePtbBuilder {
                       String identityReg, String trustReg, String policyReg,
                       String auditTrail, String suiClock,
                       long gasBudget, long minTrustRequired) {
+            this(rpcUrl, packageHex, typeOriginPackageHex, identityReg, trustReg, policyReg,
+                 auditTrail, suiClock, gasBudget, minTrustRequired, GasPlan.Mode.AUTO);
+        }
+
+        public Config(String rpcUrl, String packageHex, String typeOriginPackageHex,
+                      String identityReg, String trustReg, String policyReg,
+                      String auditTrail, String suiClock,
+                      long gasBudget, long minTrustRequired, GasPlan.Mode gasSource) {
+            this.gasSource = gasSource == null ? GasPlan.Mode.AUTO : gasSource;
             this.rpcUrl = rpcUrl;
             this.packageId = BcsEncoder.hexTo32(packageHex);
             this.typeOriginPackageId = BcsEncoder.hexTo32(
@@ -243,7 +254,8 @@ public final class NativePtbBuilder {
             SuiObjectFetcher.ObjectInfo token     = fetcher.getObject(tokenObjectId);
 
             long gasPrice = fetcher.getReferenceGasPrice();
-            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(requesterAddress, cfg.gasBudget);
+            GasPlan gas = fetcher.planGas(requesterAddress, cfg.gasBudget, cfg.gasSource);
+            logGasPlan(gas);
 
             byte[] requesterAddr = BcsEncoder.hexTo32(requesterAddress);
 
@@ -328,13 +340,13 @@ public final class NativePtbBuilder {
             LOG.info("  auditTrail shared ver=" + auditTr.version);
             LOG.info("  clock shared ver=" + clock.version);
             LOG.info("  token owned ver=" + token.version + " digest_len=" + (token.digestRaw32 == null ? -1 : token.digestRaw32.length));
-            LOG.info("  gasCoin id_len=" + gasCoin.objectId.length + " ver=" + gasCoin.version + " digest_len=" + gasCoin.digest.length);
+            LOG.info("  gas=" + gas.describe());
             LOG.info("  sender/requester len=" + requesterAddr.length
                      + " (not a Move arg since v8 A3/A4; derived from tx sender)");
             LOG.info("  gasPrice=" + gasPrice + " gasBudget=" + cfg.gasBudget);
             byte[] txBytes = enc.encodeTransactionData(
                     requesterAddr,
-                    Collections.singletonList(gasCoin),
+                    gas,
                     gasPrice,
                     cfg.gasBudget);
 
@@ -376,6 +388,13 @@ public final class NativePtbBuilder {
      * build on an outdated gas-coin version. Nothing was executed and no gas was
      * charged; rebuilding with fresh reads fixes it.
      */
+    /** Address-balance gas is the new path; make every use visible in the log. */
+    private static void logGasPlan(GasPlan gas) {
+        if (gas.source == GasPlan.Source.ADDRESS_BALANCE) {
+            LOG.info("Paying gas from the SUI address balance: " + gas.describe());
+        }
+    }
+
     static boolean isStaleObjectVersion(String error) {
         if (error == null) return false;
         return error.contains("needs to be rebuilt")
@@ -430,7 +449,8 @@ public final class NativePtbBuilder {
             SuiObjectFetcher.ObjectInfo trustReg = fetcher.getObject(cfg.trustRegistryId);
             SuiObjectFetcher.ObjectInfo clock    = fetcher.getObject(cfg.suiClockId);
             long gasPrice = fetcher.getReferenceGasPrice();
-            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(requesterAddress, cfg.gasBudget);
+            GasPlan gas = fetcher.planGas(requesterAddress, cfg.gasBudget, cfg.gasSource);
+            logGasPlan(gas);
 
             byte[] requesterAddr = BcsEncoder.hexTo32(requesterAddress);
 
@@ -454,7 +474,7 @@ public final class NativePtbBuilder {
 
             byte[] txBytes = enc.encodeTransactionData(
                     requesterAddr,
-                    java.util.Collections.singletonList(gasCoin),
+                    gas,
                     gasPrice,
                     cfg.gasBudget);
 
@@ -505,7 +525,8 @@ public final class NativePtbBuilder {
             SuiObjectFetcher.ObjectInfo cluster = fetcher.getObject(clusterId);
             SuiObjectFetcher.ObjectInfo clock   = fetcher.getObject(cfg.suiClockId);
             long gasPrice = fetcher.getReferenceGasPrice();
-            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(requesterAddress, cfg.gasBudget);
+            GasPlan gas = fetcher.planGas(requesterAddress, cfg.gasBudget, cfg.gasSource);
+            logGasPlan(gas);
 
             SuiPtbEncoder enc = new SuiPtbEncoder();
             int iCluster = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
@@ -523,7 +544,7 @@ public final class NativePtbBuilder {
 
             byte[] txBytes = enc.encodeTransactionData(
                     BcsEncoder.hexTo32(requesterAddress),
-                    java.util.Collections.singletonList(gasCoin),
+                    gas,
                     gasPrice,
                     cfg.gasBudget);
 
@@ -560,7 +581,8 @@ public final class NativePtbBuilder {
 
             SuiObjectFetcher.ObjectInfo cluster = fetcher.getObject(clusterId);
             long gasPrice = fetcher.getReferenceGasPrice();
-            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(requesterAddress, cfg.gasBudget);
+            GasPlan gas = fetcher.planGas(requesterAddress, cfg.gasBudget, cfg.gasSource);
+            logGasPlan(gas);
 
             byte[] requesterAddr = BcsEncoder.hexTo32(requesterAddress);
             SuiPtbEncoder enc = new SuiPtbEncoder();
@@ -583,7 +605,7 @@ public final class NativePtbBuilder {
 
             byte[] txBytes = enc.encodeTransactionData(
                 requesterAddr,
-                java.util.Collections.singletonList(gasCoin),
+                gas,
                 gasPrice, cfg.gasBudget);
 
             String txB64  = java.util.Base64.getEncoder().encodeToString(txBytes);
@@ -805,8 +827,8 @@ public final class NativePtbBuilder {
             SuiObjectFetcher.ObjectInfo clock    = fetcher.getObject(cfg.suiClockId);
 
             long gasPrice = fetcher.getReferenceGasPrice();
-            SuiPtbEncoder.ObjectRef gasCoin =
-                    fetcher.pickGasCoin(submitterAddr, cfg.gasBudget);
+            GasPlan gas = fetcher.planGas(submitterAddr, cfg.gasBudget, cfg.gasSource);
+            logGasPlan(gas);
 
             byte[] submitterAddrBytes = BcsEncoder.hexTo32(submitterAddr);
             String fn = increase ? "increase_guarded" : "decrease_guarded";
@@ -835,7 +857,7 @@ public final class NativePtbBuilder {
 
             byte[] txBytes = enc.encodeTransactionData(
                     submitterAddrBytes,
-                    Collections.singletonList(gasCoin),
+                    gas,
                     gasPrice,
                     cfg.gasBudget);
 
@@ -891,7 +913,8 @@ public final class NativePtbBuilder {
             SuiObjectFetcher.ObjectInfo auditTr  = fetcher.getObject(cfg.auditTrailId);
             SuiObjectFetcher.ObjectInfo clock    = fetcher.getObject(cfg.suiClockId);
             long gasPrice = fetcher.getReferenceGasPrice();
-            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(nodeAddr, cfg.gasBudget);
+            GasPlan gas = fetcher.planGas(nodeAddr, cfg.gasBudget, cfg.gasSource);
+            logGasPlan(gas);
 
             SuiPtbEncoder enc = new SuiPtbEncoder();
             int iIdReg = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
@@ -926,7 +949,7 @@ public final class NativePtbBuilder {
                                   SuiPtbEncoder.Arg.input(iClock))));
 
             final byte[] txBytes = enc.encodeTransactionData(BcsEncoder.hexTo32(nodeAddr),
-                    Collections.singletonList(gasCoin), gasPrice, cfg.gasBudget);
+                    gas, gasPrice, cfg.gasBudget);
             String txB64 = java.util.Base64.getEncoder().encodeToString(txBytes);
             final Ed25519Signer.Keypair signer = kp;
             return precheckThenSubmit(true, txB64, new TxPath() {

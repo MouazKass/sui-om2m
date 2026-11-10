@@ -36,6 +36,8 @@ public final class SuiConfig {
     public final String suiClockId;      // always 0x6 on Sui
     public final String nodeAddress;     // this CSE's Sui address
     public final long   gasBudget;       // mist
+    /** sui.gas.source: auto (coin, else address balance) | coin | address. */
+    public final org.eclipse.om2m.sui.sdk.GasPlan.Mode gasSource;
     public final String mqttBrokerUrl;   // tcp://10.25.96.200:1883
     public final String trustAdminCapId; // per-node AdminCap, for trust engine writes
     public final long   heartbeatPeriodMs;
@@ -82,6 +84,7 @@ public final class SuiConfig {
         this.suiClockId          = p.getProperty("sui.clock.id", "0x6");
         this.nodeAddress         = req(p, "sui.node.address");
         this.gasBudget           = Long.parseLong(p.getProperty("sui.gas.budget", "20000000"));
+        this.gasSource           = org.eclipse.om2m.sui.sdk.GasPlan.Mode.parse(p.getProperty("sui.gas.source", "auto"));
         this.mqttBrokerUrl       = req(p, "mqtt.broker.url");
         this.trustAdminCapId     = p.getProperty("trust.admin.cap.id", "").trim();
         this.heartbeatPeriodMs   = Long.parseLong(p.getProperty("failover.heartbeat.period.ms",  "5000"));

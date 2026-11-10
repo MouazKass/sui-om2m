@@ -50,6 +50,13 @@ public final class SuiObjectFetcher {
 
     static final String Q_RGP = "{ epoch { epochId referenceGasPrice } }";
 
+    /** Coin and address balance read separately (the faucet pays the latter). */
+    static final String Q_SUI_BALANCE =
+        "query($owner:SuiAddress!){ address(address:$owner){"
+        + " balance(coinType:\"0x2::sui::SUI\"){ coinBalance addressBalance totalBalance } } }";
+
+    static final String Q_CHAIN_ID = "{ chainIdentifier }";
+
     static final String Q_DYNAMIC_FIELD =
         "query($id:SuiAddress!,$type:String!,$bcs:Base64!){ object(address:$id){ address"
         + " dynamicField(name:{type:$type, bcs:$bcs}){"
@@ -228,5 +235,96 @@ public final class SuiObjectFetcher {
             throw new IOException("getReferenceGasPrice: no epoch data");
         }
         return SuiGraphQlClient.requireLong(epoch.path("referenceGasPrice"), "referenceGasPrice");
+    }
+
+    // ---------------------------------------------------------------
+    //  SUI balances and gas planning (address-balance gas)
+    // ---------------------------------------------------------------
+    public static final class SuiBalance {
+        public final BigInteger coin;
+        public final BigInteger address;
+        public final BigInteger total;
+        SuiBalance(BigInteger coin, BigInteger address, BigInteger total) {
+            this.coin = coin; this.address = address; this.total = total;
+        }
+    }
+
+    public SuiBalance getSuiBalance(String owner0x) throws IOException {
+        ObjectNode v = SuiGraphQlClient.vars();
+        v.put("owner", owner0x);
+        return parseSuiBalance(gql.execute(Q_SUI_BALANCE, v), owner0x);
+    }
+
+    /** Pure parser for {@link #Q_SUI_BALANCE}. A missing address means a never-funded account (all zero). */
+    static SuiBalance parseSuiBalance(JsonNode data, String owner0x) throws IOException {
+        JsonNode addr = data.path("address");
+        if (addr.isMissingNode() || addr.isNull()) {
+            return new SuiBalance(BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO);
+        }
+        JsonNode b = addr.path("balance");
+        if (b.isMissingNode() || b.isNull()) {
+            return new SuiBalance(BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO);
+        }
+        return new SuiBalance(big(b.path("coinBalance"), "coinBalance", owner0x),
+                              big(b.path("addressBalance"), "addressBalance", owner0x),
+                              big(b.path("totalBalance"), "totalBalance", owner0x));
+    }
+
+    private static BigInteger big(JsonNode n, String field, String owner0x) throws IOException {
+        if (n.isMissingNode() || n.isNull()) return BigInteger.ZERO;
+        try {
+            return new BigInteger(n.asText().trim());
+        } catch (NumberFormatException e) {
+            throw new IOException("balance: non-numeric " + field + " for " + owner0x + ": " + n);
+        }
+    }
+
+    public long getEpochId() throws IOException {
+        JsonNode epoch = gql.execute(Q_RGP, null).path("epoch");
+        if (epoch.isMissingNode() || epoch.isNull()) throw new IOException("getEpochId: no epoch data");
+        return SuiGraphQlClient.requireLong(epoch.path("epochId"), "epochId");
+    }
+
+    private volatile byte[] chainIdCache;
+
+    /** Genesis checkpoint digest (32 bytes); constant for a network, cached. */
+    public byte[] getChainIdentifier() throws IOException {
+        byte[] c = chainIdCache;
+        if (c != null) return c;
+        c = parseChainIdentifier(gql.execute(Q_CHAIN_ID, null));
+        chainIdCache = c;
+        return c;
+    }
+
+    static byte[] parseChainIdentifier(JsonNode data) throws IOException {
+        String b58 = data.path("chainIdentifier").asText("");
+        if (b58.isEmpty()) throw new IOException("chainIdentifier missing");
+        byte[] d = BcsEncoder.base58Decode(b58);
+        if (d.length != 32) throw new IOException("chainIdentifier is not a 32-byte digest: " + b58);
+        return d;
+    }
+
+    private static final java.security.SecureRandom NONCES = new java.security.SecureRandom();
+
+    /**
+     * Choose how {@code sender0x} pays for one transaction (see {@link GasPlan}).
+     * Every call draws a fresh random u32 nonce, so a rebuild after a refusal is
+     * a distinct transaction rather than a replay.
+     */
+    public GasPlan planGas(final String sender0x, long budget, GasPlan.Mode mode) throws IOException {
+        long nonce = NONCES.nextInt() & 0xFFFFFFFFL;
+        return GasPlan.choose(new GasPlan.Chain() {
+            @Override public SuiPtbEncoder.ObjectRef coinCovering(long b) throws IOException {
+                try {
+                    return pickGasCoin(sender0x, b);
+                } catch (IOException e) {
+                    if (e.getMessage() != null && e.getMessage().startsWith("no gas coin")) return null;
+                    throw e;
+                }
+            }
+            @Override public BigInteger addressBalance() throws IOException { return getSuiBalance(sender0x).address; }
+            @Override public long epoch() throws IOException { return getEpochId(); }
+            @Override public byte[] chainId() throws IOException { return getChainIdentifier(); }
+        }, budget, mode, nonce);
     }
 }

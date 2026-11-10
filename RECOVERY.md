@@ -108,11 +108,14 @@ so. Run `scripts/v8/04_cutover.sh verify` afterwards to check the whole cluster.
   `[]` makes the CLI refuse the whole wallet ("expected a map"). Fixed in `onboard_node.sh`.
 - **`/tmp/current-parent-poa` must be a directory** (legacy v7 mount). If a deploy fails
   with "not a directory", remove the empty file; `04_cutover.sh` now creates a directory.
-- **Faucet top-ups are not spendable gas.** The faucet pays into the *address balance*;
-  the plugin and the container CLI pay gas only with `Coin` objects. A new node funded only
-  by the faucet cannot send a transaction. Check with GraphQL
-  `address(address: "0x…") { balance(coinType: "0x2::sui::SUI") { coinBalance addressBalance } }`;
-  give the node a coin from the publisher (`sui client ptb --split-coins gas "[250000000]" --assign c --transfer-objects "[c.0]" @<addr>`).
+- **Faucet top-ups and gas (address balance).** The faucet pays into the *address balance*,
+  not a coin. Since the GasPlan bundle the plugin pays gas from a coin when one covers
+  `sui.gas.budget`, otherwise from the address balance (`sui.gas.source=auto`; the log says
+  "Paying gas from the SUI address balance"). Check both with GraphQL
+  `address(address: "0x…") { balance(coinType: "0x2::sui::SUI") { coinBalance addressBalance } }`
+  or `sudo sui-gas-watchdog --dry-run`, which prints coins, address balance and spendable.
+  An older bundle (before GasPlan) cannot spend the address balance: give the node a coin
+  from the publisher (`sui client ptb --split-coins gas "[250000000]" --assign c --transfer-objects "[c.0]" @<addr>`).
 - **After governance (v9 council armed) the publisher cannot admit a node.**
   `scripts/onboard_onchain.sh` prints the council proposals instead; run them with
   `scripts/v9/council.sh propose|approve|execute` (3 of 5 members must sign).
@@ -125,8 +128,8 @@ upgrade on a Pi: copy `deploy/v8/host/{gas-watchdog.py,install-gas-watchdog.sh,s
 into one directory and run `sudo ./install-gas-watchdog.sh` (it installs `python3-argon2`,
 self-tests, and enables the timer).
 
-- **What it does:** reads only `sui.node.address` from `~/sui-runtime-config/sui.properties`
-  (no key), checks the balance over GraphQL, and below `THRESHOLD_SUI` solves the faucet's
+- **What it does:** reads only `sui.node.address` (and `sui.gas.source`) from `~/sui-runtime-config/sui.properties`
+  (no key), checks coin and address balances over GraphQL (decides on the spendable sum), and below `THRESHOLD_SUI` solves the faucet's
   v3 proof of work ([spec](https://faucet.sui.io/pow-spec/); Argon2d, about 22 s at the
   Pi's ~134 hashes/s) and requests one payout. Only the recipient address goes out.
 - **Guards:** one payout request per 6 h, 3 POSTs per rolling 24 h, 1 h backoff after

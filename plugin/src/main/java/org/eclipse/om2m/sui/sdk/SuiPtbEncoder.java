@@ -190,6 +190,28 @@ public final class SuiPtbEncoder {
                                         List<ObjectRef> gasPayment,
                                         long gasPrice,
                                         long gasBudget) {
+        return encodeTransactionData(sender, gasPayment, gasPrice, gasBudget, Expiration.NONE);
+    }
+
+    /** TransactionData::V1 paid as described by a {@link GasPlan}. */
+    public byte[] encodeTransactionData(byte[] sender, GasPlan gas, long gasPrice, long gasBudget) {
+        return encodeTransactionData(sender, gas.payment, gasPrice, gasBudget, gas.expiration);
+    }
+
+    /**
+     * TransactionData::V1 with an explicit expiration. An empty {@code gasPayment}
+     * together with {@link Expiration#validDuring} pays gas from the sender's SUI
+     * address balance (Sui address balances; enabled on testnet since protocol 108).
+     */
+    public byte[] encodeTransactionData(byte[] sender,
+                                        List<ObjectRef> gasPayment,
+                                        long gasPrice,
+                                        long gasBudget,
+                                        Expiration expiration) {
+        if (gasPayment.isEmpty() && !expiration.isValidDuring()) {
+            throw new IllegalArgumentException(
+                "empty gas payment (address-balance gas) requires a ValidDuring expiration");
+        }
         BcsEncoder e = new BcsEncoder();
         e.writeUleb128(0);
         e.writeRawBytes(encodeTransactionKind());
@@ -203,8 +225,64 @@ public final class SuiPtbEncoder {
         e.writeAddress(sender);
         e.writeU64(gasPrice);
         e.writeU64(gasBudget);
-        e.writeUleb128(0);
+        expiration.encode(e);
         return e.toBytes();
+    }
+
+    /**
+     * TransactionExpiration (sui-types transaction.rs, testnet-v1.83.1):
+     * variant 0 None, 1 Epoch(u64), 2 ValidDuring { min_epoch: Option&lt;u64&gt;,
+     * max_epoch: Option&lt;u64&gt;, min_timestamp: Option&lt;u64&gt;,
+     * max_timestamp: Option&lt;u64&gt;, chain: ChainIdentifier, nonce: u32 }.
+     * ChainIdentifier is a CheckpointDigest, BCS-encoded like every digest:
+     * ULEB128(32) + 32 bytes (the genesis checkpoint digest).
+     */
+    public static final class Expiration {
+        public static final Expiration NONE = new Expiration(false, 0, 0, null, 0);
+
+        final boolean validDuring;
+        public final long minEpoch;
+        public final long maxEpoch;
+        final byte[] chain;
+        public final long nonce;   // u32
+
+        private Expiration(boolean validDuring, long minEpoch, long maxEpoch, byte[] chain, long nonce) {
+            this.validDuring = validDuring;
+            this.minEpoch = minEpoch;
+            this.maxEpoch = maxEpoch;
+            this.chain = chain;
+            this.nonce = nonce;
+        }
+
+        /**
+         * Address-balance gas requires both epoch bounds, with
+         * {@code maxEpoch - minEpoch} of 0 or 1.
+         */
+        public static Expiration validDuring(long minEpoch, long maxEpoch, byte[] chainId32, long nonce) {
+            if (chainId32 == null || chainId32.length != 32) {
+                throw new IllegalArgumentException("chain identifier must be 32 bytes");
+            }
+            if (minEpoch < 0 || maxEpoch < minEpoch || maxEpoch - minEpoch > 1) {
+                throw new IllegalArgumentException(
+                    "ValidDuring needs minEpoch <= maxEpoch <= minEpoch + 1, got "
+                    + minEpoch + ".." + maxEpoch);
+            }
+            if (nonce < 0 || nonce > 0xFFFFFFFFL) throw new IllegalArgumentException("nonce is a u32");
+            return new Expiration(true, minEpoch, maxEpoch, chainId32.clone(), nonce);
+        }
+
+        public boolean isValidDuring() { return validDuring; }
+
+        void encode(BcsEncoder e) {
+            if (!validDuring) { e.writeUleb128(0); return; }
+            e.writeUleb128(2);
+            e.writeU8(1); e.writeU64(minEpoch);   // Some(min_epoch)
+            e.writeU8(1); e.writeU64(maxEpoch);   // Some(max_epoch)
+            e.writeU8(0);                          // min_timestamp: None
+            e.writeU8(0);                          // max_timestamp: None
+            e.writeBytes(chain);                   // ChainIdentifier
+            e.writeU32(nonce);
+        }
     }
 
     /** TransactionKind::ProgrammableTransaction body only (for devInspect). */

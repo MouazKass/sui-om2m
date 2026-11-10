@@ -137,6 +137,10 @@ def self_test():
             raise AssertionError("threshold vector failed for %d" % d)
     if norm_addr("0x2") != "0x" + "0" * 63 + "2":
         raise AssertionError("address normalization")
+    # Spendable balance: the rpi2 case (0.38 SUI coins + 2.0 SUI faucet address balance).
+    for src, want in (("auto", 2377761145), ("coin", 377761145), ("address", 2000000000)):
+        if spendable_mist(377761145, 2000000000, src) != want:
+            raise AssertionError("spendable balance for sui.gas.source=%s" % src)
     return True
 
 
@@ -163,11 +167,49 @@ def gql(cfg, query):
     return body["data"]
 
 
-def balance_mist(cfg, addr):
-    q = '{ address(address: "%s") { balance(coinType: "0x2::sui::SUI") { totalBalance } } }' % addr
+def balances_mist(cfg, addr):
+    """(coin, address) SUI balances in MIST, read separately.
+
+    The faucet pays into the address balance, which coin-only gas selection
+    cannot spend; deciding on totalBalance once reported a node as funded while
+    its coins ran dry (2026-11-10)."""
+    q = ('{ address(address: "%s") { balance(coinType: "0x2::sui::SUI") '
+         '{ coinBalance addressBalance } } }' % addr)
     d = gql(cfg, q)
-    bal = ((d.get("address") or {}).get("balance") or {}).get("totalBalance")
-    return int(bal or 0)
+    b = (d.get("address") or {}).get("balance") or {}
+    return int(b.get("coinBalance") or 0), int(b.get("addressBalance") or 0)
+
+
+def plugin_gas_source(path):
+    """sui.gas.source from the node's plugin config: auto (default) | coin | address."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("sui.gas.source") and "=" in line:
+                    return line.split("=", 1)[1].strip().lower() or "auto"
+    except OSError:
+        pass
+    return "auto"
+
+
+def spendable_mist(coin, address, gas_source):
+    """What the plugin can actually pay gas with. Since the GasPlan bundle
+    (2026-11-10) it pays from the address balance unless pinned to coins."""
+    if gas_source == "coin":
+        return coin
+    if gas_source in ("address", "address-balance"):
+        return address
+    return coin + address
+
+
+def describe_balance(cfg, addr):
+    coin, addrbal = balances_mist(cfg, addr)
+    source = plugin_gas_source(cfg["CONFIG"])
+    bal = spendable_mist(coin, addrbal, source)
+    text = ("coins %.4f SUI, address balance %.4f SUI, spendable %.4f SUI (sui.gas.source=%s)"
+            % (coin / 1e9, addrbal / 1e9, bal / 1e9, source))
+    return bal, text
 
 
 def tx_status(cfg, digest):
@@ -430,8 +472,8 @@ def main():
         log("an earlier submission is still unresolved; not requesting another payout")
         return 0
 
-    bal = balance_mist(cfg, addr)
-    log("balance %s = %.4f SUI, threshold %.4f SUI" % (addr, bal / 1e9, floor))
+    bal, text = describe_balance(cfg, addr)
+    log("balance %s: %s, threshold %.4f SUI" % (addr, text, floor))
     if bal >= floor_mist:
         log("above threshold; nothing to do")
         return 0
@@ -465,7 +507,7 @@ def main():
             break
     if outcome == "success":
         time.sleep(3)
-        log("balance now %.4f SUI" % (balance_mist(cfg, addr) / 1e9))
+        log("balance now: %s" % describe_balance(cfg, addr)[1])
     return 0 if outcome in (None, "success", "uncertain", "payout_status_unknown", "already_used") else 2
 
 

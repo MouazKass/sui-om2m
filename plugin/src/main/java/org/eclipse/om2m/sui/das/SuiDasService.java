@@ -100,7 +100,8 @@ public final class SuiDasService implements InterworkingService {
                             cfg.auditTrailId,
                             cfg.suiClockId,
                             cfg.gasBudget,
-                            cfg.minTrust);
+                            cfg.minTrust,
+                            cfg.gasSource);
                     n = new NativePtbBuilder(nc, java.nio.file.Paths.get(cfg.keystorePath));
                     n.setPrecheckEnabled(cfg.precheckEnabled);
                     nativePtb = n;

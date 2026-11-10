@@ -27,6 +27,9 @@ sui.node.address=0xPLACEHOLDER_THIS_NODE
 
 # Gas budget per PTB submission, in MIST (1 SUI = 1e9 MIST).
 sui.gas.budget=20000000
+# Gas source: auto = a coin if one covers the budget, else the SUI address balance
+# (where the testnet faucet pays); coin | address pin one source.
+sui.gas.source=auto
 
 # --- MQTT (matches the existing testbed broker) ---
 mqtt.broker.url=tcp://10.25.96.200:1883
