@@ -1,0 +1,70 @@
+# Shared test vectors for the broker selector.
+# Run by BOTH sim/firmware_hostcheck/cluster_test.cpp (firmware cluster.h) and
+# tests/test_selector.py (sim/esp32_sim.py Selector), so the firmware and the
+# simulator implement the same rules. One command per line:
+#   params <backoffBase> <backoffMax> <homeProbe> <homeStable>
+#   seeds <label=host:port,...>        home <label>
+#   next <now> -> <label|none>         fail <label> <now>     ok <label> <now>
+#   probe <ok:0|1> <now>               return <now> -> <0|1>
+#   learn <prefix|-> <payload> -> <accepted>      has <label> -> <0|1>
+#   alive <label> -> <0|1>             wait <now> -> <ms>
+#   session <a> <b> -> <-1|0|1>        penalize <label> <now> <ms>
+params 1000 60000 2000 10000
+seeds rpi1=10.25.96.200:1883,rpi2=10.25.96.201:1883,rpi3=10.25.96.203:1883,rpi4=10.25.96.204:1883,rpi5=10.25.96.205:1883
+home rpi2
+# home first
+next 0 -> rpi2
+ok rpi2 0
+# home dies: skip it, take the next in list order
+fail rpi2 100
+next 100 -> rpi3
+fail rpi3 150
+next 150 -> rpi4
+ok rpi4 200
+# backoff doubles and is bounded
+fail rpi2 1200
+fail rpi2 3300
+wait 3300 -> 0
+# hysteresis: probes must succeed for homeStable
+probe 1 4000
+return 6000 -> 0
+probe 1 6000
+probe 0 8000
+return 14000 -> 0
+probe 1 10000
+probe 1 12000
+return 19000 -> 0
+return 20000 -> 1
+ok rpi2 20100
+return 20200 -> 0
+# learning: new node accepted, outsider rejected, malformed ignored
+learn 10.25.96. v1;1700000000;rpi1=10.25.96.200:1883:1,rpi6=10.25.96.206:1883:1,evil=203.0.113.9:1883:1 -> 2
+has rpi6 -> 1
+has evil -> 0
+learn - garbage -> -1
+# a learned node missing from a newer list is marked down; seeds are never dropped
+learn 10.25.96. v1;1700000100;rpi1=10.25.96.200:1883:1,rpi2=10.25.96.201:1883:0 -> 2
+alive rpi6 -> 0
+has rpi3 -> 1
+alive rpi2 -> 0
+# down brokers are tried only after every live one
+fail rpi1 30000
+next 30000 -> rpi3
+# a broker that swallows readings is kept out beyond normal backoff, and the
+# sensor does not return home while home is penalized
+learn 10.25.96. v1;1700000200;rpi1=10.25.96.200:1883:1,rpi2=10.25.96.201:1883:1 -> 2
+ok rpi2 40000
+penalize rpi2 40000 15000
+next 40100 -> rpi3
+ok rpi3 40200
+probe 1 41000
+return 52000 -> 0
+probe 1 55000
+return 59000 -> 0
+probe 1 60000
+return 70000 -> 1
+# sessions order connections across brokers
+session 3.2 3.10 -> -1
+session 4.1 3.99 -> 1
+session 3.2 3.2 -> 0
+session junk 1.1 -> -1

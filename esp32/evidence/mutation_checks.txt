@@ -1,0 +1,18 @@
+CAUGHT  firmware: resend buffer disabled
+          [FAIL] no reading lost across failover and return (resend buffer)  82 distinct of 85 taken, 0 duplicate deliveries for the bridge to drop
+CAUGHT  firmware: hysteresis window ignored
+        FAIL line 36: return 19000 -> 0  (got 1)
+        FAIL line 63: return 59000 -> 0  (got 1)
+CAUGHT  firmware: no-ack failover disabled
+          [FAIL] failed over when the home bridge stopped acknowledging  after 0 ms
+CAUGHT  firmware: learned-host allow prefix disabled
+        FAIL line 41: learn 10.25.96. v1;1700000000;rpi1=10.25.96.200:1883:1,rpi6=10.25.96.206:1883:1,evil=203.0.113.9:1883:1 -> 2  (got 3)
+        FAIL line 43: has evil -> 0  (got 1)
+CAUGHT  bridge: session order check disabled (stale Last Will)
+          [FAIL] the Last Will fired late by rpi3's broker was ignored  rpi3 bridge status_stale_ignored=None, stored status=offline session 1.2
+CAUGHT  bridge: fail-closed on missing DAC wiring removed
+        FAIL] created an unprotected AE
+CAUGHT  bridge: deterministic reading names (CSE 409 dedupe) removed
+          [FAIL] every stored reading is named e<epoch>-s<seq> (the CSE-side exactly-once key)  0/34 named, e.g. ['cin_381195933', 'cin_381195934']
+          [FAIL] no gaps after recovery  seq 6..38, stored=34, creation order starts ['cin_381195933', 'cin_381195934', 'cin_381195935']
+          [FAIL] firmware payloads accepted and stored  run the host build first (see README)

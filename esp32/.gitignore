@@ -1,0 +1,4 @@
+sim_runtime/
+__pycache__/
+*.pyc
+pi/members.conf

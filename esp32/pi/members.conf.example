@@ -1,0 +1,15 @@
+# members.conf - the cluster as the sensors and bridges see it.
+# Installed at /etc/om2m-ipe-bridge/members.conf on EVERY node (same file).
+# Each bridge re-reads it when it changes and republishes it, retained, as
+# om2m/cluster/brokers, so a node added here is learned by every sensor
+# without a reflash.
+#
+# label  host           mqtt  cse-url                    sui-address (optional: fallback
+#                                                         when the parent has no PoA)
+rpi1     10.25.96.200   1883  http://10.25.96.200:8282   0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9
+rpi2     10.25.96.201   1883  http://10.25.96.201:8282   0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+rpi3     10.25.96.203   1883  http://10.25.96.203:8282   0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+# rpi4/rpi5: pending onboarding (deploy_to_pis.sh members regenerates this file
+# from deploy/inventory.tsv, the testbed node list)
+rpi4     10.25.96.204   1883  http://10.25.96.204:8282
+rpi5     10.25.96.205   1883  http://10.25.96.205:8282

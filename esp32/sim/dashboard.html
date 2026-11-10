@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testbed Simulator</title>
+<style>
+  :root {
+    --bg: #f4f5f2; --panel: #ffffff; --ink: #1d2320; --muted: #6b736e; --line: #dfe3dd;
+    --ok: #1f8a4c; --ok-bg: #e3f4ea; --bad: #c0392b; --bad-bg: #fbe7e4; --warn: #a86b00; --warn-bg: #fbf0d9;
+    --accent: #2457c5; --accent-bg: #e6edfb; --chip: #eef0ec;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121614; --panel: #1b201d; --ink: #e6ebe7; --muted: #8f9892; --line: #2b322e;
+      --ok: #4cc27d; --ok-bg: #173323; --bad: #ef6b5b; --bad-bg: #3a1c18; --warn: #e0a83a; --warn-bg: #352a12;
+      --accent: #7ea2ff; --accent-bg: #1c2742; --chip: #252b27; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line);
+           background: var(--panel); position: sticky; top: 0; z-index: 2; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  .badge { font: 600 11px var(--mono); padding: 3px 8px; border-radius: 4px; background: var(--warn-bg); color: var(--warn); }
+  header .sub { color: var(--muted); font-size: 12.5px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 16px 20px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  .nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; align-content: start; }
+  @media (max-width: 900px) { .nodes { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .node-h { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .node-h b { font-size: 15px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .mono { font-family: var(--mono); font-size: 11.5px; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; font: 600 11px var(--mono); padding: 2px 7px; border-radius: 99px; }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .up { color: var(--ok); background: var(--ok-bg); } .down { color: var(--bad); background: var(--bad-bg); }
+  .idle { color: var(--muted); background: var(--chip); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  button { font: 500 12px system-ui, sans-serif; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+           padding: 5px 9px; border-radius: 6px; cursor: pointer; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent-bg); border-color: transparent; color: var(--accent); }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  .sec { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
+  .sec h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); font-weight: 600; }
+  .sensor { border: 1px solid var(--line); border-radius: 7px; padding: 9px; margin-top: 8px; }
+  .sensor-h { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .vals { display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; }
+  .val b { font-size: 18px; font-variant-numeric: tabular-nums; } .val span { color: var(--muted); font-size: 11px; display: block; }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat { background: var(--chip); border-radius: 5px; padding: 2px 7px; font: 11px var(--mono); }
+  .stat.bad { background: var(--bad-bg); color: var(--bad); }
+  .log { font: 11.5px/1.5 var(--mono); max-height: 420px; overflow: auto; }
+  .log div { padding: 3px 0; border-bottom: 1px solid var(--line); word-break: break-word; }
+  .k { display: inline-block; min-width: 52px; font-weight: 600; }
+  .k-grant { color: var(--ok); } .k-deny, .k-warn { color: var(--bad); } .k-inject { color: var(--warn); }
+  .k-chain, .k-das { color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font: 11.5px var(--mono); }
+  td, th { text-align: left; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .help { font-size: 12.5px; color: var(--muted); }
+  .help b { color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sui–OM2M testbed</h1><span class="badge">SIMULATED</span>
+  <span class="sub">5 Pi nodes · OM2M emulator · real IPE bridge (writes to the parent) · cluster-aware ESP32s · chain simulator (not Sui)</span>
+</header>
+<main>
+  <section>
+    <div class="nodes" id="nodes"></div>
+    <div class="card help" style="margin-top:12px">
+      <b>Try this:</b> ① <b>Read via DAS</b> on a sensor (denied: not protected yet) → ② <b>Protect</b> (policy + READ token + mapping, node restarts to load it)
+      → ③ <b>Read via DAS</b> again (GRANT + reading) → ④ <b>Delete via DAS</b> (DENY E_OP_NOT_ALLOWED) → ⑤ <b>Trust → 30</b> on that node, read again (DENY E_TRUST_TOO_LOW).
+      Then break things: <b>Power off</b> an ESP32 (status turns offline), <b>Stop OM2M</b> for a few seconds then <b>Start</b> (no readings lost),
+      <b>Restart OM2M</b> (role-switch wipe, containers re-created with the new acp_admin), inject bad messages (rejected counters rise).
+    </div>
+  </section>
+  <aside class="side">
+    <div class="card"><div class="sec" style="margin:0;padding:0;border:0"><h4>Chain (simulated v7)</h4></div><div id="chain"></div></div>
+    <div class="card"><div class="sec" style="margin:0;padding:0;border:0"><h4>Event log</h4></div><div class="log" id="events"></div></div>
+  </aside>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "";
+async function act(action, extra) {
+  try { await fetch("/api/action", {method: "POST", headers: {"Content-Type": "application/json"},
+                                     body: JSON.stringify({action, ...extra})}); } catch (e) {}
+  setTimeout(refresh, 300);
+}
+window.act = act;
+
+function sensorCard(dev, esp, parent) {
+  const s = esp.data || {stored: 0};
+  const L = s.latest || {};
+  const st = s.status === "online" ? "up" : s.status === "offline" ? "down" : "idle";
+  const vals = [];
+  if (L.temperature !== undefined) vals.push(`<div class="val"><b>${L.temperature}°C</b><span>temperature</span></div>`);
+  if (L.humidity !== undefined) vals.push(`<div class="val"><b>${L.humidity}%</b><span>humidity</span></div>`);
+  if (L.light_pct !== undefined) vals.push(`<div class="val"><b>${L.light_pct}%</b><span>light</span></div>`);
+  return `<div class="sensor">
+    <div class="sensor-h"><b class="mono">${esc(dev)}</b>
+      <span class="pill ${st}">${esc(s.status || "no status")}</span></div>
+    <div class="muted mono">AE ${esc(s.ri || "/in-cse/C" + dev)} on ${esc(parent)} · ${s.stored} stored · e${L.epoch ?? "–"}/seq ${L.seq ?? "–"} · DAS ${s.dac ? "✓" : "✗"}</div>
+    <div class="muted mono">home ${esc(esp.home)} · attached ${esc(esp.attached || "–")} · session ${esc(s.session || "–")}</div>
+    <div class="vals">${vals.join("") || '<span class="muted">waiting for a reading…</span>'}</div>
+    <div class="row">
+      ${esp && esp.on ? `<button class="danger" onclick="act('esp_off',{dev:'${dev}'})">Power off</button>`
+                      : `<button onclick="act('esp_on',{dev:'${dev}'})">Power on</button>`}
+      <button onclick="act('inject',{dev:'${dev}',kind:'malformed'})">Malformed</button>
+      <button onclick="act('inject',{dev:'${dev}',kind:'range'})">Humidity 150</button>
+      <button onclick="act('inject',{dev:'${dev}',kind:'replay'})">Replay</button>
+      <button onclick="act('inject',{dev:'${dev}',kind:'spoof'})">Spoof ID</button>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="act('protect',{dev:'${dev}'})">Protect</button>
+      <button class="primary" onclick="act('gated_read',{dev:'${dev}'})">Read via DAS</button>
+      <button onclick="act('gated_delete',{dev:'${dev}'})">Delete via DAS</button>
+    </div></div>`;
+}
+
+function render(S) {
+  const trust = (S.chain && S.chain.trust) || {};
+  $("nodes").innerHTML = S.nodes.map((n) => {
+    const b = n.bridge || {};
+    const sensors = Object.entries(S.esps).filter(([, e]) => (e.attached || (e.on ? null : e.home)) === n.name);
+    const rej = b.rejected || 0;
+    return `<div class="card">
+      <div class="node-h"><div><b>${n.name}</b> <span class="muted">${esc(n.role)} · ${n.ip}</span></div>
+        <span><span class="pill ${n.parent ? "up" : "idle"}">${n.parent ? "PARENT" : "member"}</span>
+        <span class="pill ${n.broker_alive ? "up" : "down"}">MQTT ${n.broker_alive ? "up" : "down"}</span>
+        <span class="pill ${n.up ? "up" : "down"}">OM2M ${n.up ? "up" : "down"}</span></span></div>
+      <div class="muted mono" style="margin-top:4px">sui ${short(n.addr)} · trust <b>${trust[n.addr] ?? "–"}</b> · acp ${esc((n.acp || "–").split("/").pop())}</div>
+      <div class="row">
+        <button onclick="act('node_restart',{node:'${n.name}'})">Restart OM2M</button>
+        ${n.up ? `<button class="danger" onclick="act('node_stop',{node:'${n.name}'})">Stop OM2M</button>`
+               : `<button onclick="act('node_start',{node:'${n.name}'})">Start OM2M</button>`}
+        ${n.broker_alive ? `<button class="danger" onclick="act('broker_stop',{node:'${n.name}'})">Kill broker</button>`
+                         : `<button onclick="act('broker_start',{node:'${n.name}'})">Start broker</button>`}
+        <button onclick="act('bridge_restart',{node:'${n.name}'})">Restart bridge</button>
+        ${n.parent ? "" : `<button class="primary" onclick="act('set_parent',{node:'${n.name}'})">Make parent</button>`}
+        <button onclick="act('set_trust',{node:'${n.name}',value:30})">Trust → 30</button>
+        <button onclick="act('set_trust',{node:'${n.name}',value:${n.trust_default}})">Restore</button>
+      </div>
+      <div class="sec"><h4>IPE bridge ${n.bridge_alive ? "" : "(stopped)"}</h4><div class="stats">
+        <span class="stat">stored ${b.stored || 0}</span><span class="stat ${rej ? "bad" : ""}">rejected ${rej}</span>
+        <span class="stat">dup ${b.duplicate || 0}</span><span class="stat">pending ${b.pending || 0}</span>
+        <span class="stat">reprovision ${b.reprovision || 0}</span><span class="stat">stale LWT ${b.status_stale_ignored || 0}</span></div>
+        ${(n.bridge_log || []).slice(-3).map((l) => `<div class="muted mono" style="margin-top:4px">${esc(l.slice(0, 140))}</div>`).join("")}
+      </div>
+      <div class="sec"><h4>Sensors attached here</h4>
+        ${sensors.length ? sensors.map(([d, e]) => sensorCard(d, e, S.parent)).join("")
+                         : '<span class="muted">no ESP32 attached to this broker</span>'}
+      </div>
+      <div class="sec"><h4>DAS log</h4>${(n.das || []).slice(-3).reverse().map((l) =>
+        `<div class="mono" style="margin-top:3px;color:${l.includes("GRANT") ? "var(--ok)" : "var(--bad)"}">${esc(l)}</div>`).join("")
+        || '<span class="muted">no decisions yet</span>'}</div>
+    </div>`;
+  }).join("");
+
+  const C = S.chain || {};
+  const pol = Object.entries(C.policies || {});
+  const tok = Object.entries(C.tokens || {});
+  const aud = (C.audit || []).slice(-6).reverse();
+  $("chain").innerHTML = `
+    <table><tr><th>policy (resource)</th><th>min</th><th>mask</th></tr>
+      ${pol.map(([r, p]) => `<tr><td>${esc(r)}</td><td>${p.min_trust}</td><td>${p.mask}</td></tr>`).join("") || '<tr><td colspan=3 class="muted">none yet: press Protect</td></tr>'}</table>
+    <table style="margin-top:8px"><tr><th>token</th><th>owner</th><th>ops</th><th>uses</th></tr>
+      ${tok.map(([t, v]) => `<tr><td>${short(t)}</td><td>${short(v.owner)}</td><td>${v.ops}</td><td>${v.uses}</td></tr>`).join("") || '<tr><td colspan=4 class="muted">none</td></tr>'}</table>
+    <table style="margin-top:8px"><tr><th>audit</th><th>op</th><th>result</th></tr>
+      ${aud.map((a) => `<tr><td>${new Date(a.t).toLocaleTimeString()}</td><td>${a.op}</td>
+        <td style="color:${a.decision ? "var(--ok)" : "var(--bad)"}">${a.decision ? "GRANT " + esc((a.digest || "").slice(0, 10)) : esc(a.reason)}</td></tr>`).join("") || '<tr><td colspan=3 class="muted">no decisions</td></tr>'}</table>`;
+  $("events").innerHTML = S.events.slice().reverse().map((e) =>
+    `<div><span class="muted">${e.t}</span> <span class="k k-${e.kind}">${e.kind}</span> ${esc(e.text)}</div>`).join("");
+}
+
+async function refresh() {
+  try { render(await (await fetch("/api/state")).json()); } catch (e) {}
+}
+refresh(); setInterval(refresh, 1200);
+</script>
+</body>
+</html>

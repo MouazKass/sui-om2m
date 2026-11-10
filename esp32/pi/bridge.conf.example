@@ -1,0 +1,78 @@
+# bridge.conf - one per Raspberry Pi, at /etc/om2m-ipe-bridge/bridge.conf.
+# deploy_to_pis.sh install fills node_label, client_id, self and the [cluster]
+# chain ids from that node's ~/sui-runtime-config/sui.properties.
+#
+# Every node runs OM2M as container "om2m-active" (cseType=in-cse, CSE
+# in-cse/in-name, HTTP :8282) and its own Mosquitto on :1883.
+
+[mqtt]
+# The Mosquitto broker on THIS Pi. A sensor may attach to any node's broker
+# (it fails over across the cluster), so every node runs a bridge.
+host = 127.0.0.1
+port = 1883
+username =
+password =
+# sensors/# is NOT bridged by the broker mesh (deploy/mosquitto/gen-mesh-conf.sh
+# forwards only trust observations and failover heartbeats): a reading reaches
+# exactly the bridge of the broker the sensor is attached to.
+topic_prefix = sensors
+client_id = om2m-ipe-bridge-rpi2
+
+[om2m]
+# This node's own CSE (target = local, the local fallback, and --check).
+base_url = http://127.0.0.1:8282
+cse_id = in-cse
+cse_name = in-name
+originator = admin:admin
+rvi =
+# protect = true: every device is an <AE> wired to the Sui DAS
+# (acpi = acp_sui_dac, daci = sui-dac; both created at boot by
+# provision-das.sh on every node). Never creates an unprotected AE: if the
+# wiring is missing the bridge buffers and waits.
+protect = true
+dac_acp_name = acp_sui_dac
+dac_name = sui-dac
+# only used with protect = false
+acp_name = acp_admin
+ae_api = N.esp32-ipe
+data_container = data
+status_container = status
+# max contentInstances kept per container (oldest removed first)
+mni = 1000
+timeout_s = 5
+# mirror the newest reading into the AE label "latest=<json>", so a GRANTED
+# ordinary RETRIEVE of the AE returns the data (containers are never DAS-checked)
+latest_label = true
+latest_label_min_interval_s = 0
+node_label = rpi2
+
+[cluster]
+self = rpi2
+# label host mqtt-port cse-url [sui-address], one node per line. Re-read when
+# it changes; published retained as om2m/cluster/brokers for the sensors.
+members_file = /etc/om2m-ipe-bridge/members.conf
+# parent: write to the cluster's current parent (read from the Sui failover
+# cluster object: current_parent + its PoA). local: this node's own CSE.
+target = parent
+graphql_url = https://graphql.testnet.sui.io/graphql
+# sui.failover.cluster.id and sui.package.original.id of the deployed package
+# (the TYPE-ORIGIN id: it stays the v8 id after the v9 upgrade)
+cluster_id =
+package_original_id =
+parent_poll_s = 10
+# no parent known for this long (chain unreadable since start): write locally
+# rather than drop readings. 0 = never.
+local_fallback_after_s = 300
+probe_interval_s = 15
+probe_timeout_s = 1.0
+announce_interval_s = 30
+announce_refresh_s = 300
+
+[bridge]
+# readings held in memory while the target CSE is down (e.g. a parent change
+# or an OM2M restart). 5 s interval -> 2000 = ~2.7 h for one device.
+queue_max = 2000
+retry_interval_s = 3
+stats_interval_s = 60
+log_level = INFO
+dedupe_window = 4096

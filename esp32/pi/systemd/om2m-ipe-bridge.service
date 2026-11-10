@@ -1,0 +1,19 @@
+[Unit]
+Description=ESP32 MQTT -> OM2M (oneM2M) interworking bridge (cluster edition)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/om2m-ipe-bridge/om2m_ipe_bridge.py -c /etc/om2m-ipe-bridge/bridge.conf
+Restart=always
+RestartSec=5
+User=nobody
+Group=nogroup
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

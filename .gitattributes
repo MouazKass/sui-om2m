@@ -6,3 +6,6 @@
 deploy/v8/host/* text eol=lf
 # deploy/inventory.tsv: scripts/lib/inventory.sh refuses CRLF.
 *.tsv text eol=lf
+
+# esp32/: deployed to Linux (python shebangs, systemd units, configs) and built by g++/Arduino
+esp32/** text eol=lf
