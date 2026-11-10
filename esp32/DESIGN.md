@@ -168,13 +168,17 @@ node, with no reflash.
 | two bridges race on one reading | CSE 409 | stored once |
 | sensor's NVS wiped | epoch restarts | new keys; stored readings are untouched (names differ by epoch) |
 | sensor reboots | RAM buffer lost | unsent readings from before the reboot are lost (bounded: ≤ 1 interval when connected) |
+| forged reading (attacker's own key, or no key) | `[identity] mode = require`: signature + on-chain registry lookup | rejected, never acked, never stored (§9) |
+| device revoked by the council | registry lookup (cached ≤ 60 s) | its readings are rejected; the board buffers them |
 | forged `om2m/cluster/brokers` | only hosts under `CLUSTER_ALLOW_PREFIX` accepted | worst case: a sensor tries a wrong host on the subnet, gets no acks, fails over |
 
 **Residual risks, stated plainly.**
-- **The brokers are anonymous.** Anyone on the subnet can publish a fake reading or a
-  fake presence, exactly as in v1. This is the existing trust boundary of the testbed's
-  MQTT layer, and the trust engine's observations are signed for that reason. Authenticating sensors needs
-  per-device MQTT credentials or TLS client certificates. The firmware already supports
+- **The brokers are anonymous, but readings are not (v2.1).** Anyone on the subnet can
+  still *publish*, but a reading or presence message is stored only if it is signed by
+  a device key registered on-chain for that device (§9). What remains open is the
+  bridge→sensor direction: acks are unsigned, so a publisher on the broker can make a
+  board drop a reading from its resend buffer. Per-device MQTT credentials or broker
+  ACLs on `sensors/<id>/ack` would close it. The firmware already supports
   `MQTT_USER`/`MQTT_PASS`.
 - **History is not migrated after a parent change.** Each parent holds the readings
   written while it was parent. Readings are never duplicated within a tree, and the
@@ -195,6 +199,7 @@ node, with no reflash.
 | `deploy_to_pis.sh`: `sshpass`, 3 nodes | SSH key auth, 5 nodes, checks DAC wiring and cross-node :8282 |
 | `chain_sim.py`: v7 | v8: DENY found by simulation, not paid (F3) |
 | tests: 17 + 17 | see §7 |
+| no device authentication | v2.1: per-device Ed25519 key, signed messages, on-chain registration by council vote (§9) |
 
 ## 7. Verification (offline: `./run_all_tests.sh`, log in `evidence/offline_test_run.txt`)
 
@@ -202,10 +207,12 @@ node, with no reflash.
 |---|---|
 | `cluster.h` against `selector_vectors.txt` | 27/27 |
 | `esp32_sim.Selector` against the same vectors | 27/27 |
-| firmware host build (the real `.ino`, virtual time, simulated 5-node cluster) | 10/10 |
+| firmware host build (the real `.ino`, virtual time, simulated 5-node cluster) | 13/13 (v2.1 adds: signed telemetry, signed Last Will, key kept across power cycle) |
 | bridge unit tests | 12/12 |
+| device identity unit tests (`tests/test_identity.py`: RFC 8032 vector, Sui address vs a live key, format, registry, bridge decisions) | 17/17 |
+| firmware signatures (C++/libsodium) verified by the bridge's Python verifier | 3/3 (92 telemetry + 5 status) |
 | single-node e2e: Hamza's 17 scenarios adapted, plus 3 v2 checks | 20/20 |
-| 5-node cluster e2e (real Mosquitto ×5, real bridge ×5) | 26/26, three consecutive runs |
+| 5-node cluster e2e (real Mosquitto ×5, real bridge ×5) | 31/31 (v2.1, identity required; C10 forged/unsigned/tampered/revoked) |
 | dashboard simulator self-test (5 nodes) | 19/19 |
 
 **Mutation checks** (`evidence/mutation_checks.txt`). Each guard was broken in turn, and
@@ -247,3 +254,60 @@ the test aimed at it failed. All 7 were caught:
 6. **`flexContainer`** (OM2M `FlexContainerController` does call `checkPermissions`)
    would let the data itself be DAS-protected, not just the AE. This needs a probe on
    real OM2M before adopting it.
+
+## 9. Per-device identity (v2.1)
+
+**Problem.** In v2 a sensor was just an MQTT topic. Anyone on the subnet could
+publish `sensors/esp32-dht-01/telemetry`, and the bridge would store it as that
+device's reading on the parent. A DAS-protected read then served forged data
+behind a genuine on-chain GRANT.
+
+**Design.** Each device holds its own Ed25519 key, generated on the device and kept
+in NVS (`firmware/.../device_key.h`, libsodium). Its identity is the key's Sui
+address, `blake2b-256(0x00 ‖ pk)`. The council registers it in the existing
+identity registry as `ROLE_AE` with `cse_id` = the device id, using the existing
+`id-register` action. Revocation is `id-deregister`. Nothing in Move changed. The
+roles already keep a device key out of every middleware path on-chain:
+- `failover::claim_parent` requires IN/MN;
+- `quorum::assert_eligible` requires IN/MN;
+- `evaluator::log_deny_batch` requires IN/MN.
+
+The plugin's B10 gossip membership was the one place that only asked
+`is_registered`. It now also reads `role_of` and admits IN/MN only
+(`IdentityRegistryMembers`, `IdentityRoleMembershipTest`). That plugin change was
+deployed to all five nodes **before** the first device was registered.
+
+**Signature format** (`pi/esp_identity.py`). `"pk"` is added anywhere in the JSON
+object, and `"sig"` is added as the **last** field:
+
+```
+sig = Ed25519(sk, "om2m-esp32-sig-v1 " || body)
+```
+
+Here `body` is the exact bytes of the message without `,"sig":"…"`. The board signs
+the bytes it already built, so no canonical JSON is needed. The verifier
+re-parses the signed body and requires it to equal the parsed message minus
+`sig`, so no field outside the signature can reach storage. The Last Will is
+signed at connect time, since its content (session id) is fixed then.
+
+**Bridge check** (`[identity] mode = require`):
+
+1. Verify the signature, then derive the address from the key.
+2. Look the address up in `Registry.nodes` over GraphQL (a read; no gas, no signing).
+   It must be role 3 and `cse_id` = the device id in the topic.
+3. Reject replays:
+   - an epoch older than one already authenticated;
+   - a device timestamp older than `replay_window_s`.
+4. Store `pk`, `sig` and `signer`, and label the AE `signer/<address>`.
+
+The registry answer is cached, with a positive TTL of 60 s (the bound on revocation
+latency) and a negative TTL of 15 s. If the chain cannot be read, a positive answer
+up to 300 s old is reused; with nothing cached the bridge rejects (fail closed).
+
+**Why not more.**
+- The device does not sign Sui transactions. It has no gas, and the DAS still
+  authorises *readers* through their node's token. The identity authenticates and
+  attributes the *data*.
+- Per-device DAS attribution, where a reader's token is bound to the device's
+  address, would need a new Move check and therefore a package upgrade. It was
+  left out on purpose.

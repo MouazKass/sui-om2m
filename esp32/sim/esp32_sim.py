@@ -45,6 +45,8 @@ import time
 
 import paho.mqtt.client as mqtt
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pi"))
+
 BROKERS_TOPIC = "om2m/cluster/brokers"
 LABEL_RE = re.compile(r"^[a-z0-9-]{1,15}$")
 HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,39}$")
@@ -253,6 +255,19 @@ class Sensor:
         self.last_payload = None
         self.out_lock = threading.Lock()
         self.first_unacked_pub = 0.0       # first publish since the last ack (0 = none)
+        self.key = None                    # per-device Ed25519 key (--key), made on THIS host
+        if a.key:
+            import esp_identity
+            self.idm = esp_identity
+            self.key = esp_identity.load_or_create_key(a.key)
+            self.rogue = esp_identity.Ed25519PrivateKey.generate()   # for --forge-every
+
+    def enc(self, obj, key=None):
+        """Compact JSON; signed with the device key when --key is given."""
+        key = key or self.key
+        if key is None:
+            return json.dumps(obj, separators=(",", ":"))
+        return self.idm.sign_obj(obj, key)
 
     # NVS: epoch +1 per power-up
     def _next_epoch(self):
@@ -318,7 +333,7 @@ class Sensor:
         c = make_client(self.dev)
         if self.a.username:
             c.username_pw_set(self.a.username, self.a.password or None)
-        c.will_set(self.t_status, json.dumps({"state": "offline", "id": self.dev, "session": self.session}),
+        c.will_set(self.t_status, self.enc({"state": "offline", "id": self.dev, "session": self.session}),
                    qos=1, retain=True)
         try:
             c.connect_timeout = self.a.connect_timeout
@@ -349,9 +364,9 @@ class Sensor:
         self.client = c
         self.sel.on_connected(i, now_ms())
         c.subscribe([(BROKERS_TOPIC, 1), (self.t_ack, 1)])
-        c.publish(self.t_status, json.dumps({
+        c.publish(self.t_status, self.enc({
             "state": "online", "id": self.dev, "session": self.session, "epoch": self.epoch,
-            "boot": self.boot, "fw": "sim-2.0.0", "ip": "127.0.0.1",
+            "boot": self.boot, "fw": "sim-2.1.0", "ip": "127.0.0.1",
             "home": self.sel.b[self.sel.home].label, "broker": br.label}), qos=1, retain=True)
         with self.lock:
             self.conn_start_seq = self.seq
@@ -409,13 +424,21 @@ class Sensor:
 
     def take_reading(self, n):
         msg = self.make_reading()
-        payload = json.dumps(msg, separators=(",", ":"))
+        payload = self.enc(msg)
         kind = "ok"
         a = self.a
-        if a.malformed_every and n % a.malformed_every == 0:
+        if a.forge_every and n % a.forge_every == 0:
+            # an attacker's key claiming this device id: must be rejected
+            payload, kind = self.enc(dict(msg, temperature=99.0), key=self.rogue), "forged"
+        elif a.tamper_every and n % a.tamper_every == 0 and self.key is not None:
+            # a genuinely signed reading with one value changed in transit
+            payload, kind = payload.replace('"seq":', '"seq":1', 1), "tampered"
+        elif a.unsigned_every and n % a.unsigned_every == 0:
+            payload, kind = json.dumps(msg, separators=(",", ":")), "unsigned"
+        elif a.malformed_every and n % a.malformed_every == 0:
             payload, kind = payload[:-7] + "{{oops", "malformed"
         elif a.range_every and n % a.range_every == 0:
-            payload, kind = json.dumps(dict(msg, humidity=150.0)), "out-of-range"
+            payload, kind = self.enc(dict(msg, humidity=150.0)), "out-of-range"
         elif a.replay_every and n % a.replay_every == 0 and self.last_payload:
             payload, kind = self.last_payload, "replay"
         if kind == "ok":
@@ -458,7 +481,7 @@ class Sensor:
     def bye(self, *_):
         c = self.client
         if c:
-            c.publish(self.t_status, json.dumps({"state": "offline", "id": self.dev, "session": self.session}),
+            c.publish(self.t_status, self.enc({"state": "offline", "id": self.dev, "session": self.session}),
                       qos=1, retain=True)
             time.sleep(0.3)
             c.disconnect()
@@ -583,8 +606,23 @@ def main():
     ap.add_argument("--malformed-every", type=int, default=0)
     ap.add_argument("--range-every", type=int, default=0)
     ap.add_argument("--replay-every", type=int, default=0)
+    ap.add_argument("--key", default="",
+                    help="device Ed25519 seed file (created 0600 on first use, never copied): sign every message")
+    ap.add_argument("--print-identity", action="store_true",
+                    help="print the --key public key and its Sui address (to register on-chain) and exit")
+    ap.add_argument("--forge-every", type=int, default=0, help="every Nth reading signed by a rogue key")
+    ap.add_argument("--tamper-every", type=int, default=0, help="every Nth reading altered after signing")
+    ap.add_argument("--unsigned-every", type=int, default=0, help="every Nth reading sent unsigned")
     ap.add_argument("--quiet", action="store_true")
-    Sensor(ap.parse_args()).run()
+    a = ap.parse_args()
+    if a.print_identity:
+        if not a.key:
+            sys.exit("--print-identity needs --key")
+        import esp_identity
+        pk = esp_identity.public_bytes(esp_identity.load_or_create_key(a.key))
+        print(json.dumps({"device": a.device, "pk": pk.hex(), "address": esp_identity.sui_address(pk)}))
+        return
+    Sensor(a).run()
 
 
 if __name__ == "__main__":

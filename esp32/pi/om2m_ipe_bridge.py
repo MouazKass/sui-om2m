@@ -41,6 +41,18 @@ Exactly-once storage across failover
   reading is acknowledged on sensors/<device>/ack; the sensor re-sends only
   unacknowledged readings.
 
+Per-device identity (identity.mode = require)
+  Each sensor signs every telemetry and status message with its own Ed25519
+  key (esp_identity.py describes the format). The bridge verifies the
+  signature, derives the key's Sui address and accepts the message only if
+  that address is registered in the on-chain identity registry as an end
+  device (role AE) whose cse_id is this device id. Unsigned, forged,
+  unregistered or council-revoked senders are rejected and never acked.
+  Stored records keep pk + sig (re-verifiable later) and gain "signer"; the
+  AE gets the label signer/<address>. A reading from an older epoch than one
+  already authenticated, or older than replay_window_s, is rejected.
+  identity.mode = off keeps the v2 behaviour (no checks).
+
 Session-aware presence
   Status messages carry the sensor's connection session "<epoch>.<n>". A status
   older than the newest one stored is ignored, so the Last Will a broker fires
@@ -129,6 +141,13 @@ DEFAULTS = {
         "parent_poll_s": "10", "local_fallback_after_s": "300",
         "probe_interval_s": "15", "probe_timeout_s": "1.0", "announce_interval_s": "30",
         "announce_refresh_s": "300",
+    },
+    "identity": {
+        # off: no device authentication (v2). require: every message must be
+        # signed by a device key registered on-chain (role AE, cse_id = device).
+        "mode": "off", "registry_id": "", "graphql_url": "",
+        "cache_ttl_s": "60", "negative_ttl_s": "15", "max_stale_s": "300",
+        "replay_window_s": "3600",
     },
     "bridge": {
         "queue_max": "2000", "retry_interval_s": "3", "stats_interval_s": "60",
@@ -617,6 +636,14 @@ class Device:
         self.last_state = None
         self.last_session = None                     # newest session key seen here
         self.last_label_at = 0.0
+        self.signer = None                           # on-chain address of the device key
+        self.max_epoch = 0                           # newest authenticated epoch
+
+    def labels(self):
+        lbl = ["type/esp32", f"device/{self.name}"]
+        if self.signer:
+            lbl.append(f"signer/{self.signer}")
+        return lbl
 
     def seen(self, key):
         return key in self.recent
@@ -666,6 +693,64 @@ class Bridge:
         self.mqtt = None
         self.mqtt_ok = False
         self._last_announce = ("", 0.0)
+        self._init_identity(cfg)
+
+    def _init_identity(self, cfg):
+        i = cfg["identity"]
+        self.id_mode = i["mode"].strip().lower()
+        if self.id_mode not in ("off", "require"):
+            raise SystemExit("identity.mode must be 'off' or 'require'")
+        self.registry = None
+        self.replay_window_s = float(i["replay_window_s"])
+        if self.id_mode == "off":
+            log.warning("identity.mode = off: device messages are NOT authenticated")
+            return
+        import esp_identity                      # needs python3-cryptography
+        self._idmod = esp_identity
+        c = cfg["cluster"]
+        props = read_properties(c["sui_properties"]) if c["sui_properties"].strip() else {}
+        reg = i["registry_id"].strip() or props.get("sui.identity.registry.id", "")
+        gql = (i["graphql_url"].strip() or c["graphql_url"].strip()
+               or props.get("sui.graphql.url", ""))
+        if not (reg and gql):
+            raise SystemExit("identity.mode = require needs identity.registry_id (or "
+                             "sui.identity.registry.id in sui_properties) and a graphql_url")
+        http = requests.Session()
+
+        def post(query, variables):
+            r = http.post(gql, json={"query": query, "variables": variables}, timeout=10)
+            r.raise_for_status()
+            d = r.json()
+            if d.get("errors"):
+                raise RuntimeError(str(d["errors"])[:200])
+            return d.get("data") or {}
+        self.registry = esp_identity.DeviceRegistry(
+            post, reg, ttl_s=float(i["cache_ttl_s"]), negative_ttl_s=float(i["negative_ttl_s"]),
+            max_stale_s=float(i["max_stale_s"]))
+        log.info("device identity required: registry %s via %s", reg, gql)
+
+    def authenticate(self, device, kind, payload, msg, rx_time):
+        """identity.mode = require: -> signer address, or raise Rejected('auth:<reason>')."""
+        idm = self._idmod
+        try:
+            pk = idm.verify_message(payload, msg)
+            addr = self.registry.check(device, pk)
+        except idm.IdentityError as e:
+            raise Rejected(f"auth:{e}")
+        dev = self.device(device)
+        if kind == "telemetry" and msg.get("v") == 2:
+            if msg["epoch"] < dev.max_epoch:
+                raise Rejected("auth:stale_epoch")
+            ts = msg.get("ts", 0)
+            if ts and ts < rx_time - self.replay_window_s:
+                raise Rejected("auth:stale_reading")
+            dev.max_epoch = max(dev.max_epoch, msg["epoch"])
+        if dev.signer != addr:
+            if dev.signer:
+                log.warning("%s: signing key changed %s -> %s", device, dev.signer, addr)
+            dev.signer = addr
+            dev.places.clear()                   # re-provision: AE label carries the signer
+        return addr
 
     def cse(self, base):
         if base not in self.clients:
@@ -734,6 +819,14 @@ class Bridge:
         except Rejected as e:
             self._reject(device, str(e))
             return
+        signer = None
+        if self.id_mode == "require":
+            try:
+                signer = self.authenticate(device, kind, payload, msg, rx_time)
+            except Rejected as e:
+                self._reject(device, str(e))
+                return
+            self.stats["authenticated"] += 1
 
         dev = self.device(device)
         if kind == "telemetry":
@@ -745,6 +838,8 @@ class Bridge:
             record = dict(msg)
             record["rx_ts"] = int(rx_time * 1000)
             record["ts_src"] = "device" if msg.get("ts", 0) > 0 else "bridge"
+            if signer:
+                record["signer"] = signer
             if self.node_label:
                 record["node"] = self.node_label
             self._enqueue(("data", device, record, key, rn))
@@ -759,9 +854,11 @@ class Bridge:
                 dev.last_session = sk
             record = {"state": msg["state"], "id": device, "rx_ts": int(rx_time * 1000),
                       "retained": retained}
-            for k in ("boot", "fw", "ip", "session", "epoch", "home", "broker"):
+            for k in ("boot", "fw", "ip", "session", "epoch", "home", "broker", "pk", "sig"):
                 if k in msg:
                     record[k] = msg[k]
+            if signer:
+                record["signer"] = signer
             if self.node_label:
                 record["node"] = self.node_label
             self._enqueue(("status", device, record, None, None))
@@ -810,7 +907,7 @@ class Bridge:
         cse = self.cse(base)
         pl = dev.place(base)
         acpi, daci = self._acl(cse)
-        lbl = ["type/esp32", f"device/{dev.name}"]
+        lbl = dev.labels()
         ae = {"rn": dev.name, "api": self.api, "rr": False, "lbl": lbl}
         if acpi:
             ae["acpi"] = acpi
@@ -850,8 +947,7 @@ class Bridge:
         dev.last_label_at = now
         latest = {k: record[k] for k in ("epoch", "seq", "ts", "rx_ts", "temperature", "humidity",
                                           "light_raw", "light_pct", "node") if k in record}
-        lbl = ["type/esp32", f"device/{dev.name}",
-               "latest=" + json.dumps(latest, separators=(",", ":"), sort_keys=True)]
+        lbl = dev.labels() + ["latest=" + json.dumps(latest, separators=(",", ":"), sort_keys=True)]
         try:
             code = cse.update(pl.ae_ri, "m2m:ae", {"lbl": lbl})
             self.stats["latest_label" if code == 200 else "latest_label_failed"] += 1

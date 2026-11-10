@@ -9,6 +9,9 @@ NODE=${1:?usage: sudo ./install.sh <node-label, e.g. rpi2>}
 cd "$(dirname "$0")"
 python3 -c 'import paho.mqtt, requests' 2>/dev/null || {
   DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-paho-mqtt python3-requests; }
+# per-device identity (esp_identity.py) verifies Ed25519 with python3-cryptography
+python3 -c 'from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey' 2>/dev/null || {
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-cryptography; }
 command -v mosquitto_pub >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -q mosquitto-clients
 install -d /opt/om2m-ipe-bridge /etc/om2m-ipe-bridge
 # Upgrading from Hamza's v1 bridge (no [cluster] section): keep a copy of the v1
@@ -22,6 +25,7 @@ if [[ -f /etc/om2m-ipe-bridge/bridge.conf ]] && ! grep -q '^\[cluster\]' /etc/om
   echo "v1 bridge found: code + config backed up to $B"
 fi
 install -m 0755 om2m_ipe_bridge.py /opt/om2m-ipe-bridge/
+install -m 0644 esp_identity.py /opt/om2m-ipe-bridge/
 MEM=members.conf; [[ -f $MEM ]] || MEM=members.conf.example
 install -m 0644 "$MEM" /etc/om2m-ipe-bridge/members.conf
 if [[ ! -f /etc/om2m-ipe-bridge/bridge.conf ]]; then
@@ -43,10 +47,21 @@ else
   echo "WARNING: no cluster/package id in $PROPS; falling back to target = local"
   sed -i -E "s|^target *=.*|target = local|" /etc/om2m-ipe-bridge/bridge.conf
 fi
+# [identity] (v2.1): added to configs that predate it; registry id from the plugin config.
+if ! grep -q '^\[identity\]' /etc/om2m-ipe-bridge/bridge.conf; then
+  sed -n '/^\[identity\]/,/^\[bridge\]/p' bridge.conf.example | sed '$d' >> /etc/om2m-ipe-bridge/bridge.conf
+  echo "added [identity] section (mode = require)"
+fi
+REG=$(prop sui.identity.registry.id)
+if [[ -n "$REG" ]]; then
+  sed -i -E "s|^registry_id *=.*|registry_id = $REG|" /etc/om2m-ipe-bridge/bridge.conf
+else
+  echo "WARNING: no sui.identity.registry.id in $PROPS; identity.mode = require will refuse to start"
+fi
 install -m 0644 systemd/om2m-ipe-bridge.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable om2m-ipe-bridge >/dev/null
 systemctl restart om2m-ipe-bridge
 sleep 2
 systemctl is-active om2m-ipe-bridge
-grep -E "^(self|target|cluster_id|package_original_id) =" /etc/om2m-ipe-bridge/bridge.conf
+grep -E "^(self|target|cluster_id|package_original_id|mode|registry_id) =" /etc/om2m-ipe-bridge/bridge.conf

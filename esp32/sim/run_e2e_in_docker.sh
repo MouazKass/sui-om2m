@@ -12,6 +12,7 @@
 #   3. runs the suite with --network none (loopback only: the sims bind 127.0.0.1
 #      ports and can never reach the live brokers) and the sources mounted read-only
 #   4. prints the log, then removes the container, the image and the temp dir
+# The image only needs the network at build time (apt + pip).
 # Exit status is the suite's (0 = ALL TEST GROUPS PASSED).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)          # esp32/
@@ -37,10 +38,10 @@ push_tree
 on_host "cat > $WORK/.Dockerfile <<'EOF'
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      g++ mosquitto mosquitto-clients python3 python3-pip python3-venv ca-certificates \
+      g++ libsodium-dev mosquitto mosquitto-clients python3 python3-pip python3-venv ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && python3 -m venv /venv \
- && /venv/bin/pip install --no-cache-dir paho-mqtt==2.1.0 requests==2.32.3 flask==3.0.3
+ && /venv/bin/pip install --no-cache-dir paho-mqtt==2.1.0 requests==2.32.3 flask==3.0.3 cryptography==43.0.3
 ENV PATH=/venv/bin:\$PATH PYTHONDONTWRITEBYTECODE=1 LOGDIR=/out
 EOF
 docker build -q -t $TAG -f $WORK/.Dockerfile $WORK >/dev/null"

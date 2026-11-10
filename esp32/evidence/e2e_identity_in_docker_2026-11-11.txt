@@ -1,0 +1,261 @@
+# esp32/sim/run_e2e_in_docker.sh on rpi1, 2026-11-11, after the per-device identity change (v2.1)
+# container: debian trixie-slim + g++ + libsodium-dev + mosquitto; python paho-mqtt 2.1.0, requests 2.32.3, flask 3.0.3, cryptography 43.0.3; --network none
+
+rm: cannot remove '/out': Device or resource busy
+
+### 1. firmware selector (cluster.h) against the shared vectors
+cluster.h vectors: 27/27 passed
+
+### 2. simulator selector (esp32_sim.py) against the same vectors
+esp32_sim Selector vectors: 27/27 passed
+
+### 3. firmware host build: the real .ino, virtual time, simulated cluster
+host-check results
+  [PASS] connected to the home broker first  10.25.96.201:1883
+  [PASS] Last Will carries the session id  {"state":"offline","id":"esp32-dht-01","pk":"856981053b827909acbb214b9378c2cfefa9a55f427a8db880299e5d6f141507","session":"1.5","sig":"42d7ebfda26b3f93eec630d70bc46b92c6fa76e358cfd5f9de05d539943bb61b3b17abc8fa683902d49f4d75b8bc644809e41eadbf0ee2d8301b12997a432405"}
+  [PASS] learned rpi6 from the retained membership topic  6 brokers known
+  [PASS] ignored a learned host outside CLUSTER_ALLOW_PREFIX  
+  [PASS] failed over to another broker within 10 s  after 2160 ms
+  [PASS] returned home only after the stability window  home again at 52790 ms (home up at 40000)
+  [PASS] cleared its retained presence on the broker it left  
+  [PASS] failed over when the home bridge stopped acknowledging  after 7960 ms
+  [PASS] no reading lost across failover and return (resend buffer)  85 distinct of 85 taken, 7 duplicate deliveries for the bridge to drop
+  [PASS] every telemetry message carries pk and sig  
+  [PASS] Last Will is signed too  {"state":"offline","id":"esp32-dht-01","pk":"856981053b827909acbb214b9378c2cfefa9a55f427a8db880299e5d6f141507","session":"1.5","sig":"42d7ebfda26b3f93eec630d70bc46b92c6fa76e358cfd5f9de05d539943bb61b3b17abc8fa683902d49f4d75b8bc644809e41eadbf0ee2d8301b12997a432405"}
+
+[boot] esp32-dht-01 fw=2.1.0 epoch=2 boot=a1b2c3d4 brokers=6 home=rpi2
+[wifi] connecting to YOUR_WIFI_NAME
+[wifi] connected, ip=10.25.96.150 rssi=-58
+[id] device key pk=856981053b827909acbb214b9378c2cfefa9a55f427a8db880299e5d6f141507 sui_address=0x5ec3607278aa5cff5385e0799d4cd8c1d35b17ea83681d6acad573f63fab82a1
+[id] register: scripts/v9/council.sh propose <member> id-register 0x5ec3607278aa5cff5385e0799d4cd8c1d35b17ea83681d6acad573f63fab82a1 esp32-dht-01 3
+  [PASS] power cycle increments the NVS epoch  1 -> 2
+  [PASS] device key survives the power cycle (kept in NVS)  856981053b827909acbb214b9378c2cfefa9a55f427a8db880299e5d6f141507
+[id] host-check device address 0x5ec3607278aa5cff5385e0799d4cd8c1d35b17ea83681d6acad573f63fab82a1
+all host checks passed
+
+### 4. bridge unit tests
+...ignoring PoA http://10.25.96.200:8282/: published by 0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd, parent is 0xabababababababababababababababababababababababababababababababab
+parent lookup failed (RuntimeError: parent 0xabababababababababababababababababababababababababababababababab has no PoA and is not in members_file); no parent known yet
+..parent lookup failed (RuntimeError: 503); keeping 0xabababab
+.......
+----------------------------------------------------------------------
+Ran 12 tests in 0.003s
+
+OK
+
+### 4b. device identity: signing format, Sui address, registry, bridge decisions
+test_mode_off_keeps_v2_behaviour (__main__.BridgeDecisions.test_mode_off_keeps_v2_behaviour) ... identity.mode = off: device messages are NOT authenticated
+ok
+test_older_epoch_and_stale_timestamp_are_replays (__main__.BridgeDecisions.test_older_epoch_and_stale_timestamp_are_replays) ... rejected message from esp32-dht-01: auth:stale_epoch
+rejected message from esp32-dht-01: auth:stale_reading
+ok
+test_rejections_are_counted_and_never_queued (__main__.BridgeDecisions.test_rejections_are_counted_and_never_queued) ... rejected message from esp32-dht-01: auth:unsigned
+rejected message from esp32-dht-01: auth:device_not_registered
+rejected message from esp32-dht-01: auth:bad_signature
+ok
+test_signed_registered_reading_is_queued_with_its_signer (__main__.BridgeDecisions.test_signed_registered_reading_is_queued_with_its_signer) ... ok
+test_status_must_be_signed_too (__main__.BridgeDecisions.test_status_must_be_signed_too) ... rejected message from esp32-dht-01: auth:unsigned
+ok
+test_chain_down (__main__.Registry.test_chain_down) ... ok
+test_registered_device_passes_and_is_cached (__main__.Registry.test_registered_device_passes_and_is_cached) ... ok
+test_revocation_takes_effect_after_the_ttl (__main__.Registry.test_revocation_takes_effect_after_the_ttl) ... ok
+test_unregistered_wrong_role_wrong_name (__main__.Registry.test_unregistered_wrong_role_wrong_name) ... ok
+test_any_change_breaks_the_signature (__main__.Signing.test_any_change_breaks_the_signature) ... ok
+test_format_errors (__main__.Signing.test_format_errors) ... ok
+test_key_file_is_created_0600_and_reused (__main__.Signing.test_key_file_is_created_0600_and_reused) ... ok
+test_parsed_message_must_equal_the_signed_body (__main__.Signing.test_parsed_message_must_equal_the_signed_body) ... ok
+test_roundtrip (__main__.Signing.test_roundtrip) ... ok
+test_swapping_in_another_key_is_detected (__main__.Signing.test_swapping_in_another_key_is_detected) ... ok
+test_rfc8032_test_1 (__main__.Vectors.test_rfc8032_test_1) ... ok
+test_sui_address_matches_a_live_sui_key (__main__.Vectors.test_sui_address_matches_a_live_sui_key) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.023s
+
+OK
+
+### 4c. firmware signatures (C++/libsodium) verify with the bridge (Python)
+  [PASS] every firmware message verifies in Python  92 telemetry + 5 status verified, 0 failed []
+  [PASS] all signed by one device key  1 distinct keys
+  [PASS] firmware's printed Sui address == Python's derivation  fw 0x5ec3607278aa5cff5385e0799d4cd8c1d35b17ea83681d6acad573f63fab82a1 py 0x5ec3607278aa5cff5385e0799d4cd8c1d35b17ea83681d6acad573f63fab82a1
+
+### 5. single-node end-to-end (Hamza's original scenarios, v2 layout)
+logs: /out/e2e
+
+1) happy path + bad input
+  [PASS] only valid readings stored  stored=14 valid_sent=14
+  [PASS] malformed + out-of-range rejected  rejected=11 expected=11
+  [PASS] replays dropped as duplicates  duplicate=3 expected=3
+  [PASS] latest (la) is the last reading, path /in-cse/in-name/<device>/data  la.seq=13
+  [PASS] status container tracks online/offline  status=offline
+
+2) OM2M restarts while the ESP32 keeps sending (like a role switch)
+  [PASS] containers re-created after wipe  cni=32
+  [PASS] readings sent during the outage were replayed  oldest_after_restart=6 seq_at_kill=5
+  [PASS] every stored reading is named e<epoch>-s<seq> (the CSE-side exactly-once key)  32/32 named, e.g. ['e94345896-s6', 'e94345896-s7']
+  [PASS] no gaps after recovery  seq 6..36, stored=32, creation order starts ['e94345896-s6', 'e94345896-s7', 'e94345896-s0']
+  [PASS] bridge noticed and re-provisioned  reprovision=1 cse_errors=4
+
+3) ESP32 loses power (no goodbye)
+  [PASS] online announced  
+  [PASS] broker Last Will -> status offline  
+
+4) bridge restarts (broker replays retained status)
+  [PASS] no duplicate status entries  before={'esp32-ldr-01/status': 2, 'esp32-dht-02/status': 2} after={'esp32-ldr-01/status': 2, 'esp32-dht-02/status': 2}
+
+5) payloads produced by the real firmware source (host build)
+  [PASS] firmware payloads accepted and stored once  92 firmware publishes (85 distinct readings) -> 85 stored, la.seq=84
+
+6) ACP attached from birth
+  [PASS] acp_sui_dac ri changed across the OM2M restart  /in-cse/acp-315213240 -> /in-cse/acp-246323838
+  [PASS] every AE/container carries the current acp_sui_dac  6 containers, 3 AEs, wrong acpi: none
+  [PASS] every device AE is DAS-wired (daci = current sui-dac), ri /in-cse/C<device>  wrong daci: none, wrong ri: none
+  [PASS] --check creates, writes and deletes its probe  probe deleted (HTTP 200): ACP attached correctly, nothing left behind
+  [PASS] the CSE rejects a second contentInstance with the same reading name (exactly-once)  
+  [PASS] control: without acpi the probe is locked (why the fix matters)  DELETE probe -> 403: resource is locked (created without a usable ACP?)
+
+20/20 checks passed
+
+### 6. 5-node cluster end-to-end
+logs: /out/cluster
+
+C0) attach to home, write to the parent
+  [PASS] sensor attached to its home broker rpi2  status={'boot': '26677373', 'broker': 'rpi2', 'epoch': 1, 'fw': 'sim-2.1.0', 'home': 'rpi2', 'id': 'esp32-dht-01', 'ip': '127.0.0.1', 'node': 'rpi2', 'pk': '0de60b32e5d8189610c2e0cc4a7f7581bfea36626730989f51efd82354e12f02', 'retained': False, 'rx_ts': 1794345911599, 'session': '1.1', 'sig': '0ff3a08e31d3b051379ef368e1565e61d30a1e112a409d60478696088d5b326cbaba42c096cbc4490d083f5db33d7cfb5e6ff507e57265895a8067527931b50f', 'signer': '0x89f441c554d891e04bd0a8b5f70d27b3927061b761f0e8274126610c01f121cf', 'state': 'online'}
+  [PASS] readings stored on the PARENT's CSE (rpi1), as AE /in-cse/C<device>  6 readings, AE ri /in-cse/Cesp32-dht-01
+  [PASS] the AE is DAS-wired on the parent (acp_sui_dac + daci sui-dac)  acpi=['/in-cse/acp-289718224'] daci=['/in-cse/dac-289718225']
+  [PASS] no copy on the other nodes (one coherent tree)  {'rpi2': False, 'rpi3': False, 'rpi4': False, 'rpi5': False}
+  [PASS] stored reading is attributed to the device's on-chain identity (signer + sig kept)  signer=0x89f441c554d891e04bd0a8b5f70d27b3927061b761f0e8274126610c01f121cf
+  [PASS] AE label mirrors the latest reading  latest={"epoch":1,"humidity":60.4,"light_pct":47,"light_raw":1965,"node":"rpi2","rx_ts":17
+
+C1) the home broker dies
+  [PASS] failed over to another broker within 10 s  now on rpi3 after 1.2 s (session 1.2)
+  [PASS] readings keep arriving after failover  7 -> 13
+
+C2) one-way partition: a late, stale Last Will
+  [PASS] sensor detected the dead link to rpi3 and moved on  now on rpi4 session 1.3 (was 1.2)
+  [PASS] the Last Will fired late by rpi3's broker was ignored  rpi3 bridge status_stale_ignored=1, stored status=online session 1.3
+
+C3) home returns: hysteresis
+  [PASS] returned home, but only after the 4 s stability window  home again after 5.7 s
+  [PASS] left the other broker cleanly (retained presence cleared, no Last Will)  
+
+C4) the chain names a new parent (rpi3)
+  [PASS] writes moved to rpi3's CSE mid-stream  rpi3 now has 7
+  [PASS] rpi3 provisioned the device AE DAS-wired with the same ri  ri=/in-cse/Cesp32-dht-01 daci=['/in-cse/dac-247730448']
+  [PASS] rpi1 no longer receives readings  37 -> 40
+
+C5) the chain cannot be read
+  [PASS] last known parent kept while GraphQL is down  rpi3 9 -> 17
+
+C6) a new node joins
+  [PASS] sensor learned rpi5 from the retained om2m/cluster/brokers (no reflash)  
+  [PASS] with rpi1..rpi4's brokers down it attached to rpi5 (never in its seed list)  status=rpi5
+  [PASS] readings flow through rpi5 to the parent  19 -> 26
+
+C7) protected read through the DAS on the parent
+  [PASS] reader RETRIEVE of the AE -> DAS GRANT, carrying the latest reading  HTTP 200 latest={"epoch":1,"humidity":60.6,"light_pct":65,"light_raw":2689,"nod
+  [PASS] reader DELETE -> DENY, decided by a free simulation (no paid transaction)  HTTP 403; grants submitted 0->1, denies simulated 0->1
+  [PASS] unmapped originator -> DENY (No Sui mapping)  HTTP 403
+  [PASS] the data container is never referred to the DAS (OM2M limit, documented)  HTTP 403
+
+C9) the broker is up but its bridge is dead
+  [PASS] no acks via rpi5 -> failed over (bounded by the 6 s no-ack window)  now on rpi2 after 6.3 s
+
+C10) per-device identity
+  [PASS] forged (rogue key), unsigned and tampered messages are all rejected  not_registered +1, unsigned +1, bad_signature +1
+  [PASS] none of them reached any CSE  
+  [PASS] after deregistration (council revoke) no reading is stored  rpi3 46 -> 46; bridges rejected 15 as not registered
+  [PASS] re-registered: readings flow again  rpi3 46 -> 51
+
+C8) exactly once
+  [PASS] no reading stored twice on any CSE  rpi1 40 (40 distinct), rpi3 67 (67 distinct)
+  [PASS] every reading taken is stored (union across the parent change)  107 taken, 107 stored, missing [], 0 in both trees
+  info: per bridge stored / dropped as duplicate (cache + CSE 409): rpi1 0/0+0, rpi2 48/0+0, rpi3 34/0+0, rpi4 18/0+6, rpi5 0/0+0
+  [PASS] graceful goodbye recorded offline  {'id': 'esp32-dht-01', 'node': 'rpi3', 'pk': '0de60b32e5d8189610c2e0cc4a7f7581bfea36626730989f51efd82354e12f02', 'retained': False, 'rx_ts': 1794345967824, 'session': '1.10', 'sig': '5f0e6078428bfe6e9177cb679ba7e5142b6dbff62bc76343d08bde41e2a7f7e0a3d413962b20aa2104fa5e00403c6f7626b118703b005b92f524c19257b94a06', 'signer': '0x89f441c554d891e04bd0a8b5f70d27b3927061b761f0e8274126610c01f121cf', 'state': 'offline'}
+
+31/31 checks passed
+
+### 7. dashboard simulator self-test
+[chain] 5 nodes registered; parent rpi1 (simulated v8 registries and failover cluster)
+[om2m] rpi1: OM2M up (fresh tree, new acp ris, DAC wired)
+[om2m] rpi2: OM2M up (fresh tree, new acp ris, DAC wired)
+[om2m] rpi3: OM2M up (fresh tree, new acp ris, DAC wired)
+[om2m] rpi4: OM2M up (fresh tree, new acp ris, DAC wired)
+[om2m] rpi5: OM2M up (fresh tree, new acp ris, DAC wired)
+[esp32] esp32-dht-01 powered on (new epoch) -> home broker rpi2, knows the whole cluster
+[esp32] esp32-ldr-01 powered on (new epoch) -> home broker rpi2, knows the whole cluster
+[esp32] esp32-dht-02 powered on (new epoch) -> home broker rpi3, knows the whole cluster
+
+== data path: one coherent tree on the parent
+  [PASS] readings stored on the parent (rpi1) as a DAS-wired AE  stored=4 ri=/in-cse/Cesp32-dht-01
+  [PASS] ...and on no other node  
+  [PASS] sensors attached to their home brokers  esp32-dht-01@rpi2 esp32-dht-02@rpi3
+
+== bad input
+[inject] esp32-dht-01: sent a malformed message via rpi2 -> bridge must reject it
+[inject] esp32-dht-01: sent a range message via rpi2 -> bridge must reject it
+[inject] esp32-dht-01: sent a spoof message via rpi2 -> bridge must reject it
+  [PASS] 3 bad messages rejected  rejected=3
+[inject] esp32-dht-01: replayed its last reading into rpi1's broker -> stored once only
+  [PASS] a reading replayed into another node's broker is stored once  duplicates dropped=1
+
+== ESP32 power loss
+[esp32] esp32-dht-02 lost power (no goodbye) -> its broker fires the Last Will
+  [PASS] Last Will -> offline  
+[esp32] esp32-dht-02 powered on (new epoch) -> home broker rpi3, knows the whole cluster
+  [PASS] power back -> online  
+
+== a node's broker dies: the sensor uses the rest of the cluster
+[mqtt] rpi2: Mosquitto DOWN -> its sensors fail over to the rest of the cluster
+  [PASS] esp32-dht-01 failed over off rpi2  now on rpi3
+  [PASS] its readings keep reaching the parent  18 -> 21
+[mqtt] rpi2: Mosquitto back -> sensors homed here return after the stability window
+  [PASS] returns home once rpi2 is stable again  
+
+== failover of the parent: writes follow the chain
+[chain] failover: cluster parent is now rpi3 (epoch 6) -> bridges write there
+  [PASS] readings now land on rpi3 (DAS-wired AE provisioned there)  stored on rpi3=3
+
+== parent OM2M outage + wipe
+[om2m] rpi3: OM2M DOWN (it is the parent: bridges buffer)
+[om2m] rpi3: OM2M up (fresh tree, new acp ris, DAC wired)
+  [PASS] re-provisioned with the buffered readings  stored=7 dac=True
+  [PASS] status restored after the wipe  
+
+== on-chain access through the DAS (simulated chain)
+[das] Creader-esp32-dht-01: GET esp32-dht-01 on the parent rpi3 (no special headers) ...
+[deny] 21:26:41 No Sui mapping for originator=Creader-esp32-dht-01 resource=/in-cse/Cesp32-dht-01 -> DENY
+  [PASS] before protecting: DENY (no Sui mapping)  
+[chain] esp32-dht-01: policy READ/min_trust 50 on /in-cse/Cesp32-dht-01 + a READ token for each of the 5 nodes; mappings added -> restarting every OM2M so the DAS loads them
+[om2m] rpi1: OM2M container recreated -> its tree is wiped
+[om2m] rpi1: OM2M up (fresh tree, new acp ris, DAC wired)
+[om2m] rpi2: OM2M container recreated -> its tree is wiped
+[om2m] rpi2: OM2M up (fresh tree, new acp ris, DAC wired)
+[om2m] rpi3: OM2M container recreated -> its tree is wiped
+[om2m] rpi3: OM2M up (fresh tree, new acp ris, DAC wired)
+[om2m] rpi4: OM2M container recreated -> its tree is wiped
+[om2m] rpi4: OM2M up (fresh tree, new acp ris, DAC wired)
+[om2m] rpi5: OM2M container recreated -> its tree is wiped
+[om2m] rpi5: OM2M up (fresh tree, new acp ris, DAC wired)
+[das] Creader-esp32-dht-01: GET esp32-dht-01 on the parent rpi3 (no special headers) ...
+[grant] 21:26:44 Sui GRANT originator=Creader-esp32-dht-01 resource=/in-cse/Cesp32-dht-01 op=1 digest=0x06b5c21ba9be.. (150 ms)
+[grant] granted RETRIEVE returned the latest reading: {'epoch': 94345979, 'humidity': 59.0, 'light_pct': 63, 'light_raw': 2618, 'node': 'rpi2', 'rx_ts': 1794346004027, 'seq': 47, 'temperature': 25.4, 'ts': 1794346004}
+  [PASS] ordinary RETRIEVE -> GRANT, returns the latest reading  21:26:44 Sui GRANT originator=Creader-esp32-dht-01 resource=/in-cse/Cesp32-dht-01 op=1 dig
+[das] Creader-esp32-dht-01: DELETE esp32-dht-01 on the parent rpi3 (no special headers) ...
+[deny] 21:26:44 Sui DENY originator=Creader-esp32-dht-01 resource=/in-cse/Cesp32-dht-01 op=4 err=cap_token::E_OP_NOT_ALLOWED(abort 4) (simulated, not submitted)
+  [PASS] DELETE -> DENY cap_token::E_OP_NOT_ALLOWED, not submitted (no gas)  21:26:44 Sui DENY originator=Creader-esp32-dht-01 resource=/in-cse/Cesp32-dht-01 op=4 err=
+[chain] rpi3: trust score set to 30 (stand-in for the engine's on-chain writes)
+[das] Creader-esp32-dht-01: GET esp32-dht-01 on the parent rpi3 (no special headers) ...
+[deny] 21:26:44 Sui DENY originator=Creader-esp32-dht-01 resource=/in-cse/Cesp32-dht-01 op=1 err=trust::E_TRUST_TOO_LOW(abort 2) (simulated, not submitted)
+  [PASS] parent's trust 30 -> DENY trust::E_TRUST_TOO_LOW  
+[chain] rpi3: trust score set to 75 (stand-in for the engine's on-chain writes)
+[das] Creader-esp32-dht-01: GET esp32-dht-01 on the parent rpi3 (no special headers) ...
+[grant] 21:26:44 Sui GRANT originator=Creader-esp32-dht-01 resource=/in-cse/Cesp32-dht-01 op=1 digest=0x76387fab93b4.. (150 ms)
+[grant] granted RETRIEVE returned the latest reading: {'epoch': 94345979, 'humidity': 59.3, 'light_pct': 63, 'light_raw': 2597, 'node': 'rpi2', 'rx_ts': 1794346004529, 'seq': 48, 'temperature': 25.7, 'ts': 1794346004}
+  [PASS] trust restored -> GRANT again  
+  [PASS] audit has grants and denials  
+
+19/19 checks passed
+
+ALL TEST GROUPS PASSED
+[run_e2e_in_docker] host=rpi1 exit=0 (container, image and /tmp/esp32-e2e.1628 removed on exit)

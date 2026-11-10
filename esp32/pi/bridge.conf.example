@@ -68,6 +68,25 @@ probe_timeout_s = 1.0
 announce_interval_s = 30
 announce_refresh_s = 300
 
+[identity]
+# Per-device identity. require: a message is accepted only if it is signed by
+# the sensor's own Ed25519 key AND that key's Sui address is registered in the
+# on-chain identity registry as an end device (role 3 = AE) whose cse_id is the
+# device id (council: id-register <address> <device-id> 3; revoke: id-deregister).
+# off: no authentication (v2 behaviour; only for old firmware).
+mode = require
+# sui.identity.registry.id (install.sh fills it from sui.properties)
+registry_id =
+# empty = [cluster] graphql_url
+graphql_url =
+# a council revocation takes effect within cache_ttl_s
+cache_ttl_s = 60
+negative_ttl_s = 15
+# chain unreadable: reuse a positive answer this old at most, then reject
+max_stale_s = 300
+# readings whose device timestamp is older than this are replays
+replay_window_s = 3600
+
 [bridge]
 # readings held in memory while the target CSE is down (e.g. a parent change
 # or an OM2M restart). 5 s interval -> 2000 = ~2.7 h for one device.

@@ -11,7 +11,7 @@ The design and its tests are in [V9_DESIGN.md](V9_DESIGN.md).
 | Package v9 (version 2) | `0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a`, upgrade tx `AQSn69Wq3VYfaiCkTVVBMgsXidbTY912LtFKu5GY9CXX` (≈ 0.207 SUI) |
 | Type origin (unchanged) | `0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1` (`sui.package.original.id`) |
 | Council | `0xd98ce1133d02066b0158d03e3dc928061a33c67170a12d73053f3c140c1924e0`, tx `9GcWp8CNNvmRVmjPgMmdQRtZj3uL27xVJYqfbHPRwqN6`; members rpi1–rpi5, threshold 3 |
-| UpgradeCap | still with the publisher `0xb87f…6a1e` (option A, chosen 2026-11-10). The 2-of-3 multisig (V9_DESIGN.md §5) is postponed |
+| UpgradeCap | still with the publisher `0xb87f…6a1e` (option A). The 3-of-5 multisig `0x05550e81…5e27` (publisher + upgrade keys on rpi1/3/4/5) exists, is funded and passed a live rehearsal on 2026-11-10 (section "UpgradeCap multisig"); **the transfer of the real cap waits for Mouaz's go** |
 | Bundle | `fd87d2e01ad6e6b6…` on all five nodes (157 JUnit tests pass) |
 
 ## 1. The two new nodes
@@ -246,7 +246,73 @@ each step on the member's own Pi, with its own key and cap:
      nothing (old ids only) and now warns when sourced. Override for a deliberate
      run against an old deployment: `SUI_OM2M_ALLOW_LEGACY=1`.
      `esp32/das/protect_sensor.sh` goes through the council (ESP section below).
-4. **The UpgradeCap multisig** (V9_DESIGN.md §5) when the three signers' keys exist.
+4. **The UpgradeCap multisig**: built and rehearsed live (section "UpgradeCap multisig"); only the irreversible transfer of the real cap is left, for Mouaz to confirm.
+
+## UpgradeCap multisig (2026-11-10)
+
+**Signers: 3 of 5.** The publisher (WSL on the laptop) plus a NEW dedicated
+"upgrade" ed25519 key on each of rpi1, rpi3, rpi4, rpi5, generated on the Pi and
+never copied off (`scripts/v9/upgrade_signer.sh init <node>`). Each Pi's upgrade key
+is separate from its node key: it lives in `/home/user/.sui-upgrade/upgrade.keystore`
+(dir 0700, file 0600) and is only used inside a throwaway `docker run --network none`
+container, so it never touches a network. rpi2 is left out because it is the
+long-running parent and DAS gateway, the most exposed node; any 3 of the 5 can still
+upgrade with rpi2 down. Losing the laptop leaves the four Pis (3 needed); losing any
+two machines still leaves three.
+
+| Label | Signer address | publicBase64Key |
+|---|---|---|
+| publisher | `0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e` | `AO3TGLRCHoeRtGn027yAHhRRPYMe/p8E0uoRGwcznB8N` |
+| rpi1 | `0xcf595562794e3299bb03d966daa2dd9f7bf0603065f555beb87202d409ab4341` | `AKMHQxBZAvQhiGlA32Pa7veprtA+5ZfcIxOFJxkZPthS` |
+| rpi3 | `0xdf375905dcc919dfd6491f52caca64bbb9380096adc2ce3ff1bb9f8e5406f049` | `AMAONKFFcMvTVCsWYNS5oF7rvGHDyQ2PAwcQ7TduH8ms` |
+| rpi4 | `0xa0541a542ae149f35e9215f9e5ce4f5be9093c444d4ef436549a0e83c700cf3d` | `ALA9NmWGx+Ce8Qt85QrF5cAHegNcY7Eyb20w0OOTdMfy` |
+| rpi5 | `0xb26ce0669889afc5f0353fdeb7ea0a34f842e34ddf3c2b24e9d8ccaf292f7df7` | `AAdrWB3q1A+VpTfQ2bj4J2o7oSV/Gz6YD+lWaLY7KVBj` |
+
+Multisig address (weights 1, threshold 3): **`0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27`**,
+recorded in `deploy/v9/multisig.env` (public keys only). Funded with 0.6 SUI of coins
+from rpi3 (tx `CqC7VtDG8T8U72VAdCg1M8gYiH6rrb6LWeUKQKinDXSD`); one upgrade of `move/`
+costs ≈ 0.21 SUI.
+
+**Live rehearsal** on a throwaway package (`scripts/v9/rehearse_upgrade_live.sh`, log
+`evidence/v9-rollout/multisig_rehearsal_2026-11-10.log`), same signer set:
+
+| Step | Result |
+|---|---|
+| publisher publishes throwaway package `0xc2cc862a…d321` | tx `Djvn9BKAAWrSvb2MnGBqYXN7rVwDtBRy9Bs7jdihmVXq` |
+| its UpgradeCap `0x5aec31a9…6836` → multisig | tx `C2q4pPvUgx4iqPRZFv7a1DwHDQiR2H3tDGr2rRQ436dY` |
+| publisher alone tries the upgrade | refused: "Object … is owned by account address 0x05550e81…, but given owner/signer address is 0xb87f…" |
+| 2 signatures (publisher + rpi1) | network rejects: `Invalid user signature: Insufficient weight=2 threshold=3`; nothing executed |
+| 3 signatures (publisher, rpi1, rpi3; each signed on its own machine) | upgrade tx `9CdkqfvCUY2Uxri5kzPWuUKxeVrvXDLvLzjeZ1fX21C`, version 2 at `0xf9736177…9738` has the new `upgraded()`; the cap stays with the multisig |
+| rpi4 + rpi5 + publisher (offline check) | combined signature decodes to the multisig address, threshold 3, `sigVerifyResult: OK` |
+
+An earlier attempt (a path bug in the script, fixed) left one more throwaway
+package, `0xcfb0b532…dcff0` (tx `8FDSdxr9…aGi2E`), whose UpgradeCap is still with the
+publisher. It holds nothing and controls nothing.
+
+**The real upgrade flow** from now on (Git Bash, after the transfer):
+
+```bash
+UPGRADE_LABEL=v10 CONFIRM='upgrade 0xba61b4fbc6b1c37c0f2ad38e62ebcae270e5fe01596339a028e9ce514556c3d2 to v10'   scripts/v9/upgrade_multisig.sh publisher rpi1 rpi3      # any 3 labels
+```
+
+It builds the unsigned upgrade in WSL (`02_upgrade.sh build`), has each signer sign
+the exact bytes on its own machine (a Pi's signature is produced in its offline
+container; only the signature comes back), checks each signature is from the key
+recorded for that label, combines them (`02_upgrade.sh combine` refuses fewer than 3)
+and executes. `--no-execute` stops after combining. Off-machine signers (a person on
+their own laptop, V9_SIGNERS.md §4) are passed as `SIG_<label>=...`.
+
+**Left for Mouaz: the transfer itself (irreversible without 3 signers).** In WSL:
+
+```bash
+cd /mnt/c/Users/Mouaz/Desktop/files/sui-om2m
+scripts/v9/01_transfer_upgradecap.sh                      # dry run: shows the exact tx, checks the funding
+CONFIRM='transfer upgradecap to 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27'   scripts/v9/01_transfer_upgradecap.sh --execute
+```
+
+which runs `sui client transfer --to 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27 --object-id 0xba61b4fbc6b1c37c0f2ad38e62ebcae270e5fe01596339a028e9ce514556c3d2 --gas-budget 10000000`
+as the publisher. After it, `02_upgrade.sh direct` refuses, and the publisher alone
+can no longer upgrade the package.
 
 ## ESP32 layer live (2026-11-10)
 
@@ -312,3 +378,50 @@ each proposed by rpi1, approved by rpi3 and rpi4, executed by rpi1:
   rpi2 claim `6doE2kSv…`, epoch 8), readings again, and the same read on rpi2 GRANTed
   (`CM6jb7Cf…`). `04_cutover.sh verify` afterwards: all five healthy, v2 gossip from
   all five, C2 GRANT; parent rpi2, epoch 8.
+
+### Per-device on-chain identity (2026-11-11)
+
+Each ESP32 now has its own on-chain identity. Design and limits are in
+`esp32/DESIGN.md` §9, and operation is in `esp32/README.md` §7.
+
+**No Move change and no package upgrade.** The device key's Sui address is
+registered in the existing identity registry as `ROLE_AE` (3), with
+`cse_id` = the device id. Registration uses council `id-register`; revocation uses
+`id-deregister`.
+
+**Order of changes, all live:**
+
+1. **Plugin bundle `b4900b82…`** (`sha256` of the jar), on all five nodes:
+   `04_cutover.sh prepare → redeploy → verify`.
+   - B10 gossip membership now requires role IN/MN (`role_of`), not just
+     `is_registered`, so a registered device key can never count as a trust observer.
+   - 176 JUnit tests pass (incl. the 6 in `IdentityRoleMembershipTest`).
+   - `verify`: all five healthy, v2 gossip from all five, C2 GRANT. No B10 rejections
+     of the five nodes after the restart.
+2. **Bridge v2.1 on all five nodes** (`deploy_to_pis.sh install`), with
+   `[identity] mode = require` and the registry id taken from `sui.properties`. On
+   each node the smoke test now checks that an **unsigned** reading is rejected
+   (`auth:unsigned`) and not stored.
+3. **Simulated `esp32-dht-01` on rpi1.** Its key was generated there
+   (`~/.config/om2m-esp32-sim/esp32-dht-01.key`, 0600, never copied). Address:
+   `0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b`.
+
+**Live sequence** (`esp32/evidence/device_identity_live_2026-11-11.txt`). Every vote
+was proposed by rpi1, with two approvals, then executed by rpi1:
+
+| Step | Proposal | Execute tx | Result |
+|---|---|---|---|
+| sensor running, not registered | — | — | every reading rejected `auth:device_not_registered`, nothing stored |
+| register (approvals rpi3, rpi4) | 11 | `8a9356Mva4Gi8L8oHykL6dFrtMXDNc7ChST1dsuBsSFB` | registry entry `{cse_id: esp32-dht-01, role: 3}`; readings stored on the parent (rpi2) with `signer` = the address; AE labelled `signer/0x450f…` |
+| forged / unsigned / tampered injected on the sensor's broker | — | — | rejected `device_not_registered` / `unsigned` / `bad_signature`; `e1-s999998`, `e1-s999999` → 404 on the parent |
+| protected read as `Cesp32-reader-01` | — | GRANT `FXsjQWtamh1pUX78cwDGwm4mRQTWwyCNhGrTkjKz35ML` | HTTP 200; DELETE 403 by free simulation |
+| revoke (approvals rpi3, rpi5) | 12 | `DtDBhyqDsiyJBTKWhKypCMNqe9gPeuKEANgYkyV9Z68s` | first rejection 10 s later on the home bridge; last reading stored 5 s after execution; nothing stored afterwards (all bridges reject) |
+| re-register (approvals rpi4, rpi5) | 13 | `4Vums73XvxNFRNfn3dDtSUn2s354wvMHnAWHwvz6Gfug` | readings flow again; the 35 readings taken while revoked (kept unacked by the sensor) were re-sent and stored: 106 taken, 106 stored, one signer |
+
+**Offline suite** (`esp32/sim/run_e2e_in_docker.sh`, on rpi1, container removed
+afterwards): all 7 groups pass. That includes:
+- the new identity unit tests (17/17);
+- the firmware signatures (C++/libsodium) checked in Python (3/3, 97 messages);
+- the firmware host build (13/13);
+- cluster C10: forged, unsigned, tampered and revoked messages are rejected, and
+  nothing is lost after re-registration (31/31).

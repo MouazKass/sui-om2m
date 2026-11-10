@@ -1,0 +1,122 @@
+# Per-device on-chain identity, live on the 5-node testbed, 2026-11-11
+# Simulated sensor esp32-dht-01 on rpi1 (sim/live_identity.sh), key generated on rpi1, never copied.
+# Device address 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b
+# Bridges v2.1 on all five nodes with [identity] mode = require; plugin bundle b4900b82 (B10 role check).
+#
+### before registration (01:33-01:35 local): the signed sensor ran unregistered; every bridge it reached logged
+###   "rejected message from esp32-dht-01: auth:device_not_registered" (rpi2, rpi3, rpi4, rpi5) and nothing was stored.
+
+### council id-register 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b esp32-dht-01 role 3 (2026-11-10T21:34:39Z)
+
+=== propose action 20 by rpi1 (target 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b, text 'esp32-dht-01', values 3/0/0, ttl 86400000 ms) ===
+GL27qP7AMKpjuVgbf5jvAiZSF8GuJ3J2mCw6JxC6tTZ success 
+proposal_id 11
+
+=== approve proposal 11 by rpi3 ===
+EGXoD6mhygZZ9fScgDszkba2M1adctnYJxt8APHDud8J success 
+approvals 2
+
+=== approve proposal 11 by rpi4 ===
+DLp2L5t1Bx5hZHnFbNU3UUkfKiaBTSkKzHg5R2284BgX success 
+approvals 3
+
+=== execute proposal 11 (action 20) by rpi1 ===
+8a9356Mva4Gi8L8oHykL6dFrtMXDNc7ChST1dsuBsSFB success 
+executed action 20.0
+injecting on rpi3 (10.25.96.203:1883), where the sensor is attached
+  sent forged: valid signature by an attacker's own key, claiming this device id
+  sent unsigned: the same reading with no signature
+  sent tampered: genuine reading seq 29 with seq changed to 999998
+check: journalctl -u om2m-ipe-bridge on rpi3 | grep 'rejected message from esp32-dht-01'
+### rpi3 bridge log right after the injection
+2026-11-11 01:35:24,144 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+2026-11-11 01:35:29,164 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+2026-11-11 01:35:34,505 INFO ipe-bridge: provisioned esp32-dht-01 on http://10.25.96.201:8282 (existing): AE /in-cse/Cesp32-dht-01 acpi ['/in-cse/acp-820089619'] daci ['/in-cse/dac-898297159']
+2026-11-11 01:35:59,913 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+2026-11-11 01:35:59,913 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:unsigned
+2026-11-11 01:35:59,914 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:bad_signature
+### stored on the parent (rpi2) with rn s999998 / s999999? (HTTP code of each)
+e1-s999998 -> 404
+e1-s999999 -> 404
+### protected read on the parent (rpi2) as Cesp32-reader-01
+== 1. RETRIEVE esp32-dht-01 as Cesp32-reader-01 -> expect GRANT
+   latest reading: {"epoch":1,"humidity":56.9,"light_pct":63,"light_raw":2618,"node":"rpi3","rx_ts":1794346579319,"seq":33,"temperature":25.3,"ts":1794346579}
+   HTTP 200
+
+   Sui GRANT originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=1 digest=FXsjQWtamh1pUX78cwDGwm4mRQTWwyCNhGrTkjKz35ML (3391 ms)
+== 2. DELETE esp32-dht-01 as Cesp32-reader-01 -> expect 403 / DENY, no transaction
+   HTTP 403
+   Sui DENY originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=4 source=SIMULATED err=cap_token::E_OP_NOT_ALLOWED (abort 4) [raw: precheck: MoveAbort(MoveLocation { module: ModuleId { address: 0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("cap_token") }, function_name: Some("validate_for_use"), instruction: 55 }, 4) -- Error in 3rd command, from '0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a::cap_token::validate_for_use' (instruction 55), abort code: 4]
+== 3. control: RETRIEVE esp32-dht-01/data/la as Cesp32-reader-01 -> expect 403, no Sui line
+   HTTP 403
+   (nothing above = the DAS was not consulted, as expected)
+### device AE labels on the parent (rpi2)
+ ri /in-cse/Cesp32-dht-01
+   type/esp32
+   device/esp32-dht-01
+   signer/0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b
+   latest={"epoch":1,"humidity":55.4,"light_pct":53,"light_raw":2172,"node":"rpi3","rx_ts":1794346594371,"seq":36,"temperature":25.4,"ts":17943
+### council id-deregister 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b (revoke the device) (2026-11-10T21:36:43Z)
+
+=== propose action 21 by rpi1 (target 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b, text '', values 0/0/0, ttl 86400000 ms) ===
+H3m5sEK5vvPaWGDRXM8vGjnUNnFmVmfE72rgkDf5wpq3 success 
+proposal_id 12
+
+=== approve proposal 12 by rpi3 ===
+DErhq3rJEJAbuE3t8UDyKK9FNPHpLNCTQVPFzQ2WS8Bv success 
+approvals 2
+
+=== approve proposal 12 by rpi5 ===
+DVQv5BCtkmgEgK7xZETyQi69LhbN85YWAWSKqV386iPw success 
+approvals 3
+
+=== execute proposal 12 (action 21) by rpi1 ===
+DtDBhyqDsiyJBTKWhKypCMNqe9gPeuKEANgYkyV9Z68s success 
+executed action 21.0
+revocation executed at 2026-11-10T21:37:39Z
+### after the revocation (executed 21:37:39Z = 01:37:39 local): bridge decisions for esp32-dht-01, 01:37:00-01:40:00 local
+  rpi1: ...
+  rpi1: rejections as not registered: 0
+  rpi2: 2026-11-11 01:37:49,820 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi2: 2026-11-11 01:37:54,612 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi2: 2026-11-11 01:37:59,629 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi2: ...
+  rpi2: rejections as not registered: 25
+  rpi3: 2026-11-11 01:38:09,855 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi3: 2026-11-11 01:38:09,856 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi3: 2026-11-11 01:38:11,132 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi3: ...
+  rpi3: rejections as not registered: 33
+  rpi4: 2026-11-11 01:38:29,912 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi4: 2026-11-11 01:38:29,913 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi4: 2026-11-11 01:38:31,194 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi4: ...
+  rpi4: rejections as not registered: 13
+  rpi5: 2026-11-11 01:38:49,986 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi5: 2026-11-11 01:38:49,987 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi5: 2026-11-11 01:38:51,267 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:device_not_registered
+  rpi5: ...
+  rpi5: rejections as not registered: 17
+### latest stored reading on the parent (rpi2) at 21:39:28Z: e1-s50, created 20261110T213744 (5 s after the revocation, inside the 60 s cache bound); none after
+### council id-register again (restore) (2026-11-10T21:39:50Z)
+
+=== propose action 20 by rpi1 (target 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b, text 'esp32-dht-01', values 3/0/0, ttl 86400000 ms) ===
+Hy5nJz6MCQn41U5M6QjzTymmt4rCwrUop72V7m8LmHyk success 
+proposal_id 13
+
+=== approve proposal 13 by rpi4 ===
+6VfFAU9sqzLT6mkxQX3R6e6vHZ9APonwP4TggoN5EoXf success 
+approvals 2
+
+=== approve proposal 13 by rpi5 ===
+BkfdQEiBrd76WWJCrPUrwuVVvy7ouREwTNqTZJYrj7zo success 
+approvals 3
+
+=== execute proposal 13 (action 20) by rpi1 ===
+4Vums73XvxNFRNfn3dDtSUn2s354wvMHnAWHwvz6Gfug success 
+executed action 20.0
+re-registration executed at 2026-11-10T21:40:38Z
+### final state on the parent (rpi2) after re-registration and stop
+stored readings 106 seq 0 .. 105
+missing seqs: [] (the 35 readings taken while revoked, seq 51-85, were rejected then, kept unacked in the sensor's resend buffer, and re-sent and stored after re-registration; sensor: 'finished: 106 readings taken, 0 unacknowledged')
+signer of every stored reading: {'0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b'}

@@ -29,6 +29,11 @@ Scenarios
                              unmapped originator -> DENY; the data container is never DAS'd
   C9  bridge down            the broker is up but its bridge died: nothing is acked, so
                              the sensor fails over instead of losing readings
+ C10  device identity      every message is signed by the sensor's own key and accepted only
+                             while that key is registered on-chain for the device: forged
+                             (rogue key), tampered and unsigned messages are rejected; after a
+                             deregistration (council revoke) readings stop, after re-registering
+                             the backlog is re-sent and nothing is lost
   C8  exactly once           every reading stored, none twice (within each tree), union
                              complete across the parent change
 """
@@ -53,6 +58,7 @@ CLUSTER = "0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f"
 PKG = "0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1"
 CHAIN, GQL = 19210, 19211
 DEV, READER = "esp32-dht-01", "Creader-01"
+REGISTRY = "0x1d"                     # mock identity registry id (mock_sui_gql.py)
 RID = f"/in-cse/C{DEV}"
 N = {f"rpi{i}": {"mqtt": 18840 + i, "proxy": 18850 + i, "cse": 18290 + i,
                  "addr": "0x" + f"{i:02x}" * 32} for i in range(1, 6)}
@@ -166,6 +172,11 @@ probe_interval_s = 1
 probe_timeout_s = 0.3
 announce_interval_s = 1
 announce_refresh_s = 30
+[identity]
+mode = require
+registry_id = {REGISTRY}
+cache_ttl_s = 2
+negative_ttl_s = 1
 [bridge]
 retry_interval_s = 0.5
 stats_interval_s = 1
@@ -202,6 +213,13 @@ def main():
 
     start("gql", [PY, os.path.join(HERE, "mock_sui_gql.py"), "--port", str(GQL), "--cluster", CLUSTER,
                   "--pkg", PKG, "--parent", N["rpi1"]["addr"], "--poa", cse_url("rpi1") + "/", "--epoch", "5"])
+    # the sensor's own key, made here (its "device"), registered like a council id-register
+    key = os.path.join(tmp, "device-key", f"{DEV}.key")
+    ident = json.loads(subprocess.check_output([PY, os.path.join(HERE, "esp32_sim.py"), "--device", DEV,
+                                                "--key", key, "--print-identity"]))
+    until(lambda: requests.get(f"http://127.0.0.1:{GQL}/__state", timeout=1).ok, 10)
+    requests.post(f"http://127.0.0.1:{GQL}/__reg", json={"addr": ident["address"], "cse_id": DEV, "role": 3},
+                  timeout=3)
     members = members_file(["rpi1", "rpi2", "rpi3", "rpi4"])      # rpi5 is not onboarded yet
     for n, c in N.items():
         start(f"mqtt-{n}", ["mosquitto", "-p", str(c["mqtt"])])
@@ -222,7 +240,7 @@ def main():
                   "--connect-timeout", "1", "--backoff-base", "1", "--backoff-max", "8",
                   "--home-probe", "1", "--home-stable", "4", "--ack-wait", "1", "--drain", "20",
                   "--no-ack-failover", "6",
-                  "--state-file", os.path.join(tmp, "nvs.json")])
+                  "--state-file", os.path.join(tmp, "nvs.json"), "--key", key])
 
     # ---- C0 -------------------------------------------------------------------------
     print("\nC0) attach to home, write to the parent")
@@ -238,6 +256,12 @@ def main():
           f"acpi={ae.get('acpi')} daci={ae.get('daci')}")
     others = {n: DEV in dump(n)["aes"] for n in ("rpi2", "rpi3", "rpi4", "rpi5")}
     check("no copy on the other nodes (one coherent tree)", not any(others.values()), str(others))
+    cin = requests.get(f"{cse_url('rpi1')}/~/in-cse/in-name/{DEV}/data/la", headers=HDR, timeout=3)
+    con = json.loads(cin.json()["m2m:cin"]["con"]) if cin.ok else {}
+    check("stored reading is attributed to the device's on-chain identity (signer + sig kept)",
+          con.get("signer") == ident["address"] and len(con.get("sig", "")) == 128
+          and f"signer/{ident['address']}" in ae.get("lbl", []),
+          f"signer={con.get('signer')}")
     lbl = [x for x in ae.get("lbl", []) if x.startswith("latest=")]
     check("AE label mirrors the latest reading", lbl and '"seq":' in lbl[0], (lbl or ["-"])[0][:90])
 
@@ -357,6 +381,59 @@ def main():
           f"now on {st and st.get('broker')} after {dt:.1f} s")
     start(f"bridge-{cur}", [PY, os.path.join(ROOT, "pi", "om2m_ipe_bridge.py"), "-c",
                             os.path.join(tmp, f"bridge-{cur}.conf")])
+
+    # ---- C10 ------------------------------------------------------------------------
+    print("\nC10) per-device identity")
+    sys.path.insert(0, os.path.join(ROOT, "pi"))
+    import esp_identity as idm
+    import paho.mqtt.client as pm
+    via = (latest_status("rpi3") or {}).get("broker") or "rpi2"   # the broker the sensor is on
+    port = N[via]["mqtt"]
+    try:
+        cap = pm.Client(pm.CallbackAPIVersion.VERSION2)
+    except AttributeError:
+        cap = pm.Client()
+    got = []
+    cap.on_message = lambda c, u, m: got.append(m.payload)
+    cap.connect("127.0.0.1", port)
+    cap.subscribe(f"sensors/{DEV}/telemetry")
+    cap.loop_start()
+    pub = lambda payload: cap.publish(f"sensors/{DEV}/telemetry", payload, qos=1).wait_for_publish(3)
+    st0 = bridge_stats(via)
+    rogue = idm.Ed25519PrivateKey.generate()
+    cur_epoch = (latest_status("rpi3") or {}).get("epoch", 1)
+    forged = {"v": 2, "id": DEV, "epoch": cur_epoch, "boot": "00000000", "seq": 999999, "ts": 0,
+              "temperature": 31.0, "humidity": 50.0}
+    pub(idm.sign_obj(forged, rogue))                                     # attacker's own key
+    pub(json.dumps(forged, separators=(",", ":")))                       # unsigned
+    genuine = until(lambda: got[-1] if got and b'"sig":"' in got[-1] else None, 10)
+    if genuine:                                                          # a real reading, altered
+        g = json.loads(genuine)
+        pub(genuine.replace(f'"seq":{g["seq"]},'.encode(), b'"seq":999998,', 1))
+    time.sleep(2.5)
+    st1 = bridge_stats(via)
+    d = lambda k: st1.get(k, 0) - st0.get(k, 0)
+    check("forged (rogue key), unsigned and tampered messages are all rejected",
+          d("rejected:auth:device_not_registered") >= 1 and d("rejected:auth:unsigned") >= 1
+          and d("rejected:auth:bad_signature") >= 1,
+          f"not_registered +{d('rejected:auth:device_not_registered')}, unsigned +{d('rejected:auth:unsigned')}, "
+          f"bad_signature +{d('rejected:auth:bad_signature')}")
+    check("none of them reached any CSE", not any(x in seen_seqs(n) for n in ("rpi1", "rpi3")
+                                                  for x in (999998, 999999)))
+    cap.loop_stop()
+    cap.disconnect()
+
+    requests.post(f"http://127.0.0.1:{GQL}/__dereg", json={"addr": ident["address"]}, timeout=3)
+    time.sleep(3)                                                        # > cache_ttl_s
+    n3 = len(rns("rpi3"))
+    time.sleep(5)
+    rej = sum(bridge_stats(n).get("rejected:auth:device_not_registered", 0) for n in N)
+    check("after deregistration (council revoke) no reading is stored",
+          len(rns("rpi3")) == n3, f"rpi3 {n3} -> {len(rns('rpi3'))}; bridges rejected {rej} as not registered")
+    requests.post(f"http://127.0.0.1:{GQL}/__reg", json={"addr": ident["address"], "cse_id": DEV, "role": 3},
+                  timeout=3)
+    ok = until(lambda: len(rns("rpi3")) > n3 + 4, 40)
+    check("re-registered: readings flow again", ok, f"rpi3 {n3} -> {len(rns('rpi3'))}")
 
     # ---- C8 -------------------------------------------------------------------------
     print("\nC8) exactly once")

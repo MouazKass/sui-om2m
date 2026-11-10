@@ -1,3 +1,5 @@
+> **Historical (v7).** Superseded by README.md; kept for the record.
+
 # Verify these signatures on your laptop before running
 
 The scripts use function names and field names from our build sessions and the

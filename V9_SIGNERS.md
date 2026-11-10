@@ -1,9 +1,42 @@
-# v9 upgrade signers: what you need to do
+# v9 upgrade signers
 
-You have been asked to be one of the **three signers** for the sui-om2m Move
-package on Sui **testnet**. Upgrades will need **2 of the 3** signers, so no
-single person or laptop can change the contract alone. This page is everything
-you need. It takes about 10 minutes now and about 2 minutes per upgrade later.
+## 0. The signer set now (2026-11-10): 3 of 5, on five machines
+
+| Label | Where the key lives | How it signs |
+|---|---|---|
+| publisher | WSL on Mouaz's laptop (the publisher key) | `sui keytool sign` in WSL |
+| rpi1, rpi3, rpi4, rpi5 | a dedicated upgrade key generated ON that Pi, `/home/user/.sui-upgrade/upgrade.keystore` (0600), separate from its node key | `scripts/v9/upgrade_signer.sh sign <node> <tx.b64>`: signs inside a `docker run --network none` container, returns only the signature |
+
+Any 3 can upgrade; 2 cannot (rehearsed live, ROLLOUT_V9.md "UpgradeCap multisig").
+Addresses and public keys: `deploy/v9/multisig.env` and the ROLLOUT_V9.md table.
+One command runs a whole upgrade: `scripts/v9/upgrade_multisig.sh <3 labels>`.
+
+Operator commands (Git Bash on the laptop):
+
+```bash
+scripts/v9/upgrade_signer.sh pubkey rpi3              # address + public key of rpi3's upgrade key
+scripts/v9/upgrade_signer.sh show   rpi3 upgrade.tx.b64   # decode the tx ON the Pi before signing
+scripts/v9/upgrade_signer.sh sign   rpi3 upgrade.tx.b64   # -> suiSignature (only output)
+```
+
+There is no mnemonic backup for a Pi key on purpose: a dead Pi or SD card is
+handled like a lost key (section 5): three remaining signers move the UpgradeCap
+to a new multisig (`00_multisig.sh` with the new key set, then a 3-signed
+`sui client transfer` of the cap).
+
+**Replacing a machine signer with a person** (e.g. Hamza): they follow sections
+1–4 below on their own machine, send their public key, and the set is re-derived
+with `00_multisig.sh -t 3 -l "<labels>" <pks...>` and the cap moved with 3 signatures.
+Their signature is passed to the upgrade as `SIG_<label>=...`.
+
+---
+
+## For a human signer: what you need to do
+
+You have been asked to be one of the signers for the sui-om2m Move package on Sui
+**testnet**. Upgrades need a majority of the signers (3 of 5 today), so no single
+person or machine can change the contract alone. This section is everything you
+need. It takes about 10 minutes now and about 2 minutes per upgrade later.
 
 **The one rule: never send your private key, mnemonic or `.keystore` file to
 anyone, including Mouaz.** You only ever send a *public key* (now) and a
@@ -60,12 +93,12 @@ sui keytool list          # copy the publicBase64Key column for your address
 Do not send the mnemonic, the `.key` file, `sui.keystore`, or anything that
 says `suiprivkey`.
 
-Mouaz combines the three public keys into one shared multisig address
+Mouaz combines the public keys into one shared multisig address
 (`scripts/v9/00_multisig.sh`). You can check that address yourself, because
-it is derived from public data only:
+it is derived from public data only (the keys in `deploy/v9/multisig.env`, in that order):
 
 ```bash
-sui keytool multi-sig-address --pks <PK_MOUAZ> <PK_HAMZA> <PK_THIRD> --weights 1 1 1 --threshold 2
+sui keytool multi-sig-address --pks <PK1> <PK2> <PK3> <PK4> <PK5> --weights 1 1 1 1 1 --threshold 3
 ```
 
 ## 4. Sign an upgrade (each time)
@@ -90,9 +123,9 @@ sui keytool sign --address <your-suiAddress> --data "$(cat upgrade.tx.b64)"
 ```
 
 Send back **only** the `suiSignature` value. It is 132 Base64 characters
-starting with `A`. The order you and the other signer reply in doesn't matter.
+starting with `A`. The order the signers reply in doesn't matter.
 `02_upgrade.sh combine` sorts the signatures into key order, and it rejects a
-signature from a key that isn't one of the three.
+signature from a key that isn't a member.
 
 A signature covers those exact bytes only. It can't be reused for a different
 transaction, and if the transaction is rebuilt, for example after a gas coin
@@ -100,11 +133,11 @@ changed, you'll be asked to sign the new file.
 
 ## 5. If something goes wrong
 
-- **Lost key (mnemonic gone):** tell Mouaz. While the other two signers still
+- **Lost key (mnemonic gone):** tell Mouaz. While three other signers still
   have their keys, they can move the UpgradeCap to a new multisig that uses
   your new key.
 - **Key possibly exposed:** tell Mouaz straight away. The fix is the same as
-  for a lost key. One exposed key alone can't upgrade anything; it takes two.
+  for a lost key. One exposed key alone can't upgrade anything; it takes three.
 - **Asked to sign something you don't recognise:** don't sign it. Ask first.
 
 ---

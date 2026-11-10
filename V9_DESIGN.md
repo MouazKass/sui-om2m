@@ -366,7 +366,21 @@ built in a WSL copy.
 | `adding_member_that_breaks_majority_rejected` | 7 |
 | `removing_below_threshold_rejected` | 7 |
 
-## 5. Moving the UpgradeCap to a 2-of-3 multisig
+## 5. Moving the UpgradeCap to a multisig
+
+> **Current (2026-11-11): 3-of-5, built and rehearsed live.** Signers are the
+> publisher key (WSL) plus a dedicated upgrade key generated on each of rpi1,
+> rpi3, rpi4 and rpi5 (rpi2, the usual parent, is left out). Multisig
+> `0x05550e81…5e27`, public keys in `deploy/v9/multisig.env`. Tooling:
+> `scripts/v9/upgrade_signer.sh` (on each Pi), `scripts/v9/upgrade_multisig.sh`
+> (build, sign on each machine, combine, execute). Rehearsal on a throwaway
+> package: 2 signatures rejected, 3 accepted (`ROLLOUT_V9.md`, "UpgradeCap
+> multisig"; `evidence/v9-rollout/multisig_rehearsal_2026-11-10.log`). The real
+> v9 UpgradeCap transfer (`scripts/v9/01_transfer_upgradecap.sh --execute`) is
+> run by Mouaz. The 2-of-3 person-signer plan below is the original design,
+> still valid if human signers replace the Pi keys (`V9_SIGNERS.md`).
+
+### Original design: 2-of-3 person signers
 
 Signers (weight 1 each, threshold 2): **Mouaz**, **Hamza** and a **third
 signer**. The third can be a cold key kept offline, but not the same machine

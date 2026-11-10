@@ -7,7 +7,7 @@
 #
 # Prereqs: Git Bash on the laptop; the node SSH key (~/.ssh/id_ed25519_suiom2m,
 #   override with SSH_KEY); the VPN to the Pis; WSL Ubuntu with the publisher's
-#   sui CLI (used for reads and for the publisher-signed steps of 07 and 09).
+#   sui CLI (read-only queries). Admin steps of 07/09 go through the council.
 #   IDs come from deploy/v8/env.v8.sh (generated from deploy/v8/deployment.env).
 #
 #   proofs/run_all.sh            # interactive, pauses between concepts

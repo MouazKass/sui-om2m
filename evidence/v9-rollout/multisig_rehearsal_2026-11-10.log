@@ -1,0 +1,78 @@
+# multisig upgrade rehearsal 2026-11-10T21:15:06Z, signers: publisher rpi1 rpi3
+workdir /tmp/tmp.9tJxj5zOyA
+multisig 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27 (threshold 3 of 5: publisher rpi1 rpi3 rpi4 rpi5)
+
+=== 1-2. publish the throwaway package, hand its UpgradeCap to the multisig ===
+INCLUDING DEPENDENCY MoveStdlib
+INCLUDING DEPENDENCY Sui
+BUILDING upgrade_rehearsal
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmp.9tJxj5zOyA/publish.json'
+# multisig upgrade rehearsal 2026-11-10T21:15:50Z, signers: publisher rpi1 rpi3
+workdir C:/Users/Mouaz/AppData/Local/Temp/tmp.IR7T7JELN4
+multisig 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27 (threshold 3 of 5: publisher rpi1 rpi3 rpi4 rpi5)
+
+=== 1-2. publish the throwaway package, hand its UpgradeCap to the multisig ===
+INCLUDING DEPENDENCY MoveStdlib
+INCLUDING DEPENDENCY Sui
+BUILDING upgrade_rehearsal
+publish tx Djvn9BKAAWrSvb2MnGBqYXN7rVwDtBRy9Bs7jdihmVXq: package 0xc2cc862a5498ef06fa433171a72108ae11515382ced69a8d64a323d263b7d321, UpgradeCap 0x5aec31a91bf4116828ff7de6b7819b89e7c31f29d2859a44cf51fbf16ac66836
+transfer tx C2q4pPvUgx4iqPRZFv7a1DwHDQiR2H3tDGr2rRQ436dY: UpgradeCap -> 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27
+
+=== 3. multisig gas ===
+multisig coin balance: 0 MIST
+# multisig upgrade rehearsal 2026-11-10T21:17:16Z, signers: publisher rpi1 rpi3
+workdir C:/Users/Mouaz/AppData/Local/Temp/tmp.IR7T7JELN4
+multisig 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27 (threshold 3 of 5: publisher rpi1 rpi3 rpi4 rpi5)
+
+=== 1-2. publish the throwaway package, hand its UpgradeCap to the multisig ===
+publish tx Djvn9BKAAWrSvb2MnGBqYXN7rVwDtBRy9Bs7jdihmVXq: package 0xc2cc862a5498ef06fa433171a72108ae11515382ced69a8d64a323d263b7d321, UpgradeCap 0x5aec31a91bf4116828ff7de6b7819b89e7c31f29d2859a44cf51fbf16ac66836
+transfer tx C2q4pPvUgx4iqPRZFv7a1DwHDQiR2H3tDGr2rRQ436dY: UpgradeCap -> 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27
+
+=== 3. multisig gas ===
+multisig coin balance: 0 MIST
+fund tx CqC7VtDG8T8U72VAdCg1M8gYiH6rrb6LWeUKQKinDXSD: 600000000 MIST from rpi3 -> 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27
+
+=== 4. compatible change -> unsigned upgrade, signed on each machine, combined ===
+
+=== 1. build the unsigned upgrade (multisig 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27) ===
+
+=== serialize unsigned upgrade tx (sender 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27) ===
+[Note]: Dependency sources are no longer verified automatically during publication and upgrade. You can pass the `--verify-deps` option if you would like to verify them as part of publication or upgrade.
+INCLUDING DEPENDENCY MoveStdlib
+INCLUDING DEPENDENCY Sui
+BUILDING upgrade_rehearsal
+wrote /mnt/c/Users/Mouaz/AppData/Local/Temp/tmp.IR7T7JELN4/v9/upgrade.tx.b64 (764 chars, sha256 b0d48c21f004800a)
+
+Collect 3 of the 5 signers' signatures (V9_SIGNERS.md):
+  node signers:   scripts/v9/upgrade_signer.sh sign <node> /mnt/c/Users/Mouaz/AppData/Local/Temp/tmp.IR7T7JELN4/v9/upgrade.tx.b64   (Git Bash)
+  other signers:  sui keytool sign --address <their-address> --data "$(cat upgrade.tx.b64)"
+Then: scripts/v9/02_upgrade.sh combine <sig1> <sig2> ...   (or let scripts/v9/upgrade_multisig.sh do all of it)
+tx sha256 b0d48c21f004800a
+
+=== 2. collect signatures, each on its signer's own machine ===
+  publisher: signed (key AO3TGLRCHoeR...)
+  rpi1: signed (key AKMHQxBZAvQh...)
+  rpi3: signed (key AMAONKFFcMvT...)
+
+=== 3. combine (threshold 3 of 5) ===
+combined multisig signature -> /mnt/c/Users/Mouaz/AppData/Local/Temp/tmp.IR7T7JELN4/v9/upgrade.multisig
+
+--no-execute: combined signature in /tmp/tmp.IR7T7JELN4/v9/upgrade.multisig; run 02_upgrade.sh execute in WSL
+
+=== 5. NEGATIVE: the publisher alone can no longer upgrade ===
+    code: 'Client specified an invalid argument', message: "Error checking transaction input objects: Transaction was not signed by the correct sender: Object 0x5aec31a91bf4116828ff7de6b7819b89e7c31f29d2859a44cf51fbf16ac66836 is owned by account address 0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27, but given owner/signer address is 0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e"
+PASS: publisher-only upgrade refused
+
+=== 6. NEGATIVE: 2 signatures are rejected by the network ===
+network response: code: 'Client specified an invalid argument', message: "Invalid user signature: Signature is not valid: Insufficient weight=2 threshold=3", source: RpcError(Status { code: InvalidArgument, message: "Invalid user signature: Signature is not valid: Insufficient weight=2 threshold=3", details: b"\x08\x03\x12QInvalid user signature: Signature is not valid: Insufficient weight=2 threshold=3", metadata: MetadataMap { headers: {"content-type": "application/grpc", "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000", "content-length": "0", "via": "1.1 google", "x-sui-chain-id": "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD", "x-sui-chain": "testnet", "x-sui-epoch": "1279", "x-sui-checkpoint-height": "405035477", "x-sui-timestamp-ms": "1794345514660", "x-sui-timestamp": "2026-11-10T21:18:34.660Z", "x-sui-lowest-available-checkpoint": "399665885", "x-sui-lowest-available-checkpoint-objects": "399665885", "server": "sui-node/1.84.0-9dc25070cf2e", "vary": "origin, access-control-request-method, access-control-request-headers", "access-control-allow-origin": "*", "access-control-expose-headers": "*", "server-timing": "finish_request;dur=1", "date": "Tue, 10 Nov 2026 21:18:35 GMT"} }, source: None })
+PASS: 2-of-5 signature rejected by the network, nothing executed
+
+=== 7. execute the threshold-signed upgrade ===
+upgrade tx 9CdkqfvCUY2Uxri5kzPWuUKxeVrvXDLvLzjeZ1fX21C: package version 2 at 0xf9736177fac180c50bc0ec0e101e68c02606528fdede182ec23a722597159738
+{"data":{"object":{"asMovePackage":{"version":2,"module":{"functions":{"nodes":[{"name":"upgraded"},{"name":"version"}]}}}}}}
+{"data":{"object":{"owner":{"address":{"address":"0x05550e813f979541b7dbc8125a9b96561ccc4e94b07887d0e2a7259b40555e27"}}}}}
+PASS: version 2 has upgraded(); the UpgradeCap is still owned by the multisig
+
+SUMMARY publish=Djvn9BKAAWrSvb2MnGBqYXN7rVwDtBRy9Bs7jdihmVXq transfer=C2q4pPvUgx4iqPRZFv7a1DwHDQiR2H3tDGr2rRQ436dY fund=CqC7VtDG8T8U72VAdCg1M8gYiH6rrb6LWeUKQKinDXSD upgrade=9CdkqfvCUY2Uxri5kzPWuUKxeVrvXDLvLzjeZ1fX21C package=0xc2cc862a5498ef06fa433171a72108ae11515382ced69a8d64a323d263b7d321 cap=0x5aec31a91bf4116828ff7de6b7819b89e7c31f29d2859a44cf51fbf16ac66836 signers=publisher rpi1 rpi3

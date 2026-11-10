@@ -9,10 +9,16 @@ offline tests. It is NOT Sui.
       -> MoveValue json = base64(PoA url)          (as live testnet returns it)
   ... ParentPoaOwnerKey -> MoveValue json = owner address (v9), or null (v8)
 
+  object(address: <identity registry>)  -> {"id", "nodes": {"id": <table>, "size"}}
+  address(address: <table>) { dynamicField(name: {type: "address", bcs}) }
+      -> MoveValue json {"cse_id", "role", "registered_at_ms"} or null  (device identity)
+
 Response shapes are copied from a live testnet read of the v8 cluster object
 (2026-11-10). Control endpoints for tests:
   POST /__set   {"parent": addr, "epoch": n, "poa": url|null, "owner": addr|null}
   POST /__fail  {"on": true|false}   (every query -> HTTP 503 while on)
+  POST /__reg   {"addr": a, "cse_id": s, "role": n}   (council id-register)
+  POST /__dereg {"addr": a}                            (council id-deregister)
 """
 
 import argparse
@@ -26,7 +32,7 @@ from flask import Flask, Response, request
 app = Flask(__name__)
 LOCK = threading.Lock()
 S = {"parent": "", "epoch": 0, "poa": None, "owner": None, "fail": False, "queries": 0,
-     "cluster": "", "pkg": ""}
+     "cluster": "", "pkg": "", "registry": "0x1d", "table": "0x7ab1e", "ids": {}}
 
 
 def j(body, code=200):
@@ -41,6 +47,15 @@ def graphql():
             return j({"errors": [{"message": "service unavailable"}]}, 503)
         b = request.get_json(force=True)
         q, v = b.get("query", ""), b.get("variables") or {}
+        vid = v.get("id", "").lower()
+        if vid == S["registry"]:
+            return j({"data": {"object": {"asMoveObject": {"contents": {"json": {
+                "id": S["registry"], "nodes": {"id": S["table"], "size": str(len(S["ids"]))}}}}}}})
+        if vid == S["table"] and "dynamicField" in q:
+            addr = "0x" + base64.b64decode(v.get("bcs", "")).hex()
+            e = S["ids"].get(addr)
+            return j({"data": {"address": {"dynamicField":
+                      {"value": {"__typename": "MoveValue", "json": e}} if e else None}}})
         if v.get("id", "").lower() != S["cluster"].lower():
             return j({"data": {"object": None}})
         if "dynamicField" in q:
@@ -66,6 +81,22 @@ def set_state():
         for k in ("parent", "epoch", "poa", "owner"):
             if k in b:
                 S[k] = b[k]
+    return j({"ok": True})
+
+
+@app.post("/__reg")
+def reg():
+    b = request.get_json(force=True)
+    with LOCK:
+        S["ids"][b["addr"].lower()] = {"cse_id": b["cse_id"], "role": int(b.get("role", 3)),
+                                       "registered_at_ms": "1"}
+    return j({"ok": True})
+
+
+@app.post("/__dereg")
+def dereg():
+    with LOCK:
+        S["ids"].pop(request.get_json(force=True)["addr"].lower(), None)
     return j({"ok": True})
 
 

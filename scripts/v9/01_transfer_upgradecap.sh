@@ -5,8 +5,9 @@
 #   scripts/v9/01_transfer_upgradecap.sh --execute  # transfer for real
 #
 # Run in WSL as the publisher. After --execute the publisher can no longer
-# upgrade the package alone; every upgrade needs 2 of the 3 signers. Undoing it
-# needs those two signers too (a multisig transfer back).
+# upgrade the package alone; every upgrade needs MS_THRESHOLD of the multisig's
+# signers (3 of 5: publisher, rpi1, rpi3, rpi4, rpi5). Undoing it needs that many
+# signers too (a multisig-signed transfer back).
 #
 # Idempotent: if the UpgradeCap is already owned by the multisig it only
 # reports that.
@@ -33,8 +34,9 @@ FUNDED=yes; [ "${bal:-0}" -ge 500000000 ] || FUNDED=no
 say "the exact transaction"
 echo "$SUI client transfer --to $UPGRADE_MULTISIG --object-id $UPGRADE_CAP --gas-budget 10000000"
 echo "  signer: $PUBLISHER (publisher)"
-echo "  effect: package $PKG_V8 can then only be upgraded by 2-of-3 of:"
-for pk in $MS_PKS; do echo "          $pk"; done
+echo "  effect: package $PKG_V8 can then only be upgraded by $MS_THRESHOLD-of-$(wc -w <<<"$MS_PKS") of:"
+read -r -a _l <<<"${MS_LABELS:-}"; i=0
+for pk in $MS_PKS; do echo "          $pk  ${_l[$i]:-}"; i=$((i+1)); done
 
 say "dry run (nothing is signed)"
 "$SUI" client transfer --to "$UPGRADE_MULTISIG" --object-id "$UPGRADE_CAP" --gas-budget 10000000 --dry-run --json \
@@ -55,4 +57,4 @@ record UPGRADE_CAP_TRANSFER_TX "$tx"
 owner=$(object_owner "$UPGRADE_CAP")
 [ "$owner" = "AddressOwner:$UPGRADE_MULTISIG" ] || die "transfer tx $tx done but owner reads $owner"
 echo "OK: UpgradeCap now owned by $UPGRADE_MULTISIG (tx $tx)"
-echo "Next: scripts/v9/02_upgrade.sh build"
+echo "Next upgrade: scripts/v9/upgrade_multisig.sh <3 signers>  (Git Bash; see V9_SIGNERS.md)"

@@ -30,6 +30,7 @@ unsigned long g_virtual_ms = 0;
 HostSerial Serial; HostESP ESP; HostWiFi WiFi;
 std::set<std::string> g_down;
 std::map<std::string, uint32_t> g_nvs;
+std::map<std::string, std::string> g_nvs_bytes;
 std::string g_brokers_retained;
 std::vector<HostBridgeEvent> g_events;
 #include "../../firmware/esp32_sensor_node/esp32_sensor_node.ino"
@@ -112,9 +113,20 @@ int main() {
         std::to_string(stored.size()) + " distinct of " + std::to_string(seqNo) + " taken, " +
         std::to_string(dupDeliveries) + " duplicate deliveries for the bridge to drop");
 
+  bool allSigned = true;
+  for (const HostBridgeEvent& e : g_events) {
+    bool tele = e.topic.find("/telemetry") != std::string::npos;
+    if (tele && (e.payload.find("\"pk\":\"") == std::string::npos ||
+                 e.payload.find(",\"sig\":\"") == std::string::npos)) { allSigned = false; break; }
+  }
+  check("every telemetry message carries pk and sig", allSigned);
+  check("Last Will is signed too", mqtt.willMsg.find(",\"sig\":\"") != std::string::npos, mqtt.willMsg);
+  std::string pk1 = devkey::pkHex;
   setup();                                    // power cycle
   check("power cycle increments the NVS epoch", epoch == epoch1 + 1,
         std::to_string(epoch1) + " -> " + std::to_string(epoch));
+  check("device key survives the power cycle (kept in NVS)", pk1 == devkey::pkHex, pk1);
+  fprintf(stderr, "[id] host-check device address %s\n", devkey::addrHex);
   fprintf(stderr, "%s\n", failures ? "FAILED" : "all host checks passed");
   return failures ? 1 : 0;
 }

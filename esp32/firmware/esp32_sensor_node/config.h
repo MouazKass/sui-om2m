@@ -51,7 +51,7 @@
 #ifndef DEVICE_ID
 #define DEVICE_ID        "esp32-dht-01"
 #endif
-#define FW_VERSION       "2.0.0"
+#define FW_VERSION       "2.1.0"
 
 // ---- Sensors (set to 0 to disable one) ----------------------------------------
 #ifndef ENABLE_DHT

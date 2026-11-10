@@ -27,15 +27,22 @@
 //       HOME_STABLE_MS (hysteresis), leaving the other broker cleanly (no
 //       Last Will) and clearing its retained presence there.
 //
-//  What it does NOT do: speak oneM2M or touch Sui. The Pi-side bridge
+//    7. (v2.1) Has its OWN on-chain identity: an Ed25519 key generated on the
+//       device (device_key.h). Every telemetry/status message, including the
+//       Last Will, carries "pk" and is signed ("sig"); the bridges accept it
+//       only if that key's Sui address is registered for DEVICE_ID in the
+//       on-chain identity registry (role AE), so readings cannot be forged by
+//       anyone else on the network, and a council vote can revoke the device.
+//
+//  What it does NOT do: speak oneM2M or send Sui transactions. The Pi-side bridge
 //  (pi/om2m_ipe_bridge.py) turns these MQTT messages into OM2M resources.
 //  Sensor data stays off-chain (SY1).
 //
 //  Libraries (Arduino Library Manager):
 //    - PubSubClient by Nick O'Leary
 //    - DHT sensor library by Adafruit (+ Adafruit Unified Sensor)
-//  Board: "ESP32 Dev Module" (esp32 core by Espressif). Preferences is part
-//  of the core.
+//  Board: "ESP32 Dev Module" (esp32 core by Espressif). Preferences and
+//  libsodium (sodium.h) are part of the core.
 // ============================================================================
 
 #include <WiFi.h>
@@ -44,6 +51,7 @@
 #include <time.h>
 #include "config.h"
 #include "cluster.h"
+#include "device_key.h"
 
 #if ENABLE_DHT
 #include <DHT.h>
@@ -64,10 +72,10 @@ static char bootId[9];               // random per power-up (lets the Pi spot an
 static uint32_t epoch = 0;           // +1 per power-up, persisted in NVS
 static uint32_t connCount = 0;       // connections in this epoch
 static char session[24];             // "<epoch>.<connCount>"
-static char lwtPayload[128];
+static char lwtPayload[320];
 
 // ---- readings and the resend buffer -----------------------------------------
-#define PAYLOAD_LEN 360
+#define PAYLOAD_LEN 640
 struct Slot { uint32_t seq; bool used; bool acked; char payload[PAYLOAD_LEN]; };
 static Slot slots[RESEND_SLOTS];
 static uint32_t seqNo = 0;           // next sequence number
@@ -161,7 +169,9 @@ static bool connectTo(int i) {
   connCount++;
   snprintf(session, sizeof(session), "%lu.%lu", (unsigned long)epoch, (unsigned long)connCount);
   snprintf(lwtPayload, sizeof(lwtPayload),
-           "{\"state\":\"offline\",\"id\":\"%s\",\"session\":\"%s\"}", DEVICE_ID, session);
+           "{\"state\":\"offline\",\"id\":\"%s\",\"pk\":\"%s\",\"session\":\"%s\"}",
+           DEVICE_ID, devkey::pkHex, session);
+  devkey::signJson(lwtPayload, sizeof(lwtPayload));   // signed now: the broker sends it later
   mqtt.setServer(br.host, br.port);
   // Client ID = DEVICE_ID so two boards never kick each other off a broker.
   if (!mqtt.connect(DEVICE_ID, user, pass, topicStatus, 1, true, lwtPayload)) {
@@ -172,12 +182,13 @@ static bool connectTo(int i) {
   }
   sel.onConnected(i, now);
 
-  char online[256];
+  char online[512];
   snprintf(online, sizeof(online),
-           "{\"state\":\"online\",\"id\":\"%s\",\"session\":\"%s\",\"epoch\":%lu,\"boot\":\"%s\","
-           "\"fw\":\"%s\",\"ip\":\"%s\",\"home\":\"%s\",\"broker\":\"%s\"}",
-           DEVICE_ID, session, (unsigned long)epoch, bootId, FW_VERSION,
+           "{\"state\":\"online\",\"id\":\"%s\",\"pk\":\"%s\",\"session\":\"%s\",\"epoch\":%lu,"
+           "\"boot\":\"%s\",\"fw\":\"%s\",\"ip\":\"%s\",\"home\":\"%s\",\"broker\":\"%s\"}",
+           DEVICE_ID, devkey::pkHex, session, (unsigned long)epoch, bootId, FW_VERSION,
            WiFi.localIP().toString().c_str(), HOME_NODE, br.label);
+  devkey::signJson(online, sizeof(online));
   mqtt.publish(topicStatus, online, true);   // retained presence for THIS session
   mqtt.subscribe(TOPIC_BROKERS, 1);
   mqtt.subscribe(topicAck, 1);
@@ -215,9 +226,9 @@ static bool probeHome() {
 static bool buildReading(char* out, size_t cap, uint32_t seq) {
   const char* via = (sel.current >= 0) ? sel.b[sel.current].label : "";
   int n = snprintf(out, cap,
-                   "{\"v\":2,\"id\":\"%s\",\"epoch\":%lu,\"boot\":\"%s\",\"seq\":%lu,"
+                   "{\"v\":2,\"id\":\"%s\",\"pk\":\"%s\",\"epoch\":%lu,\"boot\":\"%s\",\"seq\":%lu,"
                    "\"ts\":%lu,\"up_ms\":%lu,\"rssi\":%d,\"via\":\"%s\"",
-                   DEVICE_ID, (unsigned long)epoch, bootId, (unsigned long)seq,
+                   DEVICE_ID, devkey::pkHex, (unsigned long)epoch, bootId, (unsigned long)seq,
                    (unsigned long)unixTime(), (unsigned long)millis(), (int)WiFi.RSSI(), via);
   bool any = false;
 
@@ -246,7 +257,8 @@ static bool buildReading(char* out, size_t cap, uint32_t seq) {
 #endif
 
   snprintf(out + n, cap - n, "}");
-  return any;
+  // Unsigned readings are rejected by every bridge, so do not keep one.
+  return any && devkey::signJson(out, cap);
 }
 
 static void takeReading() {
@@ -312,9 +324,13 @@ void setup() {
   Serial.printf("\n[boot] %s fw=%s epoch=%lu boot=%s brokers=%d home=%s\n", DEVICE_ID, FW_VERSION,
                 (unsigned long)epoch, bootId, sel.n, HOME_NODE);
 
-  connectWifi();
+  connectWifi();                     // radio on: the hardware RNG is now truly random
+  if (!devkey::init("sui-esp32-id")) Serial.println("[id] libsodium init FAILED");
+  Serial.printf("[id] device key pk=%s sui_address=%s\n"
+                "[id] register: scripts/v9/council.sh propose <member> id-register %s %s 3\n",
+                devkey::pkHex, devkey::addrHex, devkey::addrHex, DEVICE_ID);
   startNtpOnce();
-  mqtt.setBufferSize(640);
+  mqtt.setBufferSize(1024);
   mqtt.setKeepAlive(MQTT_KEEPALIVE_S);
   mqtt.setSocketTimeout(2);
   mqtt.setCallback(onMessage);

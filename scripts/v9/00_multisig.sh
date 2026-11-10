@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # 00_multisig.sh - V9_DESIGN.md section 5 steps 1-2: derive the UpgradeCap multisig.
 #
-#   scripts/v9/00_multisig.sh <pk_mouaz> <pk_hamza> <pk_third> [threshold]
+#   scripts/v9/00_multisig.sh [-t K] [-l "label1 label2 ..."] <pk1> <pk2> ... <pkN>
+#   scripts/v9/00_multisig.sh <pk1> <pk2> <pk3> [threshold]        (old 3-signer form)
 #
 # Each <pk> is a signer's ed25519 PUBLIC key as Base64 flag||pk (the
-# "publicBase64Key" column of `sui keytool list`, 44 chars, starting "AA").
-# Weights are 1 each; threshold defaults to 2 (2-of-3).
+# "publicBase64Key" column of `sui keytool list`, 44 chars, starting "A").
+# Node signers print theirs with scripts/v9/upgrade_signer.sh pubkey <node>.
+# Weights are 1 each; K defaults to the strict majority (3 -> 2, 5 -> 3) and
+# must satisfy 2K > N and K >= 2, so no minority of signers can upgrade alone.
+# Labels (optional, same order as the keys) are recorded for the signing
+# scripts: a label that names an inventory node is signed on that Pi.
 #
 # No secrets are involved and nothing is signed: this only derives an address
 # and writes deploy/v9/multisig.env. Idempotent: re-running with the same keys
@@ -13,9 +18,28 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-[ $# -ge 3 ] && [ $# -le 4 ] || die "usage: $0 <pk1> <pk2> <pk3> [threshold]"
-PKS=("$1" "$2" "$3")
-T="${4:-2}"
+T=""; LABELS=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t) T="$2"; shift 2;;
+    -l) LABELS="$2"; shift 2;;
+    *) break;;
+  esac
+done
+PKS=("$@")
+# old form: 3 keys + a trailing threshold
+if [ -z "$T" ] && [ ${#PKS[@]} -eq 4 ] && [[ "${PKS[3]}" =~ ^[0-9]+$ ]]; then T="${PKS[3]}"; unset 'PKS[3]'; fi
+N=${#PKS[@]}
+[ "$N" -ge 3 ] && [ "$N" -le 10 ] || die "usage: $0 [-t K] [-l labels] <pk1> ... <pkN>  (3 <= N <= 10)"
+[ -n "$T" ] || T=$(majority "$N")
+[[ "$T" =~ ^[0-9]+$ ]] && [ "$T" -ge 2 ] && [ "$T" -le "$N" ] && [ $((2*T)) -gt "$N" ]   || die "threshold $T is not a strict majority of $N signers (need 2K > N, K >= 2, K <= N)"
+if [ -n "$LABELS" ]; then
+  read -r -a LA <<<"$LABELS"
+  [ ${#LA[@]} -eq "$N" ] || die "-l needs exactly $N labels, got ${#LA[@]}"
+else
+  LA=(); for ((i=1;i<=N;i++)); do LA+=("signer$i"); done
+fi
+WEIGHTS=$(printf '1 %.0s' $(seq "$N")); WEIGHTS=${WEIGHTS% }
 
 say "validate public keys"
 for pk in "${PKS[@]}"; do
@@ -32,12 +56,11 @@ if len(raw)!=33 or raw[0]!=0x00:
 print("ok ", pk)
 PY
 done
-[ "$(printf '%s\n' "${PKS[@]}" | sort -u | wc -l)" -eq 3 ] || die "the three public keys must be distinct"
-case "$T" in 2|3) ;; *) die "threshold must be 2 or 3 for 3 signers (a strict majority)";; esac
+[ "$(printf '%s\n' "${PKS[@]}" | sort -u | wc -l)" -eq "$N" ] || die "the $N public keys must be distinct"
 
 require_cli
-say "derive multisig address (threshold $T of 3, weights 1 1 1)"
-OUT=$("$SUI" keytool --json multi-sig-address --pks "${PKS[@]}" --weights 1 1 1 --threshold "$T")
+say "derive multisig address (threshold $T of $N, weights $WEIGHTS)"
+OUT=$("$SUI" keytool --json multi-sig-address --pks "${PKS[@]}" --weights $WEIGHTS --threshold "$T")
 ADDR=$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["multisigAddress"])')
 echo "multisig address: $ADDR"
 
@@ -57,7 +80,8 @@ cat > "$MS_ENV" <<EOF
 # Public keys only (not secret). Order matters for combining signatures.
 export UPGRADE_MULTISIG=$ADDR
 export MS_PKS="${PKS[*]}"
-export MS_WEIGHTS="1 1 1"
+export MS_WEIGHTS="$WEIGHTS"
+export MS_LABELS="${LA[*]}"
 export MS_THRESHOLD=$T
 EOF
 echo "wrote $MS_ENV"

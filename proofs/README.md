@@ -1,108 +1,44 @@
-# IMDb Movie Database Management System
+# Invariant proofs
 
-A relational database system for managing IMDb movie and TV data, built in Oracle SQL with a Java Swing GUI for querying without writing SQL. Covers the full database lifecycle: ER modeling, schema design, normalization, DDL implementation with constraints and triggers, analytical SQL queries, and a desktop interface on top.
+Live proofs that the deployed system enforces the invariants claimed in the
+paper. Each script runs against the **live v9 deployment** (package v9, types
+from the v8 original id), shows the raw on-chain evidence (digests, abort
+codes, object state) and ends with a `RESULT` line counting the assertions
+that held.
 
-## Overview
+IDs come from `deploy/v8/env.v8.sh` (generated from `deploy/v8/deployment.env`
+and `deploy/v9/deployment.env`); shared helpers are in `lib_v8.sh`. No script
+signs with a publisher key: admin actions go through the 3-of-5 council
+(`council_do` → `scripts/v9/council.sh`, signed on each member Pi with its own
+key), and node actions are signed on the node itself.
 
-The system manages movies, TV series, episodes, people (actors, directors, writers, producers), production companies, regions, genres, and ratings. It captures complex relationships including ternary relationships (Person–Company–Title productions), many-to-many relationships (actors to titles, titles to genres), and multi-valued attributes (primary professions, known-for titles).
+| Script | Concept | Invariants |
+|---|---|---|
+| `01_self_scoring.sh` | A node cannot raise its own trust | TR2 |
+| `02_trust_engine.sh` | Peer scoring through the guarded path; writes bounded (|Δ| ≤ 15, ≥ 60 s apart) | TR1, TR3–TR6, TR8 |
+| `03_capability_tokens.sh` | Token checked on an ordinary oneM2M RETRIEVE via DAC | CT1–CT5, A4 |
+| `04_atomic_ptb.sh` | One PTB, hot-potato receipt chain: no skipped, reordered or forged steps | ID1–ID4, A6 |
+| `05_policy.sh` | On-chain policy (min trust + ops mask), fail-closed | PO1–PO4, A5 |
+| `06_failover.sh` | Lease rules, exactly one winner, live plugins converge (**moves the parent**) | FM1–FM5, FO1–FO5, A10 |
+| `07_evolving_tokens.sh` | Token ops follow the owner's trust in place | EVO1–EVO7, A9 |
+| `08_audit_trail.sh` | Append-only on-chain audit, no direct write path | SY1–SY5, A7 |
+| `09_admin_revocation.sh` | Revoked caps can't write or mint; council-governed revocation | TR7, A1/A2/A8 |
+| `10_system_logs.sh` | Plugin logs pulled from the running containers | — |
 
-## Tech Stack
+## Running
 
-- **Database:** Oracle SQL
-- **GUI:** Java Swing (NetBeans GUI Builder)
-- **Design:** ER modeling, normalization, relational mapping
+Prereqs: Git Bash on the laptop, the node SSH key (`~/.ssh/id_ed25519_suiom2m`,
+override with `SSH_KEY`), the VPN (rpi4/rpi5 are reached via rpi1), and WSL
+Ubuntu with the `sui` CLI for read-only queries.
 
-## Features
-
-- 15+ normalized tables with foreign key constraints and check constraints
-- Automated trigger to maintain referential integrity on rating inserts
-- Ternary relationship modeling for multi-party production credits
-- Weak entity handling for multi-valued attributes
-- Analytical queries using JOINs, GROUP BY, and aggregations
-- Java Swing desktop GUI for database querying without writing SQL
-
-## ER Diagram
-
-![ER Diagram](docs/ER-Diagram.png)
-
-## Relational Schema
-
-![Relational Schema](docs/Relational-Schema.png)
-
-## Repository Structure
-
-```
-imdb-database-system/
-├── README.md
-├── sql/
-│   ├── schema.sql          # DDL, inserts, and trigger
-│   └── queries.sql         # Analytical queries
-├── docs/
-│   ├── ER-Diagram.png
-│   ├── Relational-Schema.png
-│   └── Report.pdf          # Full project report
-├── gui/
-│   └── (NetBeans project)
-└── screenshots/
-    ├── gui-main.png
-    └── gui-query-results.png
+```bash
+proofs/run_all.sh            # interactive, pauses between concepts
+BATCH=1 proofs/run_all.sh    # no pauses; exit status = number of failed proofs
+PROOF_LOG=file.csv ...       # append every transaction (digest, outcome, gas)
 ```
 
-## Example Queries
+`06` moves the parent role; `02`, `07` and `09` write scores, tokens or caps
+but restore what they change. The latest live runs are in
+`evidence/v9-rollout/proof_*.log`.
 
-**1. Top-rated titles with their genres**
-```sql
-SELECT t.titleName, t.releaseYear, r.averageRating, r.numVotes, g.genreName
-FROM Title t
-JOIN Rating r ON t.tconst = r.tconst
-JOIN Has_Genre hg ON t.tconst = hg.tconst
-JOIN Genre g ON hg.genreName = g.genreName
-WHERE r.averageRating >= 8.0
-ORDER BY r.averageRating DESC, t.releaseYear DESC;
-```
-
-**2. Average rating and total votes by genre**
-```sql
-SELECT g.genreName,
-       COUNT(DISTINCT t.tconst) AS numberOfTitles,
-       ROUND(AVG(r.averageRating), 2) AS avgGenreRating,
-       SUM(r.numVotes) AS totalVotes
-FROM Genre g
-JOIN Has_Genre hg ON g.genreName = hg.genreName
-JOIN Title t ON hg.tconst = t.tconst
-JOIN Rating r ON t.tconst = r.tconst
-GROUP BY g.genreName
-ORDER BY avgGenreRating DESC;
-```
-
-Full query set with sample results available in `sql/queries.sql` and the project report.
-
-## GUI
-
-![GUI Main Screen](screenshots/gui-main.png)
-![Query Results](screenshots/gui-query-results.png)
-
-The Java Swing GUI lets users explore the database through predefined views rather than writing SQL directly, making the data accessible to non-technical users.
-
-## How to Run
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/MouazKass/imdb-database-system.git
-   cd imdb-database-system
-   ```
-2. Run `sql/schema.sql` in Oracle SQL Developer (or any Oracle-compatible environment) to create tables and populate sample data.
-3. Run queries from `sql/queries.sql` to explore the data.
-4. Open the NetBeans project in the `gui/` folder to launch the desktop interface.
-
-## Course Context
-
-Developed as the semester project for CMP 320 (Database Systems) at the American University of Sharjah, Fall 2025.
-
-## Team
-
-- Mouaz Kassouma
-- Mohammed Nour
-- Yazan Alkazimi
-
-Supervised by Dr. Mohammad Hamza.
+`VERIFY_FIRST.md` is a historical v7 checklist, kept for the record.
