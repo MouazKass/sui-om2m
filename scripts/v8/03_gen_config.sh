@@ -13,8 +13,11 @@
 #   DEPLOY_ENV    deployment.env incl. the ids 02_bootstrap.sh appended
 #                 (default: <repo>/deploy/v8/deployment.env)
 #   OUT_DIR       output root (default: <repo>/deploy/v8). Writes
-#                 $OUT_DIR/nodes/{rpi1,rpi2,rpi3}/{sui.properties,sui.mappings.properties}
+#                 $OUT_DIR/nodes/<name>/{sui.properties,sui.mappings.properties} for every
+#                 status=active node in deploy/inventory.tsv
 #                 and $OUT_DIR/env.v8.sh
+#   INVENTORY     node list (default: <repo>/deploy/inventory.tsv). Each active node's own
+#                 trust AdminCap is TRUST_ADMIN_CAP_<NAME> in deployment.env.
 #   ENV_SH        existing env.sh to diff the fragment against (default: <repo>/scripts/env.sh; never written)
 #   V7_DIR        optional dir holding the LIVE v7 files as $V7_DIR/rpiN/sui.properties.
 #                 If present: sui.cli.path is carried over from it, and a key-level
@@ -36,6 +39,9 @@ PUBLISHER="0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e"
 GRAPHQL_URL="https://graphql.testnet.sui.io/graphql"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
+# shellcheck source=../lib/inventory.sh
+. "$REPO/scripts/lib/inventory.sh"
+inv_load
 command -v python3 >/dev/null || die "python3 is required for the self-check"
 
 [ -f "$DEPLOY_ENV" ] || die "$DEPLOY_ENV not found (set DEPLOY_ENV)"
@@ -61,25 +67,26 @@ fi
 is_id() { [[ "${1:-}" =~ ^0x[0-9a-fA-F]{1,64}$ ]]; }
 REQUIRED=(PKG_V8 ID_REG TRUST_REG POLICY_REG AUDIT_TRAIL ISSUER_CAP ID_ADMIN_CAP TRUST_ADMIN_CAP
           POL_ADMIN_CAP AUDIT_ADMIN_CAP UPGRADE_CAP
-          CLUSTER CLUSTER_ADMIN_CAP TRUST_ADMIN_CAP_RPI1 TRUST_ADMIN_CAP_RPI2 TRUST_ADMIN_CAP_RPI3
-          TOKEN_SUI_PROTECTED_CNT TOKEN_SUI_DAC_AE)
+          CLUSTER CLUSTER_ADMIN_CAP TOKEN_SUI_PROTECTED_CNT TOKEN_SUI_DAC_AE)
 missing=()
 for v in "${REQUIRED[@]}"; do is_id "${!v:-}" || missing+=("$v"); done
 [ ${#missing[@]} -eq 0 ] || die "deployment.env lacks: ${missing[*]} - run 01_publish.sh and 02_bootstrap.sh --execute first"
 
+# ---------------------------------------------------------------- node facts (deploy/inventory.tsv)
+# Every status=active node gets a config. Each must have its OWN trust AdminCap,
+# recorded as TRUST_ADMIN_CAP_<NAME> in deployment.env (02_bootstrap.sh for the
+# genesis nodes, scripts/onboard_node.sh for later ones).
+mapfile -t NODES < <(inv_nodes active)
+[ ${#NODES[@]} -ge 2 ] || die "need at least 2 active nodes in $INVENTORY (have ${#NODES[@]})"
+declare -A ADDR=() IP=() CAP=()
+for n in "${NODES[@]}"; do
+  ADDR[$n]=${INV_ADDR[$n]}; IP[$n]=${INV_IP[$n]}
+  v=$(inv_cap_var "$n"); CAP[$n]=${!v:-}
+  is_id "${CAP[$n]}" || die "active node $n has no $v in deployment.env - finish onboarding (scripts/onboard_node.sh $n onchain-cap)"
+done
 # Per-node caps must be distinct (TR7: each node's cap individually revocable).
-[ "$TRUST_ADMIN_CAP_RPI1" != "$TRUST_ADMIN_CAP_RPI2" ] && [ "$TRUST_ADMIN_CAP_RPI2" != "$TRUST_ADMIN_CAP_RPI3" ] \
-  && [ "$TRUST_ADMIN_CAP_RPI1" != "$TRUST_ADMIN_CAP_RPI3" ] || die "per-node trust AdminCaps are not distinct"
-
-# ---------------------------------------------------------------- node facts (scripts/env.sh)
-NODES=(rpi1 rpi2 rpi3)
-declare -A ADDR=(
-  [rpi1]=0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9
-  [rpi2]=0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
-  [rpi3]=0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 )
-declare -A IP=( [rpi1]=10.25.96.200 [rpi2]=10.25.96.201 [rpi3]=10.25.96.203 )
-declare -A CAP=( [rpi1]=$TRUST_ADMIN_CAP_RPI1 [rpi2]=$TRUST_ADMIN_CAP_RPI2 [rpi3]=$TRUST_ADMIN_CAP_RPI3 )
-DAS_NODE=rpi3   # holds the CapTokens; both originators map to its address
+[ "$(printf '%s\n' "${CAP[@]}" | sort | uniq -d)" = "" ] || die "per-node trust AdminCaps are not distinct"
+DAS_NODE=$(inv_das)   # holds the CapTokens; both originators map to its address
 
 # Originators and protected resources (bench/provision_das.sh, scripts/bootstrap_testbed.sh).
 ORIGINATORS=("admin:admin" "Csensor-001")
@@ -252,7 +259,7 @@ gen_mappings_peer() {  # node
 # sui.mappings.properties for $n (${IP[$n]}) - intentionally NO mappings
 # $STAMP
 #
-# Every v8 CapToken is owned by rpi3 (${ADDR[$DAS_NODE]}). Under A3/A4 the
+# Every v8 CapToken is owned by $DAS_NODE (${ADDR[$DAS_NODE]}). Under A3/A4 the
 # access PTB's requester is the transaction sender and validate_for_use asserts
 # token.owner == sender, and Sui will not even accept another address's owned
 # object as a transaction input. A DAS on $n signs with $n's key, so any token
@@ -299,9 +306,7 @@ export UPGRADE_CAP=$UPGRADE_CAP
 export CLOCK=0x6
 export ME=$PUBLISHER
 export GAS=20000000
-export RPI1=${ADDR[rpi1]}
-export RPI2=${ADDR[rpi2]}
-export RPI3=${ADDR[rpi3]}
+$(for n in "${NODES[@]}"; do echo "export ${n^^}=${ADDR[$n]}"; done)
 
 # Failover
 export CLUSTER=$CLUSTER
@@ -309,14 +314,12 @@ export CLUSTER_ISV=${CLUSTER_ISV:-}
 export CLUSTER_CAP=$CLUSTER_ADMIN_CAP
 
 # Per-node trust AdminCaps (owned by each node)
-export ADMINCAP_RPI1=$TRUST_ADMIN_CAP_RPI1
-export ADMINCAP_RPI2=$TRUST_ADMIN_CAP_RPI2
-export ADMINCAP_RPI3=$TRUST_ADMIN_CAP_RPI3
+$(for n in "${NODES[@]}"; do echo "export ADMINCAP_${n^^}=${CAP[$n]}"; done)
 
-# CapTokens (owned by rpi3)
-export CAP_TOKEN_RPI3=$TOKEN_SUI_PROTECTED_CNT
+# CapTokens (owned by $DAS_NODE)
+export CAP_TOKEN_${DAS_NODE^^}=$TOKEN_SUI_PROTECTED_CNT
 export TOKEN=$TOKEN_SUI_PROTECTED_CNT
-export CAP_TOKEN_RPI3_DAC=$TOKEN_SUI_DAC_AE
+export CAP_TOKEN_${DAS_NODE^^}_DAC=$TOKEN_SUI_DAC_AE
 EOF
 }
 
@@ -381,13 +384,14 @@ fi
 # ---------------------------------------------------------------- self-check
 echo
 echo "== self-check: re-parse every generated file with java.util.Properties semantics"
+NODE_ROWS=$(for n in "${NODES[@]}"; do printf '   ("%s", "%s", "%s", "%s"),
+' "$n" "${ADDR[$n]}" "${IP[$n]}" "${CAP[$n]}"; done)
 EXPECT_JSON=$(python3 - <<PY
 import json
 print(json.dumps({
  "nodes": {n: {"addr": a, "ip": i, "cap": c} for n, a, i, c in [
-   ("rpi1", "${ADDR[rpi1]}", "${IP[rpi1]}", "$TRUST_ADMIN_CAP_RPI1"),
-   ("rpi2", "${ADDR[rpi2]}", "${IP[rpi2]}", "$TRUST_ADMIN_CAP_RPI2"),
-   ("rpi3", "${ADDR[rpi3]}", "${IP[rpi3]}", "$TRUST_ADMIN_CAP_RPI3")]},
+$NODE_ROWS
+   ]},
  "das": "$DAS_NODE",
  "originators": ["admin:admin", "Csensor-001"],
  "tokens": {"$RES_PROTECTED_CNT": "$TOKEN_SUI_PROTECTED_CNT", "$RES_DAC_AE": "$TOKEN_SUI_DAC_AE"},

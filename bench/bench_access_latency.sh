@@ -28,9 +28,13 @@
 # measurement. If you run it remotely, the number includes your client->node hop.
 
 set -uo pipefail
+INV_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${REPO:-$INV_REPO}"
+# shellcheck source=../scripts/lib/inventory.sh
+. "$INV_REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
 
 N="${1:-30}"
-NODE="${NODE:-http://10.25.96.200:8282}"
+NODE="${NODE:-http://$(for _n in $(inv_nodes active); do [ "${INV_ROLE[$_n]}" = in-cse ] && { echo "${INV_IP[$_n]}"; break; }; done):8282}"
 ORIGIN="${ORIGIN:-admin:admin}"
 # The DAS NOTIFY target (matches the testbed: sui-das AE under in-cse/in-name).
 URL="$NODE/~/in-cse/in-name/sui-das"

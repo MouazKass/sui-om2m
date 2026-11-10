@@ -21,7 +21,12 @@ print('    lease_expires_ms :', le, '(%+.0f s from now)' % ((le-now)/1000))"
 }
 
 P=$(name_of "$(cluster_field current_parent)")
-case "$P" in rpi1) C=rpi2; R=rpi3 ;; rpi2) C=rpi3; R=rpi1 ;; rpi3) C=rpi2; R=rpi1 ;; *) echo "unknown parent $P"; exit 1 ;; esac
+# claimer C and racer R: the next two active nodes after the parent, in
+# inventory order (wrapping). Any cluster size >= 3.
+[ -n "${NODE_IP[$P]:-}" ] || { echo "unknown parent $P"; exit 1; }
+[ ${#NODES[@]} -ge 3 ] || { echo "need >= 3 active nodes (have ${#NODES[@]})"; exit 1; }
+for _i in "${!NODES[@]}"; do [ "${NODES[$_i]}" = "$P" ] && _pi=$_i; done
+C=${NODES[$(( (_pi + 1) % ${#NODES[@]} ))]}; R=${NODES[$(( (_pi + 2) % ${#NODES[@]} ))]}
 echo "    parent=$P   claimer=$C   racer=$R"
 echo
 echo "=== STATE BEFORE ==="; show_cluster; EB=$(cluster_field epoch); echo
@@ -63,7 +68,7 @@ echo
 echo "=== THE LIVE SYSTEM CONVERGES (no human action): $C's plugin must take up parent duties ==="
 echo "    claim_parent grants only a 60 s lease, so $C has to anchor a fresh one itself."
 WAIT=${CONVERGE_S:-120}; echo "    (watching for ${WAIT} s)"; sleep "$WAIT"
-for n in rpi1 rpi2 rpi3; do
+for n in "${NODES[@]}"; do
   echo "    [$n]"; on "$n" "docker logs --since $((WAIT+40))s om2m-active 2>&1 | grep -E 'Cluster current parent|Lease anchored|Parent duties|PoA published|CLAIM ACCEPTED|claim gate|took up parent|Self-parent' | tail -4" | sed 's/^/      /'
 done
 show_cluster

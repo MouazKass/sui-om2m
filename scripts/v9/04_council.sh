@@ -9,14 +9,30 @@
 #   - no single trust AdminCap can revoke a peer, grant caps or add nodes;
 #   - every v8-package cap path aborts (E_CAP_REVOKED), so the plugin must
 #     already be calling v9;
-#   - registering nodes / minting tokens / policy writes become 2-of-3 proposals.
+#   - registering nodes / minting tokens / policy writes become k-of-n proposals.
+#
+# Members = every status=active node in deploy/inventory.tsv; k defaults to the
+# strict majority (3 of 5). Override with THRESHOLD=k (quorum.move still enforces
+# 2k > n and k >= 2). Each member must already hold its own valid trust AdminCap:
+# proposing and approving require it.
 # Undoing it needs a multisig upgrade (V9_DESIGN.md I). Idempotent: a step whose
 # effect is already on-chain is skipped.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 MODE="${1:---dry-run}"
-MEMBERS="[0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9,0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5,0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10]"
-THRESHOLD=2
+pending=$(inv_nodes pending staged | tr '\n' ' ')
+[ -z "$pending" ] || die "nodes not yet active in deploy/inventory.tsv: $pending- finish onboarding (or remove them) before arming"
+N_MEMBERS=${#V9_NODES[@]}
+[ "$N_MEMBERS" -ge 3 ] || die "need at least 3 active nodes for a council (have $N_MEMBERS)"
+THRESHOLD="${THRESHOLD:-$(majority "$N_MEMBERS")}"
+[ $(( 2 * THRESHOLD )) -gt "$N_MEMBERS" ] && [ "$THRESHOLD" -ge 2 ] && [ "$THRESHOLD" -le "$N_MEMBERS" ] \
+  || die "THRESHOLD=$THRESHOLD is not a strict majority of $N_MEMBERS"
+_addrs=(); for _n in "${V9_NODES[@]}"; do
+  [ -n "$(node_cap "$_n")" ] || die "$_n has no $(inv_cap_var "$_n") in $V8_ENV: it could never propose or approve"
+  _addrs+=("${INV_ADDR[$_n]}")
+done
+MEMBERS="[$(IFS=,; echo "${_addrs[*]}")]"
+MEMBER_NAMES="${V9_NODES[*]}"
 
 require_cli; require_publisher
 [ -n "${PKG_V9:-}" ] || die "no PKG_V9 recorded; run 02_upgrade.sh execute first"
@@ -55,7 +71,7 @@ simulate() {   # <function> args...   (as the publisher; free)
 }
 
 # ------------------------------------------------------------ step 1: Council
-say "step 1: create_council (members rpi1 rpi2 rpi3, threshold $THRESHOLD)"
+say "step 1: create_council (members $MEMBER_NAMES, threshold $THRESHOLD of $N_MEMBERS)"
 governed=$(inspect_value "$PKG_V9" trust is_governed "$TRUST_REG")
 echo "  trust::is_governed = ${governed:-?}"
 case "$governed" in
@@ -70,7 +86,7 @@ case "$governed" in
     if [ "$MODE" = --execute ]; then
       echo
       echo "ONE-WAY: after this, peer revocation, grants, node registration, policy"
-      echo "writes and minting need 2 of: rpi1, rpi2, rpi3. The identity AdminCap is consumed."
+      echo "writes and minting need $THRESHOLD of: $MEMBER_NAMES. The identity AdminCap is consumed."
       confirm "arm governance on $TRUST_REG"
       tx=$(run_call "$V9_DIR/council.json" create_council 50000000 \
              "$ID_ADMIN_CAP" "$ID_REG" "$TRUST_ADMIN_CAP" "$TRUST_REG" "$MEMBERS" "$THRESHOLD")

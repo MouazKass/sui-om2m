@@ -4,3 +4,5 @@
 *.sh text eol=lf
 # Python and systemd files installed on the Pis are LF too.
 deploy/v8/host/* text eol=lf
+# deploy/inventory.tsv: scripts/lib/inventory.sh refuses CRLF.
+*.tsv text eol=lf

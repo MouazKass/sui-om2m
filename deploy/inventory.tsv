@@ -1,0 +1,23 @@
+# deploy/inventory.tsv - THE list of testbed nodes. Every script reads this file
+# (scripts/lib/inventory.sh); no script hard-codes a node, an IP or an address.
+#
+# Columns (TAB-separated; '-' = empty):
+#   name      short node name, also the image tag prefix (mouazkass/om2m-sui-in:<name>-v8)
+#   host      hostname on the LAN
+#   ip        LAN address (reachable from the laptop over the campus VPN)
+#   mac       eth0 MAC
+#   role      in-cse | mn-cse   (on-chain identity role; every node runs cseType=in-cse for failover)
+#   cse_id    the cse_id string registered on-chain (identity::register)
+#   das       yes = the DAS / GRANT node that owns the CapTokens (exactly one)
+#   status    pending  = listed, not yet onboarded (no key / not reachable)
+#             staged   = key generated on the Pi, address known, not yet registered on-chain
+#             active   = registered on-chain, own trust AdminCap, deployed (in the mesh and in every loop)
+#   sui_address  the node's own Sui address (its key never leaves the Pi)
+#
+# Only scripts/onboard_node.sh changes a row's status/address (scripts/lib/inventory.sh inv_set).
+name	host	ip	mac	role	cse_id	das	status	sui_address
+rpi1	rpi1-iot	10.25.96.200	88:a2:9e:1d:63:91	in-cse	in-cse	no	active	0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9
+rpi2	rpi2-iot	10.25.96.201	88:a2:9e:1d:4a:98	mn-cse	mn-cse-1	no	active	0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+rpi3	rpi3-iot	10.25.96.203	88:a2:9e:1d:30:20	mn-cse	mn-cse-2	yes	active	0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+rpi4	rpi4-iot	10.25.96.204	88:a2:9e:06:d5:96	mn-cse	mn-cse-3	no	pending	-
+rpi5	rpi5-iot	10.25.96.205	88:a2:9e:06:d3:a7	mn-cse	mn-cse-4	no	pending	-

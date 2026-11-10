@@ -2,9 +2,13 @@
 # bench_latency_v2.sh - access-decision latency, PRODUCTION path (the working one).
 # Fires N GRANTs with the required X-M2M-Operation:5 header, reads the DAS's own
 # elapsedMs from the logs (pure on-chain decision time, no HTTP framing).
-# Discards the first (cold-start) sample. Run from laptop. Default node = rpi3.
+# Discards the first (cold-start) sample. Run from laptop. Default node = the DAS node in deploy/inventory.tsv.
 set -uo pipefail
-NODE="${1:-10.25.96.203}"; N="${2:-12}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
+INV_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${REPO:-$INV_REPO}"
+# shellcheck source=../scripts/lib/inventory.sh
+. "$INV_REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
+NODE="${1:-${INV_IP[$(inv_das)]}}"; N="${2:-12}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
 BASE=http://127.0.0.1:8282
 ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 

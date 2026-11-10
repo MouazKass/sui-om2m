@@ -1,0 +1,6 @@
+[Unit]
+Description=Sui-OM2M DAS resource watchdog (reprovision if missing)
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/das-watchdog.sh

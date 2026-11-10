@@ -20,8 +20,10 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$REPO/evidence/v8-measurements}"; mkdir -p "$OUT"
 source "$REPO/deploy/v8/env.v8.sh"
 KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}"
-declare -A IP=([rpi1]=10.25.96.200 [rpi2]=10.25.96.201 [rpi3]=10.25.96.203)
-declare -A NAME=([${RPI1,,}]=rpi1 [${RPI2,,}]=rpi2 [${RPI3,,}]=rpi3)
+. "$REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
+mapfile -t NODES < <(inv_nodes active)
+declare -A IP=() NAME=()
+for _n in "${NODES[@]}"; do IP[$_n]=${INV_IP[$_n]}; NAME[${INV_ADDR[$_n]}]=$_n; done
 on() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@${IP[$1]}" "${@:2}"; }
 now_ms() { python -c 'import time;print(int(time.time()*1000))'; }
 cluster() {  # -> "parent lease_expires_ms epoch"
@@ -64,7 +66,7 @@ while :; do
   sleep 5
 done
 sleep 20
-for n in rpi1 rpi2 rpi3; do
+for n in "${NODES[@]}"; do
   [ "$n" = "$P" ] && continue
   on "$n" "docker logs --timestamps --since $STOP_UTC om2m-active 2>&1" | python -c '
 import sys,re,datetime

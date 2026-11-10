@@ -24,11 +24,15 @@
 # Output: OUTDIR/latency_requests.csv  (phase,i,utc_ms,http,curl_ms)
 #         OUTDIR/das_decisions.csv     (utc,decision,op,digest,das_ms) from the plugin log
 set -euo pipefail
+INV_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${REPO:-$INV_REPO}"
+# shellcheck source=../scripts/lib/inventory.sh
+. "$INV_REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
 N="${1:-100}"
 OUT="${2:-$(cd "$(dirname "$0")/.." && pwd)/evidence/v8-measurements}"
 GAP_S="${GAP_S:-3}"
 KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}"
-NODE="${NODE:-10.25.96.203}"
+NODE="${NODE:-${INV_IP[$(inv_das)]}}"
 mkdir -p "$OUT"
 on() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@$NODE" "$@"; }
 

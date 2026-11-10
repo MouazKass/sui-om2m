@@ -4,13 +4,17 @@
 # attached from birth, adds the test originator to the ACP, and fires a GRANT to
 # verify the full on-chain path. Run from the laptop; targets a node via sshpass.
 #
-# Usage:  ./provision_das.sh [node_ip]      (default rpi3 = the GRANT-capable node)
+# Usage:  ./provision_das.sh [node_ip]      (default: the das=yes node in deploy/inventory.tsv, the GRANT-capable node)
 #
 # Why each step: OM2M's resource DB is in-memory (lost on restart); a resource
 # created with no ACP locks itself out of UPDATE/DELETE, so acpi MUST be set at
 # creation; the ACP's ri is regenerated each boot so we discover it fresh; and the
 # GRANT trigger REQUIRES the X-M2M-Operation: 5 header (else OM2M 403s at checkACP).
 set -uo pipefail
+INV_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${REPO:-$INV_REPO}"
+# shellcheck source=../scripts/lib/inventory.sh
+. "$INV_REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
 
 # SUPERSEDED in v8 by deploy/v8/host/provision-das.sh (installed on every node,
 # run at boot by sui-das-provision.service). This legacy script re-adds
@@ -23,7 +27,7 @@ if [ "${LEGACY_V7_PROVISION:-0}" != 1 ]; then
   exit 2
 fi
 
-NODE="${1:-10.25.96.203}"
+NODE="${1:-${INV_IP[$(inv_das)]}}"
 PW="${PW:-user}"
 ORIG="${ORIG:-admin:admin}"          # originator that owns a valid CapToken on this node
 BASE=http://127.0.0.1:8282

@@ -30,7 +30,7 @@ grab rpi1 24h 'gossip' 4
 check "rpi1 gossip is signed" rpi1 24h 'gossip signing ENABLED'
 echo
 echo "=== FAILOVER (all nodes): who is parent, and the parent anchoring its lease ==="
-for n in rpi1 rpi2 rpi3; do echo "  [$n]"; grab "$n" 2h 'Cluster current parent|Lease anchored|PoA published|Parent duties|Chain names this node' 3; done
+for n in "${NODES[@]}"; do echo "  [$n]"; grab "$n" 2h 'Cluster current parent|Lease anchored|PoA published|Parent duties|Chain names this node' 3; done
 P=$(name_of "$(cluster_field current_parent)")
 check "the on-chain parent ($P) has anchored its lease" "$P" 30m 'Lease anchored'
 echo

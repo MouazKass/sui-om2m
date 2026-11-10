@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # bench_failover_time.sh - failover takeover time, dynamic current-parent.
 set -uo pipefail
+INV_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${REPO:-$INV_REPO}"
+# shellcheck source=../scripts/lib/inventory.sh
+. "$INV_REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
 K="${1:-5}"
 CLUSTER_ID="${CLUSTER:-}"
 POLL_MS="${POLL_MS:-200}"
@@ -8,16 +12,10 @@ TIMEOUT_S="${TIMEOUT_S:-30}"
 PARENT_USER="${PARENT_USER:-user}"
 SSHPASS_PW="${SSHPASS_PW:-user}"
 
-declare -A NODE_HOST=(
-  ["0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9"]="10.25.96.200"
-  ["0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5"]="10.25.96.201"
-  ["0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10"]="10.25.96.203"
-)
-declare -A NODE_CONT=(
-  ["0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9"]="om2m-active"
-  ["0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5"]="om2m-active"
-  ["0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10"]="om2m-active"
-)
+declare -A NODE_HOST=() NODE_CONT=()
+for _n in $(inv_nodes active); do
+  NODE_HOST[${INV_ADDR[$_n]}]=${INV_IP[$_n]}; NODE_CONT[${INV_ADDR[$_n]}]=om2m-active
+done
 
 [[ -z "$CLUSTER_ID" ]] && { echo "ERROR: CLUSTER not set. source scripts/env.sh first." >&2; exit 1; }
 command -v sui >/dev/null || { echo "ERROR: sui CLI not found" >&2; exit 1; }

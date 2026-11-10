@@ -74,11 +74,47 @@ public class TrustAggregationTest {
 
     @Test
     public void agreementThresholdIsStrictMajorityOfObservers() {
-        // k = floor((n-1)/2) + 1, replacing the fixed peerAgreementThreshold=2.
-        int[] expected = { 1, 1, 2, 2, 3, 3, 4, 4, 5 }; // n = 1..9
+        // k = floor(n/2) + 1, replacing the fixed peerAgreementThreshold=2.
+        // (floor((n-1)/2) + 1 gave exactly half for even n: 1,1,2,2,3,...)
+        int[] expected = { 1, 2, 2, 3, 3, 4, 4, 5, 5 }; // n = 1..9
         for (int n = 1; n <= 9; n++) {
             assertEquals("k for n=" + n, expected[n - 1], TrustScoringEngine.agreementThreshold(n));
         }
+    }
+
+    @Test
+    public void agreementThresholdIsMoreThanHalfForEveryN() {
+        for (int n = 1; n <= 25; n++) {
+            assertTrue("2k must exceed n at n=" + n, 2 * TrustScoringEngine.agreementThreshold(n) > n);
+        }
+    }
+
+    @Test
+    public void fiveNodeClusterTwoColludingObserversCannotZeroGarbage() {
+        // 5 nodes -> 4 observers per target. Two Byzantine observers flag an
+        // honest target; with the old k = floor((n-1)/2)+1 = 2 that zeroed it.
+        List<NodeObservation> obs = Arrays.asList(
+                sample(1.0, true), sample(1.0, true),
+                sample(1.0, false), sample(1.0, false));
+        assertEquals(1.0, TrustScoringEngine.garbageHealth(obs), 1e-9);
+    }
+
+    @Test
+    public void fiveNodeClusterMajorityOfObserversDoesZeroGarbage() {
+        List<NodeObservation> obs = Arrays.asList(
+                sample(1.0, true), sample(1.0, true),
+                sample(1.0, true), sample(1.0, false));
+        assertEquals(0.0, TrustScoringEngine.garbageHealth(obs), 1e-9);
+    }
+
+    @Test
+    public void fiveNodeClusterMedianIgnoresOneByzantineOfFour() {
+        // Median of 4 has breakdown point 1: one extreme report stays bounded
+        // by the honest samples.
+        List<NodeObservation> obs = Arrays.asList(
+                sample(0.0, false), sample(0.9, false),
+                sample(0.9, false), sample(0.9, false));
+        assertEquals(0.9, TrustScoringEngine.median(obs, TrustScoringEngine.Signal.HEARTBEAT), 1e-9);
     }
 
     @Test

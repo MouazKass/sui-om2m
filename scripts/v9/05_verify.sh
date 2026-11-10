@@ -10,7 +10,10 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 require_cli
-R1=0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9
+# The attack: the first active node (A) revokes the second one's (B) trust cap.
+A=${V9_NODES[0]}; B=${V9_NODES[1]}
+R1=${INV_ADDR[$A]}; CAP_A=$(node_cap "$A"); CAP_B=$(node_cap "$B")
+[ -n "$CAP_A" ] && [ -n "$CAP_B" ] || die "no trust AdminCap recorded for $A or $B"
 pass=0; fail=0; wait_=0
 P() { echo "PASS  $*"; pass=$((pass+1)); }
 F() { echo "FAIL  $*"; fail=$((fail+1)); }
@@ -42,13 +45,14 @@ print(f.get("package",""), f.get("version",""))')
 fi
 
 say "F: plugin config (generated files under deploy/v8/nodes)"
-for n in 1 2 3; do
-  f="$REPO/deploy/v8/nodes/rpi$n/sui.properties"
+for n in "${V9_NODES[@]}"; do
+  f="$REPO/deploy/v8/nodes/$n/sui.properties"
+  [ -f "$f" ] || { F "$n is active but has no generated config ($f)"; continue; }
   call=$(sed -n 's/^sui.package.id=//p' "$f"); orig=$(sed -n 's/^sui.package.original.id=//p' "$f")
-  is "$orig" "$PKG_V8" "rpi$n type-origin id stays v8"
-  if [ -n "${PKG_V9:-}" ] && [ "$call" = "$PKG_V9" ]; then P "rpi$n calls v9"
-  elif [ "$call" = "$PKG_V8" ]; then W "rpi$n still calls v8 (03_switch_plugin.sh v9)"
-  else F "rpi$n sui.package.id=$call"; fi
+  is "$orig" "$PKG_V8" "$n type-origin id stays v8"
+  if [ -n "${PKG_V9:-}" ] && [ "$call" = "$PKG_V9" ]; then P "$n calls v9"
+  elif [ "$call" = "$PKG_V8" ]; then W "$n still calls v8 (03_switch_plugin.sh v9)"
+  else F "$n sui.package.id=$call"; fi
 done
 [ -n "${V9_GRANT_VERIFIED:-}" ] && P "v9 calls seen landing from the nodes at $V9_GRANT_VERIFIED" || W "v9 calls from the nodes not verified yet"
 
@@ -58,24 +62,24 @@ governed=false
 if [ "$governed" != true ]; then
   W "governance not armed (04_council.sh)"
   # The review's attack is still open on v8; show it so nobody mistakes WAIT for safe.
-  r=$(inspect_outcome "$R1" "$PKG_V8" trust revoke_admin "$TRUST_ADMIN_CAP_RPI1" "$TRUST_REG" "$TRUST_ADMIN_CAP_RPI2")
+  r=$(inspect_outcome "$R1" "$PKG_V8" trust revoke_admin "$CAP_A" "$TRUST_REG" "$CAP_B")
   [ "$r" = success ] && echo "INFO  peer revoke via v8 still SUCCEEDS (simulated): the gap v9 closes is open until phase G" \
                      || echo "INFO  peer revoke via v8 simulated: $r"
 else
   [ -n "${COUNCIL:-}" ] && P "TrustRegistry governed by COUNCIL $COUNCIL" || F "governed, but no COUNCIL recorded"
-  is "$(inspect_value "$PKG_V9" quorum threshold "$COUNCIL")"    2 "threshold"
-  is "$(inspect_value "$PKG_V9" quorum member_count "$COUNCIL")" 3 "member count"
+  is "$(inspect_value "$PKG_V9" quorum threshold "$COUNCIL")"    "${THRESHOLD:-$(majority ${#V9_NODES[@]})}" "threshold"
+  is "$(inspect_value "$PKG_V9" quorum member_count "$COUNCIL")" "${#V9_NODES[@]}" "member count = active nodes in the inventory"
   for v in holds_identity_cap holds_policy_cap holds_issuer_cap; do
     is "$(inspect_value "$PKG_V9" quorum "$v" "$COUNCIL")" true "$v"
   done
   is "$(inspect_value "$PKG_V9" quorum holds_cluster_cap "$COUNCIL" "$CLUSTER")" true "holds_cluster_cap"
 
   say "H: the review's attack, simulated (nobody signs)"
-  is "$(inspect_outcome "$R1" "$PKG_V9" trust revoke_admin "$TRUST_ADMIN_CAP_RPI1" "$TRUST_REG" "$TRUST_ADMIN_CAP_RPI2")" \
-     "abort:trust::revoke_admin:8" "rpi1 revoking rpi2's cap via v9 -> E_GOVERNED"
-  r=$(inspect_outcome "$R1" "$PKG_V8" trust revoke_admin "$TRUST_ADMIN_CAP_RPI1" "$TRUST_REG" "$TRUST_ADMIN_CAP_RPI2")
+  is "$(inspect_outcome "$R1" "$PKG_V9" trust revoke_admin "$CAP_A" "$TRUST_REG" "$CAP_B")" \
+     "abort:trust::revoke_admin:8" "$A revoking $B's cap via v9 -> E_GOVERNED"
+  r=$(inspect_outcome "$R1" "$PKG_V8" trust revoke_admin "$CAP_A" "$TRUST_REG" "$CAP_B")
   case "$r" in abort:trust::*:5) P "same attack via the old v8 package id -> E_CAP_REVOKED ($r)";; *) F "v8-path attack: $r, want abort code 5";; esac
-  is "$(inspect_outcome "$R1" "$PKG_V9" trust revoke_admin "$TRUST_ADMIN_CAP_RPI1" "$TRUST_REG" "$TRUST_ADMIN_CAP_RPI1")" \
+  is "$(inspect_outcome "$R1" "$PKG_V9" trust revoke_admin "$CAP_A" "$TRUST_REG" "$CAP_A")" \
      success "self-revocation stays unilateral (simulated only)"
   gv=$(inspect_value "$PKG_V9" trust is_cap_valid "$TRUST_REG" "$TRUST_ADMIN_CAP")
   [ "$gv" = false ] && P "publisher's genesis trust cap revoked (first 2-of-3 action done)" \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 03_switch_plugin.sh - V9_DESIGN.md phase F: point the three Pis at v9 (or back).
+# 03_switch_plugin.sh - V9_DESIGN.md phase F: point every active node (deploy/inventory.tsv) at v9 (or back).
 #
 # Run from Git Bash on the laptop (like scripts/v8/04_cutover.sh, which it drives).
 #
@@ -21,9 +21,7 @@ set -euo pipefail
 CMD="${1:-status}"
 TARGET="$V9_DIR/plugin-target.env"
 CUTOVER="$REPO/scripts/v8/04_cutover.sh"
-NODE_ADDRS=(0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9
-            0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
-            0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10)
+NODE_ADDRS=(); for _n in "${V9_NODES[@]}"; do NODE_ADDRS+=("${INV_ADDR[$_n]}"); done
 
 gql() {
   curl -sS --max-time 20 "$GRAPHQL_URL" -H 'content-type: application/json' --data-binary @-
@@ -62,9 +60,9 @@ roll() {           # regenerate + upload + redeploy + verify
 case "$CMD" in
   status)
     say "plugin target"; current
-    for n in 1 2 3; do
-      f="$REPO/deploy/v8/nodes/rpi$n/sui.properties"
-      echo "rpi$n: $(grep -E '^sui.package.id=' "$f") $(grep -E '^sui.das.deny.audit.flush.enabled=' "$f")"
+    for n in "${V9_NODES[@]}"; do
+      f="$REPO/deploy/v8/nodes/$n/sui.properties"
+      echo "$n: $(grep -E '^sui.package.id=' "$f") $(grep -E '^sui.das.deny.audit.flush.enabled=' "$f")"
     done
     ;;
 

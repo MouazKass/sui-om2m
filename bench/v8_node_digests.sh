@@ -8,9 +8,11 @@ set -euo pipefail
 OUT="${1:-$(cd "$(dirname "$0")/.." && pwd)/evidence/v8-measurements/node_tx_digests.csv}"
 SINCE="${2:-48h}"
 KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}"
-declare -A IP=([rpi1]=10.25.96.200 [rpi2]=10.25.96.201 [rpi3]=10.25.96.203)
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+. "$REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
+declare -A IP=(); for _n in "${INV_ALL[@]}"; do IP[$_n]=${INV_IP[$_n]}; done
 echo "kind,digest,node" > "$OUT"
-for n in rpi1 rpi2 rpi3; do
+for n in $(inv_nodes active); do
   ssh -i "$KEY" -o BatchMode=yes "user@${IP[$n]}" "docker logs --since $SINCE om2m-active 2>&1" | python -c '
 import sys,re
 pats=[("plugin_renew_lease", r"Lease anchored .*digest=(\w{32,})"),

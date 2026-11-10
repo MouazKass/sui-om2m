@@ -1,8 +1,9 @@
 # lib_v8.sh - shared helpers for the v8 proof scripts. Source it; don't run it.
 #
 # Every ID comes from deploy/v8/env.v8.sh, which scripts/v8/03_gen_config.sh
-# generates from deploy/v8/deployment.env (the single source of truth). Nothing
-# is hard-coded here except the node IPs.
+# generates from deploy/v8/deployment.env (the single source of truth). The
+# nodes (names, IPs, addresses) come from deploy/inventory.tsv; NODES is every
+# active node and DAS_NODE the CapToken owner.
 #
 # Who signs what:
 #   node_call rpiN ...  - signed by that node's own key, inside its container
@@ -25,13 +26,20 @@ PKG=$PKG_V8
 
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}"
 GAS_BUDGET="${GAS_BUDGET:-20000000}"
-declare -A NODE_IP=([rpi1]=10.25.96.200 [rpi2]=10.25.96.201 [rpi3]=10.25.96.203)
-declare -A NODE_ADDR=([rpi1]=$RPI1 [rpi2]=$RPI2 [rpi3]=$RPI3)
-declare -A NODE_CAP=([rpi1]=$ADMINCAP_RPI1 [rpi2]=$ADMINCAP_RPI2 [rpi3]=$ADMINCAP_RPI3)
+# shellcheck source=../scripts/lib/inventory.sh
+. "$REPO/scripts/lib/inventory.sh"; inv_load
+mapfile -t NODES < <(inv_nodes active)
+DAS_NODE=$(inv_das)
+declare -A NODE_IP=() NODE_ADDR=() NODE_CAP=()
+for _n in "${NODES[@]}"; do
+  _cv="ADMINCAP_${_n^^}"
+  NODE_IP[$_n]=${INV_IP[$_n]}; NODE_ADDR[$_n]=${INV_ADDR[$_n]}; NODE_CAP[$_n]=${!_cv:-}
+  [ -n "${NODE_CAP[$_n]}" ] || { echo "FATAL: $_cv missing from env.v8.sh - regenerate (scripts/v8/03_gen_config.sh)" >&2; exit 1; }
+done
 
 on()      { ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@${NODE_IP[$1]}" "${@:2}"; }
 wsl_run() { printf '%s\n' "$1" | wsl.exe -d Ubuntu -- bash -s 2>&1 | tr -d '\r'; }
-name_of() { local a=${1,,}; for n in rpi1 rpi2 rpi3; do [ "${NODE_ADDR[$n],,}" = "$a" ] && { echo "$n"; return; }; done; echo "$1"; }
+name_of() { local a=${1,,}; for n in "${NODES[@]}"; do [ "${NODE_ADDR[$n],,}" = "$a" ] && { echo "$n"; return; }; done; echo "$1"; }
 
 hr()     { echo "--------------------------------------------------------------------------------"; }
 banner() { echo; echo "################################################################################"; echo "#  $*"; echo "################################################################################"; echo; }

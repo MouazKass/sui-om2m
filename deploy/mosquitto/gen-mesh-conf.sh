@@ -1,6 +1,8 @@
 #!/bin/bash
 # Generates a per-node mosquitto.conf for the loop-free broker mesh.
-# Usage: gen-mesh-conf.sh <self-ip> <self-sui-address> <peer1-ip> <peer2-ip>
+# Usage: gen-mesh-conf.sh <self-ip> <self-sui-address> <peer-ip> [<peer-ip>...]
+#   one out-only bridge per peer; any cluster size (callers take the peers from
+#   deploy/inventory.tsv via scripts/lib/inventory.sh).
 #
 # Why the topology changed (2026-11-10)
 # -------------------------------------
@@ -19,9 +21,15 @@
 # bridge forwards ONLY this node's own subtree, OUT. A message from A reaches B
 # directly, and B's bridges don't match A's subtree, so it is never forwarded
 # again. Full mesh, no hub, no cycle, no amplification.
-SELF=$1; SELF_ADDR=$(echo "$2" | tr 'A-F' 'a-f'); P1=$3; P2=$4
-[ -n "$SELF" ] && [ -n "$SELF_ADDR" ] && [ -n "$P1" ] && [ -n "$P2" ] || {
-  echo "usage: $0 <self-ip> <self-sui-address> <peer1-ip> <peer2-ip>" >&2; exit 1; }
+SELF=${1:-}; SELF_ADDR=$(echo "${2:-}" | tr 'A-F' 'a-f'); shift 2 2>/dev/null || true
+PEERS=("$@")
+[ -n "$SELF" ] && [ -n "$SELF_ADDR" ] && [ ${#PEERS[@]} -ge 1 ] || {
+  echo "usage: $0 <self-ip> <self-sui-address> <peer-ip> [<peer-ip>...]" >&2; exit 1; }
+for p in "${PEERS[@]}"; do
+  [ "$p" != "$SELF" ] || { echo "$0: a node must not bridge to itself ($p)" >&2; exit 1; }
+done
+[ "$(printf '%s
+' "${PEERS[@]}" | sort | uniq -d)" = "" ] || { echo "$0: duplicate peer" >&2; exit 1; }
 
 bridge() {
 cat <<CONF
@@ -45,5 +53,4 @@ persistence true
 persistence_location /mosquitto/data/
 
 CONF
-bridge "$P1"
-bridge "$P2"
+for p in "${PEERS[@]}"; do bridge "$p"; done

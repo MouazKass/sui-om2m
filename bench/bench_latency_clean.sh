@@ -2,7 +2,11 @@
 # Clean latency: fires until exactly TARGET successful GRANT samples are collected.
 # Reads elapsedMs from logs with a wide window. Reports a real round-number n.
 set -uo pipefail
-NODE="${1:-10.25.96.203}"; TARGET="${2:-100}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
+INV_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${REPO:-$INV_REPO}"
+# shellcheck source=../scripts/lib/inventory.sh
+. "$INV_REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
+NODE="${1:-${INV_IP[$(inv_das)]}}"; TARGET="${2:-100}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
 BASE=http://127.0.0.1:8282
 ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 

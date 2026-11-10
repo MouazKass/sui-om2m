@@ -35,6 +35,7 @@ module om2m_access::quorum_tests {
     const N2: address = @0x2;
     const N3: address = @0x3;
     const N4: address = @0x4;
+    const N5: address = @0x5;
     const SENSOR: address = @0xAE;       // registered, but an AE: not eligible
     const OUTSIDER: address = @0xBAD;    // not registered at all
     const NEWNODE: address = @0x99;
@@ -92,11 +93,13 @@ module om2m_access::quorum_tests {
         register(&mut sc, N2, identity::role_mn_cse());
         register(&mut sc, N3, identity::role_mn_cse());
         register(&mut sc, N4, identity::role_mn_cse());
+        register(&mut sc, N5, identity::role_mn_cse());
         register(&mut sc, SENSOR, identity::role_ae());
         grant_trust_cap(&mut sc, N1);
         grant_trust_cap(&mut sc, N2);
         grant_trust_cap(&mut sc, N3);
         grant_trust_cap(&mut sc, N4);
+        grant_trust_cap(&mut sc, N5);
         ts::next_tx(&mut sc, ADMIN);
         failover::create_cluster(b"EE_5", N1, 50, 60_000, &clk, ts::ctx(&mut sc));
         (sc, clk)
@@ -106,6 +109,20 @@ module om2m_access::quorum_tests {
     fun setup(): (Scenario, Clock) {
         let (mut sc, clk) = base();
         create_council_with(&mut sc, vector[N1, N2, N3], 2);
+        ts::next_tx(&mut sc, ADMIN);
+        let mut council = ts::take_shared<Council>(&sc);
+        quorum::deposit_policy_cap(&mut council, ts::take_from_sender<PolicyAdminCap>(&sc));
+        quorum::deposit_issuer_cap(&mut council, ts::take_from_sender<IssuerCap>(&sc));
+        quorum::deposit_cluster_cap(&mut council, ts::take_from_sender<ClusterAdminCap>(&sc));
+        ts::return_shared(council);
+        (sc, clk)
+    }
+
+    /// The 5-node testbed (2026-11-10: rpi4 and rpi5 added): council
+    /// {N1..N5}, k = 3 (strict majority), every admin cap handed over.
+    fun setup5(): (Scenario, Clock) {
+        let (mut sc, clk) = base();
+        create_council_with(&mut sc, vector[N1, N2, N3, N4, N5], 3);
         ts::next_tx(&mut sc, ADMIN);
         let mut council = ts::take_shared<Council>(&sc);
         quorum::deposit_policy_cap(&mut council, ts::take_from_sender<PolicyAdminCap>(&sc));
@@ -764,6 +781,57 @@ module om2m_access::quorum_tests {
         let p2 = propose_as(&mut sc, N1, quorum::act_remove_member(), N2, b"", 0, 0, 0, TTL, &clk);
         approve_as(&mut sc, N2, p2, &clk);
         exec_membership_as(&mut sc, N1, p2, &clk);
+        finish(sc, clk);
+    }
+
+    // ==================================================================
+    //  5-node council (3-of-5)
+    // ==================================================================
+
+    #[test]
+    fun five_member_council_is_three_of_five() {
+        let (mut sc, clk) = setup5();
+        ts::next_tx(&mut sc, ADMIN);
+        let council = ts::take_shared<Council>(&sc);
+        assert!(quorum::member_count(&council) == 5, 0);
+        assert!(quorum::threshold(&council) == 3, 1);
+        ts::return_shared(council);
+        finish(sc, clk);
+    }
+
+    #[test]
+    fun revoke_admin_with_three_of_five() {
+        let (mut sc, clk) = setup5();
+        let vid = cap_id_of(&mut sc, N5);
+        let pid = propose_as(&mut sc, N1, quorum::act_trust_revoke_admin(), object::id_to_address(&vid), b"", 0, 0, 0, TTL, &clk);
+        approve_as(&mut sc, N2, pid, &clk);
+        approve_as(&mut sc, N4, pid, &clk);
+        exec_trust_as(&mut sc, N3, pid, &clk);
+        ts::next_tx(&mut sc, ADMIN);
+        let treg = ts::take_shared<TrustRegistry>(&sc);
+        assert!(!trust::is_cap_valid(&treg, vid), 0);
+        ts::return_shared(treg);
+        finish(sc, clk);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 4, location = om2m_access::quorum)]
+    fun two_of_five_is_not_quorum() {
+        // Two colluding nodes of five must not be able to revoke a peer.
+        let (mut sc, clk) = setup5();
+        let vid = cap_id_of(&mut sc, N5);
+        let pid = propose_as(&mut sc, N1, quorum::act_trust_revoke_admin(), object::id_to_address(&vid), b"", 0, 0, 0, TTL, &clk);
+        approve_as(&mut sc, N2, pid, &clk);
+        exec_trust_as(&mut sc, N1, pid, &clk);
+        finish(sc, clk);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 7, location = om2m_access::quorum)]
+    fun five_member_council_with_threshold_two_rejected() {
+        // k = 2 of n = 5 is not a strict majority.
+        let (mut sc, clk) = base();
+        create_council_with(&mut sc, vector[N1, N2, N3, N4, N5], 2);
         finish(sc, clk);
     }
 }

@@ -179,7 +179,7 @@ public final class TrustConfig {
         this.heartbeatPeriodMs  = l(p, "failover.heartbeat.period.ms", 5_000);
 
         // B3: the peer-agreement threshold is no longer a fixed constant. It is
-        // derived per aggregation as k = floor((n-1)/2) + 1 over the admitted
+        // derived per aggregation as k = floor(n/2) + 1 over the admitted
         // observers, so it carries a real Byzantine-fault bound.
         this.peerLivenessMs         = l(p, "trust.peer.liveness.ms", 30_000);
 

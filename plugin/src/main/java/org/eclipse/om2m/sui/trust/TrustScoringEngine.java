@@ -393,7 +393,7 @@ public final class TrustScoringEngine {
      * which bears no relation to how many observers actually reported: with 2
      * live observers it meant unanimity, with 9 it let 2 observers out of 9 zero
      * a signal, and it carried no Byzantine-fault bound at all. It is now
-     * {@code k = floor((n-1)/2) + 1}, i.e. a strict majority of the n admitted
+     * {@code k = floor(n/2) + 1}, i.e. a strict majority of the n admitted
      * observers — the standard bound for tolerating up to
      * {@code floor((n-1)/2)} faulty participants. This is only meaningful
      * because B10 now bounds who may be an observer at all; without the
@@ -411,13 +411,7 @@ public final class TrustScoringEngine {
         double hist  = median(obs, Signal.HISTORICAL);
         double inact = median(obs, Signal.INACTIVE);
 
-        int garCount = 0;
-        for (NodeObservation o : obs) {
-            if (o.garbageFlag) garCount++;
-        }
-        // k = floor((n-1)/2) + 1  — strict majority of the n observers.
-        int k = agreementThreshold(n);
-        double garHealth = (garCount >= k) ? 0.0 : 1.0;
+        double garHealth = garbageHealth(obs);
 
         double score =
               cfg.wHeartbeat     * hb
@@ -432,12 +426,26 @@ public final class TrustScoringEngine {
     }
 
     /**
-     * B3: peer-agreement threshold for n observers, k = floor((n-1)/2) + 1.
-     * Tolerates up to floor((n-1)/2) Byzantine observers.
+     * B3: peer-agreement threshold for n observers, k = floor(n/2) + 1, a
+     * strict majority. Tolerates up to floor((n-1)/2) Byzantine observers.
+     *
+     * <p>It used to be {@code floor((n-1)/2) + 1}, which is a strict majority
+     * only for odd n. For even n it is exactly half: in the 5-node cluster
+     * (2026-11-10) every target has 4 observers, so k was 2 and two colluding
+     * observers could zero an honest target's garbage signal on their own.
      */
     static int agreementThreshold(int n) {
         if (n <= 0) return 1;
-        return ((n - 1) / 2) + 1;
+        return (n / 2) + 1;
+    }
+
+    /** Garbage health: 0 only when a strict majority of observers flag it. */
+    static double garbageHealth(List<NodeObservation> obs) {
+        int garCount = 0;
+        for (NodeObservation o : obs) {
+            if (o.garbageFlag) garCount++;
+        }
+        return (garCount >= agreementThreshold(obs.size())) ? 0.0 : 1.0;
     }
 
     /** The per-observation value signals the median is taken over. */

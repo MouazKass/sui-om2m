@@ -22,6 +22,62 @@ Most of the manual steps further down are **no longer needed**. They're kept as 
 - **Gas runs low:** nothing to do. `sui-gas-watchdog.timer` (host, every 30 min ± 5) tops a
   node up from the testnet faucet when its balance drops below 1.0 SUI. See
   [Gas watchdog](#gas-watchdog-testnet-faucet-top-up-2026-11-10) below.
+- **The node list is `deploy/inventory.tsv`.** Every script (config generation, cutover,
+  mesh, proofs, bench, v9) reads it through `scripts/lib/inventory.sh`; nothing hard-codes
+  a node any more. Only `status=active` nodes are deployed, meshed and counted. To add a
+  Pi, see [Adding a node](#adding-a-node-2026-11-10) below.
+
+### Adding a node (2026-11-10)
+
+Two Pi 5 nodes were listed on 2026-11-10 as `status=pending`: **rpi4** (`rpi4-iot`,
+10.25.96.204, `88:a2:9e:06:d5:96`) and **rpi5** (`rpi5-iot`, 10.25.96.205,
+`88:a2:9e:06:d3:a7`). The procedure is `scripts/onboard_node.sh <name> <step>`, run
+from Git Bash on the laptop. Every step checks first and skips work already done.
+
+1. **Make the Pi reachable.** It must answer `ping` over the campus network or VPN, and
+   accept the laptop key. Authorize the key once yourself (it asks for the Pi's password):
+   `! ssh-copy-id -i ~/.ssh/id_ed25519_suiom2m.pub user@10.25.96.204`.
+   Then run `scripts/onboard_node.sh rpi4 status`.
+2. **Off-chain part:** `scripts/onboard_node.sh rpi4 offchain`. It runs four steps:
+   - `preflight`: key auth works; hostname and eth0 MAC match the inventory (so you have
+     the right Pi); aarch64; Debian trixie; passwordless sudo; at least 20 GB free; NTP.
+   - `docker`: Docker CE from the docker.com apt repo, the same `docker.list` and packages
+     as rpi1–3.
+   - `images`: copies the donor's `:rpiN-v7-final` OM2M image as `:rpi4-base` and copies
+     `eclipse-mosquitto:2`, checking image ids. The donor defaults to the first active
+     non-DAS node; set `DONOR=` to choose.
+   - `sui-key`: installs the donor's exact `sui` binary (sha256 checked) and generates the
+     node's ed25519 key **on the Pi**. Only the address is printed. The recovery phrase is
+     discarded, so the keystore on the Pi is the only copy, as on rpi1–3. The address is
+     recorded in the inventory with status `staged`.
+3. **On-chain admission** (publisher, in WSL; each step prints the exact transaction and
+   does nothing without `--execute`; `--simulate` dry-runs it for free):
+   `onchain-register`, then `onchain-trust`, then `onchain-cap`.
+   - `onchain-register` is `identity::register`.
+   - `onchain-trust` is `trust::add_node`, score 80, like genesis.
+   - `onchain-cap` is `trust::grant_admin_registered` to the node's own address. It
+     records `TRUST_ADMIN_CAP_RPI4` in `deploy/v8/deployment.env` and sets the node
+     `status=active`.
+
+   `scripts/onboard_onchain.sh status rpi4` shows what is already on-chain. **Once v9
+   governance is armed, the publisher can no longer do this.** Each step becomes a k-of-n
+   council proposal by member nodes (`ACT_ID_REGISTER`, `ACT_TRUST_ADD_NODE`,
+   `ACT_TRUST_GRANT_ADMIN`, then `ACT_ADD_MEMBER`), and the script stops and prints them.
+   So onboard nodes **before** `scripts/v9/04_council.sh`. That script refuses to arm
+   while any node is still pending or staged.
+4. **Finish:** `scripts/onboard_node.sh rpi4 finish`. It runs:
+   - `config`: regenerates every node's config, uploads this node's.
+   - `deploy`: `04_cutover.sh prepare` + `redeploy` with `ONLY=rpi4`; the `:rpi4-v8` image
+     is built from `:rpi4-base`.
+   - `host`: installs the DAS provisioning unit, the DAS watchdog timer and the gas watchdog.
+   - `fund`: one faucet top-up.
+   - `mesh`: `04_cutover.sh mesh` on **every** node, so every broker gains a bridge to the
+     new one. It restarts brokers only, not the CSEs.
+   - `verify`: health checks, the node's gossip and heartbeats seen on the DAS node's
+     broker, and its on-chain status.
+
+A node added this way has no v7 history: `04_cutover.sh rollback` leaves it on v8 and says
+so. Run `scripts/v8/04_cutover.sh verify` afterwards to check the whole cluster.
 
 ### Gas watchdog (testnet faucet top-up, 2026-11-10)
 
@@ -58,6 +114,7 @@ power loss). Written after a full recovery on 2026-06-22 where all three nodes
 had been down ~2 weeks and lost runtime config to a /tmp wipe.
 
 ## Nodes
+(History, June 2026. The current list is `deploy/inventory.tsv`.)
 - rpi3 = 10.25.96.203 = IN-CSE parent, addr 0x27dacda1...64ea10 (stable node)
 - rpi1 = 10.25.96.200 = MN-CSE follower, addr 0xef9c6271...e1d5f9
 - rpi2 = 10.25.96.201 = MN-CSE follower, addr 0x4be6060a...3dc1f5
