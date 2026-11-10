@@ -1,0 +1,113 @@
+# Address-balance gas deploy, 2026-11-10 (bundle 22c4e102487f9045)
+
+## Balances before deploy (MIST)
+rpi1 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 coinBalance:981187491,addressBalance:1000000000
+rpi2 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 coinBalance:375760593,addressBalance:2000000000
+rpi3 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 coinBalance:4067569695,addressBalance:0
+rpi4 0x7eeb2fbfc5f7287dc0488036ec3d2fa6eefe0531a1c18e33bbc65147fd8fdfc4 coinBalance:250000000,addressBalance:1000000000
+rpi5 0xcadbb748da0d7c9fc351fb696fcc0b3999094f774c6425730a29911165391723 coinBalance:248512667,addressBalance:1000000000
+
+## Balances after (MIST)
+rpi1 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 coinBalance:981187491,addressBalance:1000000000
+rpi2 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 coinBalance:371758841,addressBalance:1998999823
+rpi3 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 coinBalance:4060342424,addressBalance:0
+rpi4 0x7eeb2fbfc5f7287dc0488036ec3d2fa6eefe0531a1c18e33bbc65147fd8fdfc4 coinBalance:250000000,addressBalance:1000000000
+rpi5 0xcadbb748da0d7c9fc351fb696fcc0b3999094f774c6425730a29911165391723 coinBalance:248512667,addressBalance:1000000000
+
+## Bundle sha256 inside each om2m-active (prefix)
+rpi1 22c4e102487f9045f383ccc7a8f4e50cb1cb76dc6174c6fa81eb78b2413f3491
+rpi2 22c4e102487f9045f383ccc7a8f4e50cb1cb76dc6174c6fa81eb78b2413f3491
+rpi3 22c4e102487f9045f383ccc7a8f4e50cb1cb76dc6174c6fa81eb78b2413f3491
+rpi4 22c4e102487f9045f383ccc7a8f4e50cb1cb76dc6174c6fa81eb78b2413f3491
+rpi5 22c4e102487f9045f383ccc7a8f4e50cb1cb76dc6174c6fa81eb78b2413f3491
+
+## Address-balance-paid tx on rpi2 (lease renewal, sui.gas.source=address pinned temporarily)
+plugin log: Paying gas from the SUI address balance: address-balance(epochs 1279..1280, nonce=4234674394)
+plugin log: Lease anchored for 1200000 ms digest=BJACEyiQcsGSARFaRxxiBDTxHQ3MG3Ge5p41EaYAuCBZ (1938 ms)
+{"data":{"transaction":{"gasInput":{"gasBudget":"20000000","gasPrice":"1000","gasPayment":{"nodes":[]}},"expiration":{"epochId":1280},"effects":{"status":"SUCCESS","gasEffects":{"gasSummary":{"computationCost":1000000,"storageCost":1770800,"storageRebate":1770623}},"balanceChanges":{"nodes":[{"owner":{"address":"0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5"},"amount":"-1000177"}]}}}}}
+rpi2 immediately before: coin 373759717, address 2000000000 (watchdog dry run 19:56 and pre-tx read)
+rpi2 immediately after:  coin 373759717, address 1998999823 (delta -1000177 = net gas of the tx)
+
+## After revert to auto: rpi2 lease renewal paid by coin
+Lease anchored for 1200000 ms digest=5BXEpKATAPHELd2y9dsABPkYeXutwe5GY9ahCzTDWpkh
+rpi2 config sha256 prefix repo=v8=live: a83e67dd146af798
+
+## Final verify (all five)
+
+=== verify rpi1 ===
+om2m-active mouazkass/om2m-sui-in:rpi1-v8 Up 5 minutes
+mosquitto eclipse-mosquitto:2 Up 5 minutes
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+NativePtbBuilder ready: 1 keypair(s) loaded
+NativePtbBuilder ready: 1 keypair(s) loaded
+[trust] B6 observer epoch 1794323066 -> 1794326060 (persist=/var/lib/sui-om2m/trust-ema.properties.epoch)
+readTrustScore failed for 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10: Sui GraphQL error: Failed to simulate transaction [INTERNAL_SERVER_ERROR]
+sui-das: 200
+sui-dac-ae: 200
+
+=== verify rpi2 ===
+om2m-active mouazkass/om2m-sui-in:rpi2-v8 Up 51 seconds
+mosquitto eclipse-mosquitto:2 Up 52 seconds
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+NativePtbBuilder ready: 1 keypair(s) loaded
+NativePtbBuilder ready: 1 keypair(s) loaded
+[trust] B6 observer epoch 1794326248 -> 1794326309 (persist=/var/lib/sui-om2m/trust-ema.properties.epoch)
+Lease anchored for 1200000 ms digest=5BXEpKATAPHELd2y9dsABPkYeXutwe5GY9ahCzTDWpkh (1536 ms)
+sui-das: 200
+sui-dac-ae: 200
+
+=== verify rpi3 ===
+om2m-active mouazkass/om2m-sui-in:rpi3-v8 Up 4 minutes
+mosquitto eclipse-mosquitto:2 Up 4 minutes
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+om2mException
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+[ERROR] - org.eclipse.om2m.core.router.Router  
+OM2M exception caught in Router: Already registered
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+NativePtbBuilder ready: 1 keypair(s) loaded
+sui-das: 200
+sui-dac-ae: 200
+
+=== verify rpi4 ===
+om2m-active mouazkass/om2m-sui-in:rpi4-v8 Up 4 minutes
+mosquitto eclipse-mosquitto:2 Up 4 minutes
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+[ERROR] - org.eclipse.om2m.core.controller.Controller  
+om2mException
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+[ERROR] - org.eclipse.om2m.core.router.Router  
+OM2M exception caught in Router: Already registered
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+sui-das: 200
+sui-dac-ae: 200
+
+=== verify rpi5 ===
+om2m-active mouazkass/om2m-sui-in:rpi5-v8 Up 4 minutes
+mosquitto eclipse-mosquitto:2 Up 4 minutes
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+[ERROR] - org.eclipse.om2m.core.controller.Controller  
+om2mException
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+[ERROR] - org.eclipse.om2m.core.router.Router  
+OM2M exception caught in Router: Already registered
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+sui-das: 200
+sui-dac-ae: 200
+
+=== gossip wire format on the mesh (expect v2) ===
+     60 v2|0x27dacda1bdcb3fb8dc2a4b0d77b420deea5
+     60 v2|0x4be6060abaff0b4b6b7229558887f5f054c
+     60 v2|0x7eeb2fbfc5f7287dc0488036ec3d2fa6eef
+     60 v2|0xcadbb748da0d7c9fc351fb696fcc0b39990
+     60 v2|0xef9c6271d8c6cc9e1d9707a117f876e7a86
+
+=== C2: ordinary RETRIEVE on the DAC-protected AE as Csensor-001 (mapped on rpi3) ===
+HTTP 200
+Sui DAC consult: originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=2
+Sui GRANT originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=1 digest=HrndpQHAu9vASU7ooSgWECRSe2TbigGTTKyAhrAXKmMJ (3027 ms)

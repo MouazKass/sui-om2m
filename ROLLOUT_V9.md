@@ -160,8 +160,8 @@ each step on the member's own Pi, with its own key and cap:
 
 ## 6. Open items
 
-1. **Faucet address balance is not spendable by the nodes. FIXED in code (2026-11-10),
-   deploy pending.** Faucet v3 pays into the recipient's address balance; the plugin
+1. **Faucet address balance is not spendable by the nodes. FIXED and deployed
+   (2026-11-10, commit 76fca99, bundle `22c4e102…`).** Faucet v3 pays into the recipient's address balance; the plugin
    could only pay gas with `Coin` objects, and the gas watchdog decided on `totalBalance`.
    - *Plugin* (`sdk/GasPlan.java`, `SuiPtbEncoder.Expiration`, `SuiObjectFetcher.planGas`):
      every transaction now picks its gas source. A coin covering the budget is used as before;
@@ -182,9 +182,23 @@ each step on the member's own Pi, with its own key and cap:
      node's `sui.properties`. Dry run on rpi2: coins 0.3768, address balance 2.0000,
      spendable 2.3768 SUI.
    - *Tests:* 170/170 JUnit (13 new), Java 8 API check passes, 8/8 mutations caught.
-   - *Deploy* (after the ESP live tests): build, `04_cutover.sh prepare/redeploy/verify` on
-     all five, reinstall the watchdog, then confirm on rpi2 a transaction whose gas came from
-     the address balance (its log line "Paying gas from the SUI address balance").
+   - *Deployed 2026-11-10:* `prepare`, `redeploy` and `verify` on all five, exit 0. Bundle
+     `22c4e102487f9045…` confirmed inside every `om2m-active`. Gas watchdog reinstalled on
+     all five (`585d4f73…`); every dry run above threshold, nothing requested.
+   - *Live proof (rpi2, the parent).* rpi2 was pinned to `sui.gas.source=address` for one
+     restart, so its ordinary startup lease renewal had to pay from the address balance:
+     - log "Paying gas from the SUI address balance: address-balance(epochs 1279..1280, …)";
+     - tx `BJACEyiQcsGSARFaRxxiBDTxHQ3MG3Ge5p41EaYAuCBZ`: SUCCESS, `gasPayment` empty,
+       expiration max epoch 1280, net gas 1,000,177 MIST;
+     - rpi2 address balance 2,000,000,000 -> 1,998,999,823 MIST (exactly the gas), coins
+       unchanged at 373,759,717.
+     rpi2 was then reverted to `auto`; its config matches the generated copy byte for byte,
+     and its next renewal paid by coin (`5BXEpKATAPHELd2y9dsABPkYeXutwe5GY9ahCzTDWpkh`).
+   - *After the deploy:* `verify` clean on all five. Gossip v2 from all 5. C2 ordinary RETRIEVE
+     granted on-chain (`HrndpQHAu9vASU7ooSgWECRSe2TbigGTTKyAhrAXKmMJ`). One
+     `readTrustScore … INTERNAL_SERVER_ERROR` on rpi1 at startup, a one-off GraphQL server
+     error on the read-only simulation path, which this change does not touch.
+   - Evidence: `evidence/v9-rollout/address_balance_gas_deploy.log`.
    - The container's 1.73 CLI is still coin-only; it is only used by legacy paths
      (`ptb/PtbBuilder`), not by the native transaction builder.
 2. **The publisher's genesis trust cap is still valid** (bounded score writes, A12). The
