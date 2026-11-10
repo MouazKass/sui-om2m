@@ -1,0 +1,22 @@
+# scripts/v9/05_verify.sh  2026-11-10T08:12:18Z
+
+=== C/D: UpgradeCap custody ===
+WAIT  no multisig yet; UpgradeCap with the publisher (00_multisig.sh)
+
+=== E: package ===
+WAIT  not upgraded yet (02_upgrade.sh)
+
+=== F: plugin config (generated files under deploy/v8/nodes) ===
+PASS  rpi1 type-origin id stays v8 (0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1)
+WAIT  rpi1 still calls v8 (03_switch_plugin.sh v9)
+PASS  rpi2 type-origin id stays v8 (0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1)
+WAIT  rpi2 still calls v8 (03_switch_plugin.sh v9)
+PASS  rpi3 type-origin id stays v8 (0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1)
+WAIT  rpi3 still calls v8 (03_switch_plugin.sh v9)
+WAIT  v9 calls from the nodes not verified yet
+
+=== G: governance ===
+WAIT  governance not armed (04_council.sh)
+INFO  peer revoke via v8 still SUCCEEDS (simulated): the gap v9 closes is open until phase G
+
+result: 3 pass, 0 fail, 7 waiting

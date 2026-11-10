@@ -1,0 +1,19 @@
+# scripts/v9/rehearse_multisig.sh  2026-11-10T08:12:13Z
+  ACX13T9WYBJZuMuYlGPfVXclMJ5IGlmzCFWGkeHMLNBW
+  AJEzDhNYdSWuAjOLXAjM0VcyB2Lmhy564vFT0vAcS1cm
+  AMRqCzDUXxH2ViXkBf0qPhPAuKlliD/+EImeSnMOmOyg
+PASS  derive + record
+PASS  recorded address = CLI-derived 0x054dea306bcf4dfad61a86b513e28a10a5cafb8e47ac58e7b16ff7206f7255dd
+PASS  re-run is a no-op
+PASS  duplicate key refused -> FATAL: the three public keys must be distinct
+PASS  threshold 1 refused -> FATAL: threshold must be 2 or 3 for 3 signers (a strict majority)
+PASS  non-ed25519 blob refused -> FATAL: AAAA is not an ed25519 flag||pk (expected 33 bytes, flag 0x00; got 3 bytes, flag 00). Send the publicBase64Key, never a private key.
+PASS  only two keys refused -> FATAL: usage: /mnt/c/Users/Mouaz/Desktop/files/sui-om2m/scripts/v9/00_multisig.sh <pk1> <pk2> <pk3> [threshold]
+PASS  tx bytes (292 chars)
+PASS  combine (sigs given out of order)
+PASS  multisig signature written
+PASS  decoded: signers 1 and 3 in key order, threshold 2, address matches
+PASS  single signature refused -> FATAL: usage: /mnt/c/Users/Mouaz/Desktop/files/sui-om2m/scripts/v9/02_upgrade.sh combine <suiSignature1> <suiSignature2> [sig3]
+PASS  same signer twice refused -> FATAL: two signatures from the same key ACX13T9WYBJZuMuYlGPfVXclMJ5IGlmzCFWGkeHMLNBW
+PASS  non-member signature refused -> FATAL: signature from a key that is not a multisig member: ADfruIYsMMPeIDv7gMVJgEtx3WjaJrndyHRbre96GWS1
+rehearsal: 14 passed, 0 failed

@@ -422,12 +422,55 @@ sui client execute-signed-tx --tx-bytes "$TX" --signatures "$SIG"
 ### A. Code readiness (local): done
 - [x] 137 / 137 Move tests, mutation-checked; offline compatibility COMPATIBLE.
 
-### B. Toolchain: [!] WSL on the publisher laptop
-- [ ] Install Sui CLI `testnet-v1.83.1`, e.g. `suiup install sui@testnet-1.83.1`
-  or the release binary. Keep 1.74.0 aside until v9 is verified.
-- [ ] Re-run `sui move build && sui move test`: expect 137 / 137.
-- [ ] Check that `git diff move/Move.lock move/Published.toml` shows no
-  backslash paths.
+**Scripts (2026-11-10).** Every phase below has a script in `scripts/v9/`.
+Each one is idempotent, uses `set -euo pipefail`, reads the generated env
+files, and dry-runs by default. One-way steps also need a typed confirmation.
+
+| Phase | Script | Runs in | Signs? |
+|---|---|---|---|
+| C | `00_multisig.sh <pk1> <pk2> <pk3> [k]` → `deploy/v9/multisig.env` | anywhere | no |
+| D | `01_transfer_upgradecap.sh [--execute]` | WSL (publisher) | publisher, once |
+| E | `02_upgrade.sh dry-run \| build \| combine S1 S2 \| execute` | WSL | two signers, off-box |
+| F | `03_switch_plugin.sh status \| v9 \| flush-on \| v8` | Git Bash | node keys (normal operation) |
+| G | `04_council.sh [--execute]` | WSL (publisher) | publisher |
+| H | `05_verify.sh` (read-only, valid at every phase) | WSL | no |
+| – | `rehearse_multisig.sh`: C + E-combine with throwaway keys | WSL | no |
+
+`03_switch_plugin.sh` writes `deploy/v9/plugin-target.env`, and
+`scripts/v8/03_gen_config.sh` reads it (`CALL_PKG`, `DENY_FLUSH`). When that
+file is absent, the generated config is byte-identical to before (checked
+2026-11-10). `sui.package.original.id` always stays `$PKG_V8`. The guide for
+the other two signers is `V9_SIGNERS.md`. The evidence logs are in
+`evidence/v9-prep/`.
+
+### B. Toolchain: [!] WSL on the publisher laptop: done 2026-11-10
+- [x] Sui CLI `testnet-v1.83.1` installed side by side at
+  `~/sui-cli/1.83.1/sui` (the release tarball's SHA-256 `1a59344f…8347`
+  matched the GitHub release digest). 1.74.0 is still at
+  `/usr/local/bin/sui`. The v9 scripts pick 1.83.1 automatically (`lib.sh`),
+  and set `SUI=` to override.
+- [x] `sui move test` on 1.83.1: **137 / 137**. The new framework only adds
+  deprecation warnings (`dynamic_field::exists_` → `exists`, `vec_*::size` →
+  `length`). These are not errors and are left as is, so the bytecode stays
+  identical to the reviewed source.
+- [x] **On-chain upgrade dry run: success.** The CLI's on-chain compatibility
+  check accepts v9 as an upgrade of v8: version 2, 9 modules including
+  `quorum`. The estimated net cost is **0.2070 SUI** (computation 0.0019,
+  storage 0.2068, rebate 0.0016), so 1 SUI on the multisig covers it with
+  room to spare. See `evidence/v9-prep/upgrade_dryrun.log`.
+- [x] `move/Move.lock` and `Published.toml` are unchanged. The scripts build
+  from a temp copy, so the newer CLI never rewrites the committed files.
+- [x] Multisig rehearsal with three throwaway keys: 14 / 14 checks pass
+  (`evidence/v9-prep/multisig_rehearsal.log`). The checks cover:
+  - address derivation, which matches the CLI;
+  - idempotence;
+  - refusing duplicate keys, threshold 1, non-ed25519 keys and two keys;
+  - combining signatures pasted in the wrong order;
+  - refusing a single signature, the same signer twice, and a non-member's
+    signature.
+- [x] The peer-revoke attack, run as a free dev-inspect against live v8 (rpi1
+  revoking rpi2's cap), still **succeeds** today. That is the gap phase G
+  closes. `05_verify.sh` prints it while governance is not armed.
 
 ### C. Multisig: [!] all three signers
 - [ ] §5 steps 1–3. Record `UPGRADE_MULTISIG` and the three public keys
@@ -523,7 +566,8 @@ sui client call --package $PKG_V9 --module quorum --function deposit_cluster_cap
   re-create the single-key authority v9 removes.
 
 ### What Mouaz / Hamza / the third signer must provide
-1. Install CLI `testnet-v1.83.1` in WSL (phase B).
+1. ~~Install CLI `testnet-v1.83.1` in WSL (phase B).~~ Done 2026-11-10.
+   Each signer installs it on their own machine (`V9_SIGNERS.md` §1).
 2. Three ed25519 public keys (`flag||pk` Base64), one per signer, plus a
    decision on who the third signer is.
 3. About 1 SUI of testnet gas for the multisig address, and gas for each

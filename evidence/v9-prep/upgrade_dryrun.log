@@ -1,0 +1,12 @@
+# scripts/v9/02_upgrade.sh dry-run  2026-11-10T08:11:52Z  sui 1.83.1-0e0ede4cbf48
+UpgradeCap still with the publisher: dry run as publisher
+[NOTE] Dependencies on Sui, MoveStdlib, Bridge, DeepBook, and SuiSystem are automatically added, but this feature is disabled for your package because you have explicitly included dependencies on Sui. Consider removing these dependencies from `Move.toml`.
+[Note]: Dependency sources are no longer verified automatically during publication and upgrade. You can pass the `--verify-deps` option if you would like to verify them as part of publication or upgrade.
+INCLUDING DEPENDENCY MoveStdlib
+INCLUDING DEPENDENCY Sui
+BUILDING om2m_access
+status: success 
+estimated net gas: 207031763 MIST = 0.2070 SUI  (computation 1900000, storage 206765600, rebate 1633837)
+  published 0x41ef4dad1988d7611ffa010a30d21f8929893a1ab7e73bd34e33faf708022d41
+  mutated 0x2::package::UpgradeCap
+  mutated 0x2::coin::Coin<0x2::sui::SUI>

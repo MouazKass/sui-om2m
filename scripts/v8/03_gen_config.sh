@@ -43,6 +43,21 @@ grep -q $'\r' "$DEPLOY_ENV" && die "$DEPLOY_ENV has CRLF line endings"
 # shellcheck disable=SC1090
 source "$DEPLOY_ENV"
 
+# v9 switch (scripts/v9/03_switch_plugin.sh writes this file; delete it to go
+# back to v8). CALL_PKG is the package the plugin CALLS (sui.package.id); type
+# names always keep the original id PKG_V8 (sui.package.original.id).
+PLUGIN_TARGET="${PLUGIN_TARGET:-$REPO/deploy/v9/plugin-target.env}"
+CALL_PKG=$PKG_V8
+DENY_FLUSH=false
+if [ -f "$PLUGIN_TARGET" ]; then
+  grep -q $'\r' "$PLUGIN_TARGET" && die "$PLUGIN_TARGET has CRLF line endings"
+  # shellcheck disable=SC1090
+  source "$PLUGIN_TARGET"
+  [[ "$CALL_PKG" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "$PLUGIN_TARGET: CALL_PKG=$CALL_PKG is not a package id"
+  case "$DENY_FLUSH" in true|false) ;; *) die "$PLUGIN_TARGET: DENY_FLUSH must be true or false";; esac
+  echo "plugin target override: sui.package.id=$CALL_PKG, deny flush=$DENY_FLUSH (from $PLUGIN_TARGET)"
+fi
+
 is_id() { [[ "${1:-}" =~ ^0x[0-9a-fA-F]{1,64}$ ]]; }
 REQUIRED=(PKG_V8 ID_REG TRUST_REG POLICY_REG AUDIT_TRAIL ISSUER_CAP ID_ADMIN_CAP TRUST_ADMIN_CAP
           POL_ADMIN_CAP AUDIT_ADMIN_CAP UPGRADE_CAP
@@ -100,7 +115,7 @@ gen_sui_properties() {  # node
 # --- keys present in the live v7 file (same structure, v8 values) ---
 sui.cli.path=$cli
 sui.env=testnet
-sui.package.id=$PKG_V8
+sui.package.id=$CALL_PKG
 # Type-origin package id: Move type names (e.g. ParentPoaKey) keep the id of the
 # package that defined them across compatible upgrades. Stays $PKG_V8 even when
 # sui.package.id moves to an upgraded package (v9). Plugin default: sui.package.id.
@@ -139,7 +154,7 @@ sui.das.deny.log.max.bytes=5242880
 sui.das.deny.log.keep=3
 # v9 only: anchor DENY windows on-chain (evaluator::log_deny_batch). The
 # function does not exist in v8, so this stays false until the v9 upgrade.
-sui.das.deny.audit.flush.enabled=false
+sui.das.deny.audit.flush.enabled=$DENY_FLUSH
 sui.das.deny.audit.flush.interval.min=15
 
 # --- added for v8 ---
@@ -376,11 +391,11 @@ print(json.dumps({
  "das": "$DAS_NODE",
  "originators": ["admin:admin", "Csensor-001"],
  "tokens": {"$RES_PROTECTED_CNT": "$TOKEN_SUI_PROTECTED_CNT", "$RES_DAC_AE": "$TOKEN_SUI_DAC_AE"},
- "shared": {"sui.package.id": "$PKG_V8", "sui.package.original.id": "$PKG_V8", "sui.identity.registry.id": "$ID_REG",
+ "shared": {"sui.package.id": "$CALL_PKG", "sui.package.original.id": "$PKG_V8", "sui.identity.registry.id": "$ID_REG",
             "sui.trust.registry.id": "$TRUST_REG", "sui.policy.registry.id": "$POLICY_REG",
             "sui.audit.trail.id": "$AUDIT_TRAIL", "sui.failover.cluster.id": "$CLUSTER",
             "sui.clock.id": "0x6", "sui.graphql.url": "$GRAPHQL_URL", "sui.use.native.rpc": "true",
-            "sui.das.precheck.enabled": "true", "sui.das.deny.audit.flush.enabled": "false",
+            "sui.das.precheck.enabled": "true", "sui.das.deny.audit.flush.enabled": "$DENY_FLUSH",
             "sui.das.deny.log.path": "/var/lib/sui-om2m/deny-log.jsonl"},
 }))
 PY
