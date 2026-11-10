@@ -36,6 +36,10 @@ module om2m_access::trust {
     // A12: rate limiting on score writes
     const E_DELTA_TOO_LARGE: u64 = 6;
     const E_RATE_LIMITED: u64 = 7;
+    // v9: registry is governed by a k-of-n quorum::Council; the single-cap
+    // administrative paths below are closed.
+    const E_GOVERNED: u64 = 8;
+    const E_NOT_GOVERNING_COUNCIL: u64 = 9;
 
     // === Bounds ===
     const MAX_SCORE: u64 = 100;
@@ -134,7 +138,20 @@ module om2m_access::trust {
         initial_score: u64,
         clock: &Clock,
     ) {
+        // v9: once a quorum council governs this registry, onboarding a node
+        // is a council decision (quorum::execute_trust), not one cap's.
+        assert_not_governed(registry);
         assert_cap_valid(admin, registry);
+        insert_node(registry, node_addr, initial_score, clock);
+    }
+
+    // Shared body of add_node and governed_add_node.
+    fun insert_node(
+        registry: &mut TrustRegistry,
+        node_addr: address,
+        initial_score: u64,
+        clock: &Clock,
+    ) {
         assert!(!table::contains(&registry.entries, node_addr), E_ALREADY_EXISTS);
         let now = clock::timestamp_ms(clock);
         let s = if (initial_score > MAX_SCORE) MAX_SCORE else initial_score;
@@ -324,7 +341,19 @@ module om2m_access::trust {
         recipient: address,
         ctx: &mut TxContext,
     ) {
+        // v9: grant_admin / grant_admin_registered both land here, so this one
+        // guard closes single-cap delegation once the registry is governed.
+        assert_not_governed(registry);
         assert_cap_valid(admin, registry);
+        mint_register_transfer(registry, recipient, ctx);
+    }
+
+    // Shared body of mint_and_register and governed_grant.
+    fun mint_register_transfer(
+        registry: &mut TrustRegistry,
+        recipient: address,
+        ctx: &mut TxContext,
+    ) {
         let cap = AdminCap { id: object::new(ctx) };
         let cid = object::id(&cap);
         let set = valid_caps_mut(registry);
@@ -386,14 +415,15 @@ module om2m_access::trust {
     }
 
     fun valid_caps_mut(registry: &mut TrustRegistry): &mut VecSet<ID> {
-        if (!df::exists_(&registry.id, VALID_CAPS_KEY)) {
-            df::add(&mut registry.id, VALID_CAPS_KEY, vec_set::empty<ID>());
+        let key = caps_key(registry);
+        if (!df::exists_(&registry.id, key)) {
+            df::add(&mut registry.id, key, vec_set::empty<ID>());
         };
-        df::borrow_mut<vector<u8>, VecSet<ID>>(&mut registry.id, VALID_CAPS_KEY)
+        df::borrow_mut<vector<u8>, VecSet<ID>>(&mut registry.id, key)
     }
 
     fun valid_caps(registry: &TrustRegistry): &VecSet<ID> {
-        df::borrow<vector<u8>, VecSet<ID>>(&registry.id, VALID_CAPS_KEY)
+        df::borrow<vector<u8>, VecSet<ID>>(&registry.id, caps_key(registry))
     }
 
     // Enforce cap validity, but only once the registry has been bootstrapped.
@@ -403,7 +433,7 @@ module om2m_access::trust {
         if (is_bootstrapped(registry)) {
             let id = object::id(admin);
             assert!(
-                df::exists_(&registry.id, VALID_CAPS_KEY) &&
+                df::exists_(&registry.id, caps_key(registry)) &&
                 vec_set::contains(valid_caps(registry), &id),
                 E_CAP_REVOKED
             );
@@ -423,6 +453,9 @@ module om2m_access::trust {
         // A2: the calling cap must itself be valid. On a fresh publish init()
         // has already bootstrapped the registry, so this is fail-closed from
         // the first transaction and a revoked cap cannot re-register itself.
+        // v9: but any VALID cap could still re-insert a cap id the council
+        // revoked (an un-revoke). Closed once the registry is governed.
+        assert_not_governed(registry);
         assert_cap_valid(admin, registry);
         let set = valid_caps_mut(registry);
         let mut i = 0;
@@ -448,7 +481,19 @@ module om2m_access::trust {
         cap_id: ID,
         _ctx: &mut TxContext,
     ) {
+        // v9: a single cap holder can no longer revoke ANOTHER node's cap.
+        // In v8 any valid cap could revoke any other, so one compromised node
+        // could lock every honest node out of score writes (and, under v9,
+        // out of council approvals). Once the registry is governed, revoking
+        // a peer goes through quorum::execute_trust (k-of-n). A cap revoking
+        // ITSELF stays unilateral: it only gives up the caller's own power,
+        // and a node that suspects its key leaked must be able to act alone.
         assert_cap_valid(admin, registry);
+        if (cap_id != object::id(admin)) assert_not_governed(registry);
+        remove_cap_id(registry, cap_id);
+    }
+
+    fun remove_cap_id(registry: &mut TrustRegistry, cap_id: ID) {
         let set = valid_caps_mut(registry);
         if (vec_set::contains(set, &cap_id)) {
             vec_set::remove(set, &cap_id);
@@ -470,7 +515,7 @@ module om2m_access::trust {
         let burn_id = object::id(&to_burn);
         // Only touch the validity set if it already exists; never create it
         // here as a side effect of burning.
-        if (df::exists_(&registry.id, VALID_CAPS_KEY)) {
+        if (df::exists_(&registry.id, caps_key(registry))) {
             let set = valid_caps_mut(registry);
             if (vec_set::contains(set, &burn_id)) {
                 vec_set::remove(set, &burn_id);
@@ -486,8 +531,104 @@ module om2m_access::trust {
     // registered.) Useful for tests/monitoring.
     public fun is_cap_valid(registry: &TrustRegistry, cap_id: ID): bool {
         is_bootstrapped(registry) &&
-        df::exists_(&registry.id, VALID_CAPS_KEY) &&
+        df::exists_(&registry.id, caps_key(registry)) &&
         vec_set::contains(valid_caps(registry), &cap_id)
+    }
+
+    // ===================================================================
+    // v9: k-of-n governance (quorum.move).
+    //
+    // A dynamic field on the TrustRegistry records the ID of the one
+    // quorum::Council that governs it. While it is set, every single-cap
+    // administrative path (add_node, grant_admin, grant_admin_registered,
+    // bootstrap_valid_caps, revoke_admin) aborts with E_GOVERNED, and the
+    // same operations are reachable only through the package-internal
+    // governed_* functions below, which quorum.move calls after k distinct
+    // members have approved. Score writes (increase/decrease_guarded) are
+    // untouched: they stay per-node and rate-limited (A12).
+    //
+    // Arming is one-way: there is no un-govern function. Everything here is
+    // additive (a new dynamic field, new functions, body-only guards), so it
+    // ships as a compatible upgrade of v8.
+    // ===================================================================
+    const GOVERNED_KEY: vector<u8> = b"v9_governing_council";
+    const V9_VALID_CAPS_KEY: vector<u8> = b"v9_valid_caps";
+
+    fun assert_not_governed(registry: &TrustRegistry) {
+        assert!(!df::exists_(&registry.id, GOVERNED_KEY), E_GOVERNED);
+    }
+
+    fun assert_governed_by(registry: &TrustRegistry, council: ID) {
+        assert!(df::exists_(&registry.id, GOVERNED_KEY), E_NOT_GOVERNING_COUNCIL);
+        let gov = *df::borrow<vector<u8>, ID>(&registry.id, GOVERNED_KEY);
+        assert!(gov == council, E_NOT_GOVERNING_COUNCIL);
+    }
+
+    /// Hand administration of this registry to `council`. Requires a valid
+    /// AdminCap and an ungoverned registry, so it happens exactly once.
+    public(package) fun set_governed(admin: &AdminCap, registry: &mut TrustRegistry, council: ID) {
+        assert_cap_valid(admin, registry);
+        assert_not_governed(registry);
+        // Old package versions stay callable on Sui: after the upgrade anyone
+        // can still call v8's revoke_admin / grant_admin / bootstrap_valid_caps
+        // at the v8 package id, and those bodies have no governed check. v8's
+        // assert_cap_valid reads the set under VALID_CAPS_KEY and fails
+        // closed if it is missing (BOOTSTRAPPED_KEY stays set). Moving the set
+        // to V9_VALID_CAPS_KEY therefore makes every v8 cap-gated path abort
+        // with E_CAP_REVOKED, while v9 code reads the moved set via caps_key().
+        let set = df::remove<vector<u8>, VecSet<ID>>(&mut registry.id, VALID_CAPS_KEY);
+        df::add(&mut registry.id, V9_VALID_CAPS_KEY, set);
+        df::add(&mut registry.id, GOVERNED_KEY, council);
+    }
+
+    // Where the validity set lives: VALID_CAPS_KEY until governed, then
+    // V9_VALID_CAPS_KEY (only v9+ bytecode reads it).
+    fun caps_key(registry: &TrustRegistry): vector<u8> {
+        if (df::exists_(&registry.id, GOVERNED_KEY)) V9_VALID_CAPS_KEY else VALID_CAPS_KEY
+    }
+
+    public(package) fun governed_grant(
+        registry: &mut TrustRegistry,
+        council: ID,
+        recipient: address,
+        ctx: &mut TxContext,
+    ) {
+        assert_governed_by(registry, council);
+        mint_register_transfer(registry, recipient, ctx);
+    }
+
+    public(package) fun governed_revoke(registry: &mut TrustRegistry, council: ID, cap_id: ID) {
+        assert_governed_by(registry, council);
+        remove_cap_id(registry, cap_id);
+    }
+
+    public(package) fun governed_add_node(
+        registry: &mut TrustRegistry,
+        council: ID,
+        node_addr: address,
+        initial_score: u64,
+        clock: &Clock,
+    ) {
+        assert_governed_by(registry, council);
+        insert_node(registry, node_addr, initial_score, clock);
+    }
+
+    /// True once a quorum council governs this registry.
+    public fun is_governed(registry: &TrustRegistry): bool {
+        df::exists_(&registry.id, GOVERNED_KEY)
+    }
+
+    /// Byte-for-byte the v8 assert_cap_valid logic (VALID_CAPS_KEY hard-coded),
+    /// i.e. what a call through the v8 package id executes.
+    #[test_only] public fun legacy_v8_cap_check_for_testing(admin: &AdminCap, registry: &TrustRegistry) {
+        if (df::exists_(&registry.id, BOOTSTRAPPED_KEY)) {
+            let id = object::id(admin);
+            assert!(
+                df::exists_(&registry.id, VALID_CAPS_KEY) &&
+                vec_set::contains(df::borrow<vector<u8>, VecSet<ID>>(&registry.id, VALID_CAPS_KEY), &id),
+                E_CAP_REVOKED
+            );
+        }
     }
 
     #[test_only] public fun init_for_testing(ctx: &mut sui::tx_context::TxContext) { init(ctx) }

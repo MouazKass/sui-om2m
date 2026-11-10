@@ -263,6 +263,13 @@ module om2m_access::failover {
         // anchor shortly. 60_000 ms = one minute.
         cluster.lease_expires_ms = now + 60_000;
 
+        // v9 (F2): the stored PoA belonged to the OLD parent. Before v9 it
+        // survived the takeover, so followers kept connecting to the dead
+        // parent until the new one happened to overwrite it. Clear it here,
+        // atomically with the parent change; the new parent re-advertises via
+        // set_parent_poa. Body-only change (compatible).
+        clear_poa(cluster);
+
         event::emit(TakeoverAttempted {
             cluster: object::uid_to_address(&cluster.id),
             candidate,
@@ -292,6 +299,9 @@ module om2m_access::failover {
     }
 
     // === Reads ===
+    /// v9: which cluster a ClusterAdminCap administers (lets quorum.move key
+    /// a deposited cap by its cluster). New function; compatible.
+    public fun cap_cluster(cap: &ClusterAdminCap): address { cap.cluster }
     public fun current_parent(cluster: &Cluster): address { cluster.current_parent }
     public fun lease_expires_ms(cluster: &Cluster): u64   { cluster.lease_expires_ms }
     public fun trust_gate(cluster: &Cluster): u64         { cluster.trust_gate }
@@ -320,12 +330,51 @@ module om2m_access::failover {
             let _ = old;
         };
         sui::dynamic_field::add(&mut cluster.id, key, new_poa);
+        // v9 (F2): bind the PoA to the parent that published it.
+        let okey = ParentPoaOwnerKey {};
+        if (sui::dynamic_field::exists(&cluster.id, okey)) {
+            let _: address = sui::dynamic_field::remove(&mut cluster.id, okey);
+        };
+        sui::dynamic_field::add(&mut cluster.id, okey, cluster.current_parent);
+    }
+
+    /// v9 (F2): dynamic-field key recording which parent published the PoA.
+    /// A new struct (allowed in a compatible upgrade); the existing
+    /// ParentPoaKey value type is unchanged, so off-chain readers of the raw
+    /// field keep working.
+    public struct ParentPoaOwnerKey has copy, drop, store {}
+
+    fun clear_poa(cluster: &mut Cluster) {
+        let key = ParentPoaKey {};
+        if (sui::dynamic_field::exists(&cluster.id, key)) {
+            let _: vector<u8> = sui::dynamic_field::remove(&mut cluster.id, key);
+        };
+        let okey = ParentPoaOwnerKey {};
+        if (sui::dynamic_field::exists(&cluster.id, okey)) {
+            let _: address = sui::dynamic_field::remove(&mut cluster.id, okey);
+        };
+    }
+
+    /// Who published the stored PoA (@0x0 if none, or if it was written by
+    /// pre-v9 code that recorded no owner).
+    public fun parent_poa_owner(cluster: &Cluster): address {
+        let okey = ParentPoaOwnerKey {};
+        if (sui::dynamic_field::exists(&cluster.id, okey)) {
+            *sui::dynamic_field::borrow<ParentPoaOwnerKey, address>(&cluster.id, okey)
+        } else {
+            @0x0
+        }
     }
 
     /// Read the currently advertised PoA for the cluster (for followers).
     /// Returns empty vector if no PoA has been set yet.
     public fun parent_poa(cluster: &Cluster): vector<u8> {
         let key = ParentPoaKey {};
+        let okey = ParentPoaOwnerKey {};
+        if (sui::dynamic_field::exists(&cluster.id, okey)
+            && *sui::dynamic_field::borrow<ParentPoaOwnerKey, address>(&cluster.id, okey) != cluster.current_parent) {
+            return vector[]
+        };
         if (sui::dynamic_field::exists(&cluster.id, key)) {
             *sui::dynamic_field::borrow<ParentPoaKey, vector<u8>>(&cluster.id, key)
         } else {
