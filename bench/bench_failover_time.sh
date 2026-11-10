@@ -22,7 +22,7 @@ declare -A NODE_CONT=(
 [[ -z "$CLUSTER_ID" ]] && { echo "ERROR: CLUSTER not set. source scripts/env.sh first." >&2; exit 1; }
 command -v sui >/dev/null || { echo "ERROR: sui CLI not found" >&2; exit 1; }
 
-ssh_node() { local host="$1"; shift; sshpass -p "$SSHPASS_PW" ssh -o StrictHostKeyChecking=no "${PARENT_USER}@${host}" "$@"; }
+ssh_node() { local host="$1"; shift; ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes "${PARENT_USER}@${host}" "$@"; }   # v8: key auth
 read_parent() { sui client object "$CLUSTER_ID" --json 2>/dev/null | python3 -c 'import sys,json
 try: print(json.load(sys.stdin)["content"]["current_parent"])
 except Exception: pass'; }

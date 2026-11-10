@@ -128,14 +128,57 @@ Plugin tests: **101/101** (from 33 at the start of the session). Every fix above
 - [x] Gossip: per-origin topics, signed `hb2` heartbeats, no amplification
 - [x] Trust: scores move on-chain. rpi2 went 80 → 100 through paced, capped re-attestation
 - [x] **C2: an ordinary RETRIEVE from `Csensor-001` (no special headers) → `Sui DAC consult` → `Sui GRANT`, on-chain digest, HTTP 200.** Repeated after every redeploy.
-- [ ] Proof scripts re-run against v8 (they still reference `$PKG_V7` at ~20 sites)
+- [x] Proof scripts ported to v8 and re-run live: **10/10 pass** (see "2026-11-10 (later)" below)
 - [x] **Failover:** parent stopped. Both followers detected the silence (17 s / 20 s), waited at `LEASE_VALID` for ~19.5 min with **zero** transactions, then made **2 claims in total**: rpi3 won, rpi2 aborted (code 3), one winner. The new parent published its PoA, cluster epoch 0 → 1. The old parent rejoined as a follower without claiming.
 - [x] **Reboot test** on rpi2 (2026-11-10 23:04Z), with no human action afterwards. Both containers restarted on `:rpi2-v8`; config came from the durable mounts; `sui-das-provision.service` recreated the DAS **and the C2 DAC wiring** (all 201, `ri=/in-cse/Csui-dac-ae`) about 50 s after boot; the B6 epoch was **read back** from the durable store, not reset; the node rejoined as a follower of rpi3 and resumed gossiping at the normal rate.
 
 ### H. Rollback
-`scripts/v8/04_cutover.sh rollback`: restores the v7 containers, config and host scripts. The `:rpiN-v7-final` images stay available even after `cleanup`. The v7 package is still live on-chain; a fresh publish doesn't touch it.
+`scripts/v8/04_cutover.sh rollback` restores the v7 config and host scripts, and either the stopped v7 containers or, since `cleanup` ran on 2026-11-10, a recreation of them from the `:rpiN-v7-final` snapshot images. The snapshots keep the v7 entrypoint, Cmd and Env. **The image path has not been exercised.** Rolling back also brings back the looping v7 broker mesh. The v7 package is still live on-chain; a fresh publish doesn't touch it.
 
 ### I. After this lands
-- v9 compatible upgrade: quorum (limitation 2) plus the UpgradeCap moved to a multisig
-- Re-measure latency, gas and failover for the paper, on the real DAC path
+- v9 compatible upgrade: quorum (limitation 2) plus the UpgradeCap moved to a multisig. **Also a v9 candidate:** bind the advertised PoA to the parent that set it, or clear it in `claim_parent` (finding F2 below)
+- ~~Re-measure latency, gas and failover for the paper, on the real DAC path~~ done, see `evidence/V8_MEASUREMENTS.md`
 - Per-originator on-chain identity (design decision for the paper)
+- **Decide how DENYs are handled** (F3 below): today each one is a paid, aborted transaction that never reaches the audit trail
+
+---
+
+## 2026-11-10 (later): proofs on v8, v7 cleanup, paper measurements
+
+The full write-up, with every table, is in **`evidence/V8_MEASUREMENTS.md`**. The raw data and
+exact commands are in `evidence/v8-measurements/`.
+
+### Proofs ported and re-run live: 10/10 pass
+- `proofs/lib_v8.sh` (new) is the single place that loads IDs (from `deploy/v8/env.v8.sh`, generated from `deployment.env`; nothing hard-coded). Node-signed calls run inside each node's container with its own key over SSH key auth (no more `sshpass`); publisher-signed calls run in WSL. Every transaction is appended to `proofs_v8.csv` with digest, outcome and net gas, and every proof ends with a `RESULT` line.
+- Call shapes now match v8. The requester comes from `ctx`. The access chain is a real 5-command PTB with receipts threaded through. Proofs that depended on a removed attack now assert the attack is rejected: A4 (Sui refuses before execution), A6/A7 (`TypeMismatch`, `UnusedValueWithoutDrop`, `NonEntryFunctionInvoked`), A10, A12, A1/A2.
+- 07 and 09 no longer touch production objects: 07 mints a dedicated proof token, and 09 grants, revokes and burns a throwaway AdminCap. (The v7 version of 09 revoked rpi2's real cap.)
+- `run_all.sh` covers all 10 proofs, with `BATCH=1` for unattended runs. Bench scripts use key auth. `bench/provision_das.sh` refuses to run without `LEGACY_V7_PROVISION=1`, because it re-adds the `Csensor-001` static bypass.
+
+### Two failover bugs found by the proofs, fixed and deployed (bundle `7fa41e66`, 107/107 tests)
+| Problem (seen live) | Fix |
+|---|---|
+| **F1.** A node named parent on-chain other than through its own successful claim never started parent duties. Examples: a claim that landed while the client saw an error or timeout, or one signed outside the plugin. Its 60 s claim lease lapsed unanchored, and no node noticed, because the deposed parent's presence beats kept every watchdog quiet (proof 06 run 1). | Chain sync on **every** node every 15 s (one free read); duties start whenever the chain names this node (`shouldTakeUpParentDuties`, `ParentReconcileTest`, mutation-checked). Verified live: proof 06 runs 2 and 3. |
+| **F2.** Followers kept the **deposed** parent's PoA. The on-chain PoA isn't bound to its setter, so it still holds the old URL until the new parent publishes. | Followers re-check the PoA on every sync and rewrite it when it changes (`poaNeedsUpdate`, mutation-checked). Verified live in the failover run. A contract-level fix is noted for v9. |
+
+Deployed with `prepare` → `redeploy` (twice, `set -o pipefail`, exit 0); the running jar sha256 `7fa41e66…` was checked inside all three containers.
+
+### v7 containers removed (`04_cutover.sh cleanup`)
+`:rpiN-v7-final` images were confirmed present first. Each `om2m-v7-old` log had grown to **7.7–7.9 GB**, not the 2.6 GB recorded earlier, and rpi3's v7 broker log to 1.5 GB. Disk used before → after: rpi1 25,248 → 17,305 MB, rpi2 26,967 → 18,922 MB, rpi3 26,536 → 17,218 MB (**~8–9.3 GB freed per node**). Log: `evidence/v8-measurements/cleanup_v7.log`. `rollback` now has an image-based path (see H; not exercised).
+
+### Paper measurements, on the real DAC path (ordinary oneM2M requests)
+- **Latency** (n = 100 each, on rpi3, all HTTP 200, 201 on-chain GRANTs confirmed). DAC RETRIEVE p50/p95/p99 **1321 / 2130 / 2460 ms**; DAC UPDATE **1339 / 2344 / 2807 ms**; no-chain baseline RETRIEVE 4.1 / 6.8 / 8.6 ms and UPDATE 6.9 / 10.6 / 15.4 ms; DAS cache hit 3.6 / 7.5 / 8.4 ms. The chain is ~99 % of the cost; reads and writes cost the same.
+- **Gas** (net, from the effects of 256 real transactions). GRANT **1.60 mSUI**; DENY 1.00 mSUI (paid); trust write 1.00; claim 1.00; lease renew 1.00; PoA 1.00. Every abort costs as much as a success.
+- **Failover** (parent CSE stopped; no human action). Takeover **5.0 s after the lease expired**; total time = remaining lease (642 s in this run) + 5 s. 2 claims (1 winner, 1 abort 3) and ~4 mSUI for the whole failover. The new parent anchored and published its PoA within 5.3 s of winning; followers corrected their PoA; the old parent rejoined as a follower 34 s after restart. `04_cutover.sh verify` was clean afterwards.
+
+### Open items from this run
+- **F3, needs a decision.** DENYs are paid aborted transactions (~1 mSUI each, so a mapped originator can drain rpi3's gas), and they never reach the AuditTrail (`log_denied_authorized` needs the `AuditAdminCap`, which the publisher holds). Options are in `V8_MEASUREMENTS.md` §5.
+- **F4, for the paper.** "Every decision is audited" holds only for GRANTs. Every GRANT rewrites one shared ~9.7 KB trail object.
+- **F7.** The image-based rollback after `cleanup` is written but not exercised.
+
+### v9 prerequisite: type-origin package id for PoA reads (2026-11-10, deployed)
+After a compatible upgrade, call targets move to the new package id but Move types keep the **original** (v8) id. `fetchParentPoa` spelled the dynamic-field key as `<sui.package.id>::failover::ParentPoaKey`, so pointing the plugin at v9 would have made every PoA read come back empty.
+- New config key **`sui.package.original.id`** (type origin), defaulting to `sui.package.id`. It is used only for type names; every MoveCall still targets `sui.package.id`. The audit found no other plugin site that builds a package type string: the rest are call targets or framework types (`0x2::coin::Coin<0x2::sui::SUI>`).
+- **v9 owner check.** `fetchParentPoa` also reads `<original>::failover::ParentPoaOwnerKey` and ignores a PoA whose owner is not `current_parent`. With no owner field (v8), behaviour is unchanged; I checked live that GraphQL returns a null field, not an error, for a type the v8 package doesn't define.
+- `03_gen_config.sh` emits `sui.package.original.id=$PKG_V8`. When `sui.package.id` moves to v9, this key must stay at the v8 id. The generated files under `deploy/v8/` were regenerated (new key and stamp only). **The live nodes' config was not changed;** they rely on the default, which is the same value.
+- Tests: `ParentPoaTypeOriginTest` (10, end-to-end against a local stub GraphQL endpoint that answers by exact type tag) and `PackageOriginalIdTest` (3). Six mutants were all killed. The full suite passes, **120/120**.
+- Deployed with `prepare` → `redeploy` → `verify` (all exit 0); jar sha256 `3aec03c3…` confirmed inside all three containers. Behaviour on v8 is identical: rpi1 is parent and anchors its lease; all three nodes log `[fetchParentPoa] found under 0x88f0…` and hold the PoA `http://10.25.96.200:8282/`; the C2 GRANT went through on-chain (`9QKP2sX8…`).

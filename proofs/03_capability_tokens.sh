@@ -1,59 +1,65 @@
 #!/usr/bin/env bash
-cd "$(dirname "$0")/.." && source scripts/env.sh
-clean() { sed 's/[│┌┐└┘├┤─╭╮╰╯|]//g; s/  */ /g; s/^ *//; /^$/d; s/^/    /'; }
-echo
-echo "################################################################################"
-echo "#  CONCEPT 3 - CAPABILITY TOKENS"
-echo "################################################################################"
-echo
+# CONCEPT 3 - CAPABILITY TOKENS (CT1-CT5, A4).
+# v8: the token is exercised through the REAL path - an ordinary oneM2M
+# RETRIEVE with no special headers, which OM2M routes to the Sui DAS through
+# DynamicAuthorizationConsultation (C2). The old NOTIFY shortcut is gone.
+PROOF_ID=03; source "$(dirname "$0")/lib_v8.sh"
+banner "CONCEPT 3 - CAPABILITY TOKENS"
+
 echo "=== THE TOKEN AS AN ON-CHAIN OBJECT (owner, resource, ops mask) ==="
-echo
-echo "\$ sui client object $CAP_TOKEN_RPI3 --json"
-echo
-sui client object "$CAP_TOKEN_RPI3" --json 2>/dev/null | python3 -c "
+echo "\$ sui client object \$CAP_TOKEN_RPI3_DAC --json"
+obj_json "$CAP_TOKEN_RPI3_DAC" | python -c "
 import sys,json
 d=json.load(sys.stdin); f=d.get('content',{})
-ops=int(float(f.get('allowed_ops',0)))
-nm=[]
-if ops&1:nm.append('READ')
-if ops&2:nm.append('WRITE')
-if ops&4:nm.append('DELETE')
-if ops&8:nm.append('ADMIN')
-print('    objectId    :', d.get('objectId'))
-own=d.get('owner',{})
-print('    owner       :', own.get('AddressOwner', own) if isinstance(own,dict) else own)
-print('    resource_id :', f.get('resource_id'))
-print('    allowed_ops :', ops, '=', '+'.join(nm))
-print('    max_uses    :', f.get('max_uses'))
-"
+ops=int(f.get('allowed_ops',0)); nm=[n for b,n in ((1,'READ'),(2,'WRITE'),(4,'DELETE'),(8,'ADMIN')) if ops&b]
+print('    objectId     :', d.get('objectId'))
+print('    type         :', d.get('objType','').split('::',1)[-1])
+print('    owner        :', d.get('owner',{}).get('AddressOwner', d.get('owner')))
+print('    resource_id  :', f.get('resource_id'))
+print('    allowed_ops  :', ops, '=', '+'.join(nm))
+print('    uses / max   :', f.get('current_uses'), '/', f.get('max_uses'))
+print('    expiry_ms    :', f.get('expiry_ms'))"
 echo
 echo "=== NON-COPYABLE: the Move type has key+store but NO 'copy' ability ==="
+grep -n "public struct CapToken" move/sources/cap_token.move | sed 's/^/    /'
 echo
-grep -n "struct CapToken" move/sources/cap_token.move | sed 's/^/    /'
-echo "    (abilities 'key, store' - never 'copy' - so it cannot be duplicated)"
+
+echo "=== AN ORDINARY oneM2M RETRIEVE, AUTHORIZED ON-CHAIN WITH THE TOKEN ==="
+echo "\$ curl http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H 'X-M2M-Origin: Csensor-001'   (on rpi3)"
+echo "    (a plain RETRIEVE: no NOTIFY header, no DAS URL. The static ACPs grant"
+echo "     Csensor-001 nothing, so OM2M consults the DAC -> the Sui DAS -> one PTB.)"
+OUT=$(on rpi3 'sleep 6; curl -s -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H "X-M2M-Origin: Csensor-001" -H "Accept: application/json"; sleep 4; docker logs --since 15s om2m-active 2>&1 | grep -E "Sui DAC consult|Sui GRANT|Sui DENY" | tail -2')
+sed 's/^/    /' <<<"$OUT"
+G=$(grep -oE 'Sui GRANT .*digest=[A-Za-z0-9]+' <<<"$OUT" | grep -oE 'digest=[A-Za-z0-9]+' | cut -d= -f2 | tail -1)
+if grep -q "HTTP 200" <<<"$OUT" && [ -n "$G" ]; then
+  echo "    [PASS] HTTP 200 and an on-chain GRANT (digest $G)"; PROOF_PASS=$((${PROOF_PASS:-0}+1))
+  printf '%s,%s,%s,%s,%s,\n' "$(date -u +%FT%TZ)" "$PROOF_ID" "rpi3:DAC RETRIEVE Csensor-001" "success" "$G" >> "${PROOF_LOG:-/dev/null}"
+else
+  echo "    [FAIL] expected HTTP 200 + Sui GRANT"; PROOF_FAIL=$((${PROOF_FAIL:-0}+1))
+fi
 echo
-echo "=== ACCESS WITH THE VALID TOKEN SUCCEEDS (live GRANT, real digest) ==="
+
+echo "=== v8 / A4: ANOTHER NODE CANNOT SPEND THIS TOKEN ==="
+echo "    rpi1 (registered, trusted) builds the full receipt chain but presents"
+echo "    rpi3's token. Pre-v8 validate_for_use never checked the signer; now"
+echo "    cap_token.move asserts signer == requester == token.owner - and Sui"
+echo "    itself refuses to let rpi1 put an object it does not own in a tx."
+node_ptb rpi1 "--move-call $PKG::identity::verify @$IDENTITY_REG --assign r1 \
+  --move-call $PKG::trust::require_min r1 @$TRUST_REG '\"/in-cse/Csui-dac-ae\"' 50 @0x6 --assign r2 \
+  --move-call $PKG::cap_token::validate_for_use r2 @$CAP_TOKEN_RPI3_DAC 1u8 @0x6 --assign r3 \
+  --move-call $PKG::policy::evaluate r3 @$POLICY_REG @$TRUST_REG @0x6 --assign r4 \
+  --move-call $PKG::evaluator::decide_and_log r4 @$AUDIT_TRAIL @0x6"
+if [ "$LAST_STATUS" = error ] && grep -qiE "owned by|not owned|owner|IncorrectUserSignature|ObjectNotOwned" <<<"$LAST_OUT"; then
+  echo "    [PASS] rejected before execution: rpi1 cannot use an object owned by rpi3 (nothing on-chain, no gas)"
+  PROOF_PASS=$((${PROOF_PASS:-0}+1))
+elif [ "$LAST_STATUS" = abort ] && [ "$LAST_CODE" = 5 ]; then
+  echo "    [PASS] aborted on-chain with E_NOT_TOKEN_OWNER (5)"; PROOF_PASS=$((${PROOF_PASS:-0}+1))
+else
+  echo "    [FAIL] expected rejection; got $LAST_STATUS $LAST_CODE"; PROOF_FAIL=$((${PROOF_FAIL:-0}+1))
+fi
 echo
-echo "\$ curl -X POST .../sui-das -H 'X-M2M-Operation: 5'   (decision request)"
-echo "    ('op':1 is the oneM2M CREATE code, so this asks the DAS to authorize a"
-echo "     WRITE on the container - it maps to the OP_WRITE bit of the token mask;"
-echo "     'X-M2M-Operation: 5' is NOTIFY, the header OM2M needs to route the"
-echo "     decision request into the DAS. Neither of them is a read.)"
-echo
-sshpass -p user ssh user@10.25.96.203 bash <<'EOF' | clean
-BASE=http://127.0.0.1:8282; ORIG=admin:admin
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/~/in-cse/in-name/sui-das" -H "X-M2M-Origin: $ORIG")
-if [ "$code" = "404" ]; then sudo systemctl start sui-das-provision.service 2>/dev/null; sleep 45; fi
-curl -s -o /dev/null -w 'decision HTTP %{http_code}\n' -X POST "$BASE/~/in-cse/in-name/sui-das" \
-  -H "X-M2M-Origin: $ORIG" -H 'X-M2M-RI: proof3' -H 'X-M2M-Operation: 5' \
-  -H 'Content-Type: application/json' \
-  -d '{"m2m:sec":{"sit":1,"dreq":{"or":"admin:admin","op":1,"rid":"/in-cse/in-name/sui-protected-cnt","rty":3}}}'
-sleep 3
-docker logs --since 12s om2m-active 2>&1 | grep -iE 'Sui GRANT' | tail -1
-EOF
-echo
-echo "--------------------------------------------------------------------------------"
-echo "WHAT THIS SHOWS: the capability is a real on-chain object with a fixed resource"
-echo "and ops mask; its Move type is non-copyable (linear); holding it yields a"
-echo "verifiable on-chain GRANT with a transaction digest."
-echo "--------------------------------------------------------------------------------"
+hr
+echo "WHAT THIS SHOWS: the capability is a real on-chain object with a fixed owner,"
+echo "resource and ops mask; its Move type is non-copyable; an ordinary oneM2M request"
+echo "is granted on-chain with it (digest above); and no other node can spend it."
+summary

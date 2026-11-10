@@ -12,11 +12,22 @@
 # GRANT trigger REQUIRES the X-M2M-Operation: 5 header (else OM2M 403s at checkACP).
 set -uo pipefail
 
+# SUPERSEDED in v8 by deploy/v8/host/provision-das.sh (installed on every node,
+# run at boot by sui-das-provision.service). This legacy script re-adds
+# Csensor-001 with acop 63 to acp_admin (step "ACP update" below) - the static
+# grant that let Csensor-001 bypass the chain, removed in the v8 rollout. It
+# refuses to run unless you explicitly opt in, e.g. for a v7 rollback.
+if [ "${LEGACY_V7_PROVISION:-0}" != 1 ]; then
+  echo "refusing: superseded by deploy/v8/host/provision-das.sh (re-opens the Csensor-001 static ACP bypass)." >&2
+  echo "  on the node: sudo /usr/local/bin/provision-das.sh   |  override: LEGACY_V7_PROVISION=1 $0" >&2
+  exit 2
+fi
+
 NODE="${1:-10.25.96.203}"
 PW="${PW:-user}"
 ORIG="${ORIG:-admin:admin}"          # originator that owns a valid CapToken on this node
 BASE=http://127.0.0.1:8282
-ssh_n() { sshpass -p "$PW" ssh -o StrictHostKeyChecking=no user@$NODE "$@"; }
+ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 
 echo "# provision_das.sh  node=$NODE  $(date -u +%H:%M:%SZ)"
 

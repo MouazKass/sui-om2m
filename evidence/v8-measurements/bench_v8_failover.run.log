@@ -1,0 +1,10 @@
+# failover run 20261110T025206Z: parent=rpi2 epoch=4
+  stop 02:52:07 rpi2 lease remaining 642 s; epoch 4
+  chain_parent 03:02:56 rpi1 epoch 4 -> 5; lease_expires_ms 1794279834702
+  chain_anchor 03:03:04 rpi1 lease_expires_ms 1794280977327
+# restarting the old parent (rpi2)
+  restart 03:03:25 rpi2 docker start
+  rejoin 03:03:59 rpi2 parent=0xef9c6271
+# provisioning DAS/DAC on the restarted node
+[provision-das 07:04:00] provisioning complete
+# events -> evidence/v8-measurements/failover_20261110T025206Z.csv

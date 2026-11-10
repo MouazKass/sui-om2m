@@ -1,54 +1,48 @@
 #!/usr/bin/env bash
-# CONCEPT 5 - POLICY ENFORCEMENT (PO1-PO4). Access gated by min-trust + ops mask;
-# a request without a matching capability is DENIED (fail-closed).
-cd "$(dirname "$0")/.." && source scripts/env.sh
+# CONCEPT 5 - POLICY ENFORCEMENT (PO1-PO4, A5).
+# Access is gated on-chain by the resource's policy (min trust + ops mask) and
+# the token's ops mask; anything outside them is DENIED (fail-closed).
+# v8: the request is an ordinary oneM2M DELETE through the DAC path, and
+# policy::evaluate reads the trust score itself (A5: no caller-supplied score).
+PROOF_ID=05; source "$(dirname "$0")/lib_v8.sh"
+banner "CONCEPT 5 - POLICY ENFORCEMENT"
+RES=/in-cse/Csui-dac-ae
+
+echo "=== THE POLICY ON-CHAIN (read with dev-inspect, no signature) ==="
+echo "    has_policy($RES)    = $(dev_inspect policy has_policy "$POLICY_REG" "'\"$RES\"'")"
+echo "    min_trust_for($RES) = $(dev_inspect policy min_trust_for "$POLICY_REG" "'\"$RES\"'")"
+echo "    token allowed_ops         = $(obj_json "$CAP_TOKEN_RPI3_DAC" | python -c "import sys,json;print(int(float(json.load(sys.stdin)['content']['allowed_ops'])))") (READ|WRITE; DELETE=4 is not in the mask)"
 echo
-echo "################################################################################"
-echo "#  CONCEPT 5 - POLICY ENFORCEMENT"
-echo "################################################################################"
+
+echo "=== AN ORDINARY oneM2M DELETE OUTSIDE THE GRANTED OPS = DENY (fail-closed) ==="
+echo "\$ curl -X DELETE http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H 'X-M2M-Origin: Csensor-001'   (on rpi3)"
+OUT=$(on rpi3 'sleep 6; curl -s -o /dev/null -w "HTTP %{http_code}\n" -X DELETE http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H "X-M2M-Origin: Csensor-001" -H "Accept: application/json"; sleep 4; docker logs --since 15s om2m-active 2>&1 | grep -E "Sui DAC consult|Sui DENY|Sui GRANT|reason" | tail -3; echo "AE after: $(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H "X-M2M-Origin: admin:admin")"')
+sed 's/^/    /' <<<"$OUT"
+if grep -q "HTTP 403" <<<"$OUT" && grep -q "Sui DENY" <<<"$OUT" && grep -q "AE after: 200" <<<"$OUT"; then
+  echo "    [PASS] HTTP 403, Sui DENY, resource untouched"; PROOF_PASS=$((${PROOF_PASS:-0}+1))
+  printf '%s,%s,%s,%s,%s,\n' "$(date -u +%FT%TZ)" "$PROOF_ID" "rpi3:DAC DELETE Csensor-001" "deny" "$(grep -oE 'digest=[A-Za-z0-9]+' <<<"$OUT" | tail -1 | cut -d= -f2)" >> "${PROOF_LOG:-/dev/null}"
+else
+  echo "    [FAIL] expected HTTP 403 + Sui DENY with the AE intact"; PROOF_FAIL=$((${PROOF_FAIL:-0}+1))
+fi
 echo
-echo "=== THE POLICY OBJECT ON-CHAIN (resource -> min_trust, ops mask) ==="
+
+echo "=== THE SAME DENIAL, SIGNED DIRECTLY: the chain itself refuses op DELETE ==="
+node_ptb rpi3 "--move-call $PKG::identity::verify @$IDENTITY_REG --assign r1 \
+  --move-call $PKG::trust::require_min r1 @$TRUST_REG '\"$RES\"' 50 @0x6 --assign r2 \
+  --move-call $PKG::cap_token::validate_for_use r2 @$CAP_TOKEN_RPI3_DAC 4u8 @0x6 --assign r3 \
+  --move-call $PKG::policy::evaluate r3 @$POLICY_REG @$TRUST_REG @0x6 --assign r4 \
+  --move-call $PKG::evaluator::decide_and_log r4 @$AUDIT_TRAIL @0x6"
+expect "op DELETE rejected by the token mask (cap_token E_OP_NOT_ALLOWED)" abort 4
 echo
-echo "\$ sui client object $POLICY_REG --json"
+
+echo "=== v8 / A5: THE TRUST GATE HAS NO CALLER-SUPPLIED SCORE ==="
+grep -nE "public fun evaluate|trust_score = trust::score_of|E_TRUST_BELOW_MIN\)" move/sources/policy.move | sed 's/^/    /'
+echo "    (pre-v8 evaluate took 'requester_trust: u64' from the caller; any PTB could"
+echo "     pass 100. It now reads the score from the TrustRegistry for the requester"
+echo "     the receipt chain carried forward.)"
 echo
-sui client object "$POLICY_REG" --json 2>/dev/null | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-print('    objectId:', d.get('objectId'))
-f=d.get('content',{})
-print('    fields  :', json.dumps(f)[:300])
-" 2>/dev/null
-echo "    (policy for /in-cse/in-name/sui-protected-cnt: min_trust=50, ops=3)"
-echo
-echo "=== A REQUEST WITH NO MATCHING CAPABILITY = DENY (fail-closed) ==="
-echo "    rpi1 asks for a decision on the resource whose token rpi3 owns."
-echo
-echo "\$ curl -X POST .../sui-das -H 'X-M2M-Operation: 5'   (from rpi1)"
-echo "    ('op':1 is the oneM2M CREATE code, so this asks the DAS to authorize a"
-echo "     WRITE on the container - it maps to the OP_WRITE bit of the token mask;"
-echo "     'X-M2M-Operation: 5' is NOTIFY, the header OM2M needs to route the"
-echo "     decision request into the DAS. Neither of them is a read.)"
-echo
-sshpass -p user ssh user@10.25.96.200 bash <<'EOF' | sed 's/^/    /'
-BASE=http://127.0.0.1:8282; ORIG=admin:admin
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/~/in-cse/in-name/sui-das" -H "X-M2M-Origin: $ORIG")
-if [ "$code" = "404" ]; then sudo systemctl start sui-das-provision.service 2>/dev/null; sleep 45; fi
-curl -s -o /dev/null -w 'decision HTTP %{http_code}\n' -X POST "$BASE/~/in-cse/in-name/sui-das" \
-  -H "X-M2M-Origin: $ORIG" -H 'X-M2M-RI: proof5' -H 'X-M2M-Operation: 5' \
-  -H 'Content-Type: application/json' \
-  -d '{"m2m:sec":{"sit":1,"dreq":{"or":"admin:admin","op":1,"rid":"/in-cse/in-name/sui-protected-cnt","rty":3}}}'
-sleep 3
-docker logs --since 12s om2m-active 2>&1 | grep -iE 'Sui DENY|Sui GRANT|no sui mapping|reason' | tail -2
-EOF
-echo
-echo "=== THE MIN-TRUST GATE IS ON-CHAIN LOGIC (policy.evaluate source) ==="
-echo
-echo "\$ grep -n 'E_TRUST_BELOW_MIN\|E_OP_DENIED\|min_trust' move/sources/policy.move"
-grep -nE "E_TRUST_BELOW_MIN|E_OP_DENIED|min_trust" move/sources/policy.move | head -5 | sed 's/^/    /'
-echo "    (abort code 3 = E_TRUST_BELOW_MIN, code 2 = E_OP_DENIED)"
-echo
-echo "--------------------------------------------------------------------------------"
-echo "WHAT THIS SHOWS: the policy (min_trust, ops mask) is on-chain; a node without a"
-echo "matching capability is DENIED (fail-closed); the trust gate is enforced in the"
-echo "policy contract, not off-chain."
-echo "--------------------------------------------------------------------------------"
+hr
+echo "WHAT THIS SHOWS: the policy (min_trust, ops mask) is on-chain; a request outside"
+echo "the granted operations is DENIED on the real oneM2M path (fail-closed) and by the"
+echo "contract itself; the trust gate reads the registry, never a caller's number."
+summary

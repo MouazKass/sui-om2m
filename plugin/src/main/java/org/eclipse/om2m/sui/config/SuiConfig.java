@@ -19,7 +19,15 @@ public final class SuiConfig {
 
     public final String suiCliPath;
     public final String suiEnv;          // "testnet" by deployment choice
-    public final String packageId;       // 0x... package ID after publish
+    public final String packageId;       // 0x... package ID after publish: the CALL target
+    /**
+     * Type-origin ("original") package id, used ONLY to spell Move type names
+     * (dynamic-field keys). After a compatible upgrade, call targets move to the
+     * new package id but every type keeps the id of the package that first
+     * defined it (here the v8 publish). Key sui.package.original.id; defaults to
+     * sui.package.id, which is exactly right before any upgrade.
+     */
+    public final String packageOriginalId;
     public final String identityRegistryId;
     public final String trustRegistryId;
     public final String policyRegistryId;
@@ -54,6 +62,7 @@ public final class SuiConfig {
         this.suiCliPath          = req(p, "sui.cli.path");
         this.suiEnv              = p.getProperty("sui.env", "testnet");
         this.packageId           = req(p, "sui.package.id");
+        this.packageOriginalId   = resolveOriginalId(p.getProperty("sui.package.original.id"), this.packageId);
         this.identityRegistryId  = req(p, "sui.identity.registry.id");
         this.trustRegistryId     = req(p, "sui.trust.registry.id");
         this.policyRegistryId    = req(p, "sui.policy.registry.id");
@@ -93,6 +102,14 @@ public final class SuiConfig {
         }
         return v;
     }
+
+    /** sui.package.original.id if set, else sui.package.id (correct until the first upgrade). */
+    static String resolveOriginalId(String original, String packageId) {
+        return (original == null || original.trim().isEmpty()) ? packageId : original.trim();
+    }
+
+    /** For tests: build from in-memory properties (no files, no global side effects). */
+    static SuiConfig fromProperties(Properties p) { return new SuiConfig(p); }
 
     public static SuiConfig load() {
         String home = System.getenv().getOrDefault("OM2M_HOME", ".");

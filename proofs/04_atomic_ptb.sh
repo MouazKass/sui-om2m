@@ -1,51 +1,62 @@
 #!/usr/bin/env bash
-# CONCEPT 4 - ATOMIC DECISION / NO TOCTOU (ID1-ID4). The whole decision is ONE
-# Programmable Transaction Block - no check-to-use gap.
-cd "$(dirname "$0")/.." && source scripts/env.sh
+# CONCEPT 4 - ATOMIC DECISION / NO TOCTOU (ID1-ID4, A6).
+# The whole decision is ONE programmable transaction block; in v8 each step
+# hands the next a hot-potato receipt (no drop/store/copy), so steps can be
+# neither skipped nor re-ordered nor fed forged inputs.
+PROOF_ID=04; source "$(dirname "$0")/lib_v8.sh"
+banner "CONCEPT 4 - ATOMIC DECISION / NO TOCTOU"
+
+echo "=== Fire an ordinary oneM2M RETRIEVE (real DAC path), then inspect its tx ==="
+OUT=$(on rpi3 'sleep 6; curl -s -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H "X-M2M-Origin: Csensor-001" -H "Accept: application/json"; sleep 4; docker logs --since 15s om2m-active 2>&1 | grep -E "Sui GRANT" | tail -1')
+sed 's/^/    /' <<<"$OUT"
+D=$(grep -oE 'digest=[A-Za-z0-9]+' <<<"$OUT" | cut -d= -f2 | tail -1)
 echo
-echo "################################################################################"
-echo "#  CONCEPT 4 - ATOMIC DECISION / NO TOCTOU"
-echo "################################################################################"
-echo
-echo "=== Fire a GRANT, then inspect the transaction it produced ==="
-echo
-echo "\$ curl -X POST .../sui-das -H 'X-M2M-Operation: 5'   (one decision request)"
-echo "    ('op':1 is the oneM2M CREATE code, so this asks the DAS to authorize a"
-echo "     WRITE on the container - it maps to the OP_WRITE bit of the token mask;"
-echo "     'X-M2M-Operation: 5' is NOTIFY, the header OM2M needs to route the"
-echo "     decision request into the DAS. Neither of them is a read.)"
-echo
-DIGEST=$(sshpass -p user ssh user@10.25.96.203 bash <<'EOF'
-BASE=http://127.0.0.1:8282; ORIG=admin:admin
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/~/in-cse/in-name/sui-das" -H "X-M2M-Origin: $ORIG")
-if [ "$code" = "404" ]; then sudo systemctl start sui-das-provision.service 2>/dev/null; sleep 45; fi
-curl -s -o /dev/null -X POST "$BASE/~/in-cse/in-name/sui-das" \
-  -H "X-M2M-Origin: $ORIG" -H 'X-M2M-RI: proof4' -H 'X-M2M-Operation: 5' \
-  -H 'Content-Type: application/json' \
-  -d '{"m2m:sec":{"sit":1,"dreq":{"or":"admin:admin","op":1,"rid":"/in-cse/in-name/sui-protected-cnt","rty":3}}}'
-sleep 3
-docker logs --since 12s om2m-active 2>&1 | grep -oE 'digest=[A-Za-z0-9]+' | tail -1 | cut -d= -f2
-EOF
-)
-echo "    GRANT transaction digest: $DIGEST"
-echo
-echo "\$ sui client tx-block $DIGEST --json   (the PTB's command list)"
-echo
-sui client tx-block "$DIGEST" --json 2>/dev/null | python3 -c "
+echo "\$ sui client tx-block $D --json   (the PTB's command list)"
+CHAIN=$(tx_json "$D" | python -c "
 import sys,json
 d=json.load(sys.stdin)
-try:
-    cmds=d['transaction']['data']['transaction']['transactions']
-    print('    Move calls inside this SINGLE transaction:', len(cmds))
-    for i,c in enumerate(cmds):
-        if 'MoveCall' in c:
-            m=c['MoveCall']; print(f'      step {i}: {m.get(\"module\")}::{m.get(\"function\")}')
-except Exception:
-    print('    (inspect', d.get('digest','the digest'), 'in a Sui explorer for the command list)')
-" 2>/dev/null || echo "    (inspect $DIGEST in a Sui explorer to see the atomic command list)"
+cmds=d['transaction']['data']['transaction']['transactions']
+st=d['effects']['status']['status']
+print('    status:', st, '| Move calls inside this ONE transaction:', len(cmds))
+names=[]
+for i,c in enumerate(cmds):
+    m=c.get('MoveCall')
+    if not m: continue
+    args=', '.join('result %d'%a['Result'] if 'Result' in a else ('input %d'%a['Input'] if 'Input' in a else str(a)) for a in m.get('arguments',[]))
+    print('      step %d: %s::%s(%s)'%(i,m['module'],m['function'],args))
+    names.append(m['module']+'::'+m['function'])
+print('CHAIN='+','.join(names)+';STATUS='+st)
+")
+grep -v '^CHAIN=' <<<"$CHAIN"
+want="identity::verify,trust::require_min,cap_token::validate_for_use,policy::evaluate,evaluator::decide_and_log;STATUS=success"
+if grep -q "CHAIN=$want" <<<"$CHAIN"; then
+  echo "    [PASS] one tx, five steps, each consuming the previous step's receipt"; PROOF_PASS=$((${PROOF_PASS:-0}+1))
+  printf '%s,%s,%s,%s,%s,\n' "$(date -u +%FT%TZ)" "$PROOF_ID" "rpi3:DAC GRANT (receipt chain)" success "$D" >> "${PROOF_LOG:-/dev/null}"
+else
+  echo "    [FAIL] expected chain $want"; PROOF_FAIL=$((${PROOF_FAIL:-0}+1))
+fi
 echo
-echo "--------------------------------------------------------------------------------"
-echo "WHAT THIS SHOWS: identity, trust, policy, token, and the audit write are all"
-echo "commands INSIDE ONE transaction, committed atomically. There is no window"
-echo "between check and use (ID1-ID4)."
-echo "--------------------------------------------------------------------------------"
+
+echo "=== v8 / A6: SKIPPING A STEP IS A TYPE ERROR (policy step left out) ==="
+echo "    rpi3 builds a legitimate chain up to the TokenReceipt, then hands it straight"
+echo "    to decide_and_log, which only accepts a PolicyReceipt."
+node_ptb rpi3 "--move-call $PKG::identity::verify @$IDENTITY_REG --assign r1 \
+  --move-call $PKG::trust::require_min r1 @$TRUST_REG '\"/in-cse/Csui-dac-ae\"' 50 @0x6 --assign r2 \
+  --move-call $PKG::cap_token::validate_for_use r2 @$CAP_TOKEN_RPI3_DAC 1u8 @0x6 --assign r3 \
+  --move-call $PKG::evaluator::decide_and_log r3 @$AUDIT_TRAIL @0x6"
+if [ "$LAST_STATUS" != success ]; then echo "    [PASS] rejected - no GRANT can be logged without passing policy::evaluate"; PROOF_PASS=$((${PROOF_PASS:-0}+1))
+else echo "    [FAIL] a step-skipping PTB succeeded"; PROOF_FAIL=$((${PROOF_FAIL:-0}+1)); fi
+echo
+
+echo "=== v8 / A6: A RECEIPT CANNOT BE DROPPED (chain started, never finished) ==="
+echo "    rpi3 calls identity::verify alone. IdentityReceipt has no 'drop', so a"
+echo "    transaction that does not hand it on cannot complete."
+node_ptb rpi3 "--move-call $PKG::identity::verify @$IDENTITY_REG"
+if [ "$LAST_STATUS" != success ]; then echo "    [PASS] rejected (unused value without drop)"; PROOF_PASS=$((${PROOF_PASS:-0}+1))
+else echo "    [FAIL] a dangling receipt was accepted"; PROOF_FAIL=$((${PROOF_FAIL:-0}+1)); fi
+echo
+hr
+echo "WHAT THIS SHOWS: identity, trust, token, policy and the audit write are five"
+echo "commands inside ONE transaction, committed atomically - no check-to-use window."
+echo "Since v8 the steps are bound by receipts: none can be skipped or left dangling."
+summary

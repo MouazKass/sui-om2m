@@ -89,7 +89,7 @@ public final class SuiDasService implements InterworkingService {
                 if (n == null) {
                     NativePtbBuilder.Config nc = new NativePtbBuilder.Config(
                             cfg.rpcUrl,
-                            cfg.packageId,
+                            cfg.packageId, cfg.packageOriginalId,
                             cfg.identityRegistryId,
                             cfg.trustRegistryId,
                             cfg.policyRegistryId,

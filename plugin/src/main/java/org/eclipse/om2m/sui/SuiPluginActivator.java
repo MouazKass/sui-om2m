@@ -53,7 +53,7 @@ public final class SuiPluginActivator implements BundleActivator {
                 }
                 TrustConfig tcfg = TrustConfig.from(tp);
                 NativePtbBuilder.Config nc = new NativePtbBuilder.Config(
-                    cfg.rpcUrl, cfg.packageId,
+                    cfg.rpcUrl, cfg.packageId, cfg.packageOriginalId,
                     cfg.identityRegistryId, cfg.trustRegistryId,
                     cfg.policyRegistryId, cfg.auditTrailId,
                     cfg.suiClockId, cfg.gasBudget, cfg.minTrust);

@@ -1,0 +1,59 @@
+# 04_cutover.sh cleanup - 2026-11-10T02:32:27Z
+== rpi1 BEFORE
+disk used_MB=25248 avail_MB=204548
+mouazkass/om2m-sui-in:rpi1-v8 6d1c04096080
+mouazkass/om2m-sui-in:rpi1-v7-final 13f63ead656d
+om2m-v7-old log: 7.8G
+om2m-v7-old rw-layer: 49.4MB (virtual 1.1GB)
+mosquitto-v7-old log: 140K
+mosquitto-v7-old rw-layer: 4.1kB (virtual 26.4MB)
+== rpi2 BEFORE
+disk used_MB=26967 avail_MB=202829
+mouazkass/om2m-sui-in:rpi2-v8 53ff0ff1989a
+mouazkass/om2m-sui-in:rpi2-v7-final e132bf8dc257
+om2m-v7-old log: 7.9G
+om2m-v7-old rw-layer: 54.1MB (virtual 1.11GB)
+mosquitto-v7-old log: 112K
+mosquitto-v7-old rw-layer: 4.1kB (virtual 26.4MB)
+== rpi3 BEFORE
+disk used_MB=26536 avail_MB=88259
+mouazkass/om2m-sui-in:rpi3-v8 9be37ea17b71
+mouazkass/om2m-sui-in:rpi3-v7-final 82bde8b865d9
+om2m-v7-old log: 7.7G
+om2m-v7-old rw-layer: 57.1MB (virtual 1.11GB)
+mosquitto-v7-old log: 1.5G
+mosquitto-v7-old rw-layer: 4.1kB (virtual 26.4MB)
+
+=== cleanup rpi1 ===
+om2m-v7-old
+mosquitto-v7-old
+v7 containers removed; rollback images kept:
+mouazkass/om2m-sui-in:rpi1-v8
+mouazkass/om2m-sui-in:rpi1-v7-final
+
+=== cleanup rpi2 ===
+om2m-v7-old
+mosquitto-v7-old
+v7 containers removed; rollback images kept:
+mouazkass/om2m-sui-in:rpi2-v8
+mouazkass/om2m-sui-in:rpi2-v7-final
+
+=== cleanup rpi3 ===
+om2m-v7-old
+mosquitto-v7-old
+v7 containers removed; rollback images kept:
+mouazkass/om2m-sui-in:rpi3-v8
+mouazkass/om2m-sui-in:rpi3-v7-final
+EXIT=0
+== rpi1 AFTER
+disk used_MB=17305 avail_MB=212491
+om2m-active mouazkass/om2m-sui-in:rpi1-v8 Up 15 minutes
+mosquitto eclipse-mosquitto:2 Up 15 minutes
+== rpi2 AFTER
+disk used_MB=18922 avail_MB=210874
+om2m-active mouazkass/om2m-sui-in:rpi2-v8 Up 15 minutes
+mosquitto eclipse-mosquitto:2 Up 15 minutes
+== rpi3 AFTER
+disk used_MB=17218 avail_MB=97577
+om2m-active mouazkass/om2m-sui-in:rpi3-v8 Up 15 minutes
+mosquitto eclipse-mosquitto:2 Up 15 minutes

@@ -21,10 +21,12 @@
 #                            run 'prepare' (and 'config' if changed) first.
 #                            Recreates both containers from the same
 #                            definitions 'switch' uses; durable state is kept
-#   04_cutover.sh rollback   back to the v7 containers, config and scripts
-#   04_cutover.sh cleanup    after verify passes: remove the v7 containers
-#                            (frees rpi1's 2.6 GB unrotated log). Ends the
-#                            rollback window, though :rpiN-v7-final images stay.
+#   04_cutover.sh rollback   back to v7 (the stopped v7 containers, or after
+#                            cleanup a recreation from :rpiN-v7-final), config, scripts
+#   04_cutover.sh cleanup    after verify passes: remove the v7 containers and
+#                            their unrotated logs (~8 GB per node, run 2026-11-10).
+#                            'rollback' then recreates v7 from :rpiN-v7-final
+#                            (that path is written but has NOT been exercised).
 #
 # What "durable" means here. Every v7 container read its config through host
 # /tmp, which only survived reboots because Raspberry Pi OS currently keeps
@@ -239,16 +241,41 @@ rollback() {
   for n in "${NODES[@]}"; do
     say "rollback rpi$n"
     { remote_env "$n"; cat <<'EOF'
-docker inspect om2m-v7-old >/dev/null 2>&1 || { echo "no om2m-v7-old on this node - nothing to roll back"; exit 0; }
+[ -d "$RT/v7-backup-$STAMP" ] || { echo "FATAL: no $RT/v7-backup-$STAMP (v7 config) - cannot roll back"; exit 1; }
+if docker inspect om2m-v7-old >/dev/null 2>&1; then
+  MODE=containers   # before 'cleanup': the stopped v7 containers still exist
+elif docker image inspect "$IMG:rpi$N-v7-final" >/dev/null 2>&1; then
+  MODE=image        # after 'cleanup': recreate them from the :rpiN-v7-final snapshot
+else
+  echo "FATAL: neither om2m-v7-old nor $IMG:rpi$N-v7-final exists - nothing to roll back to"; exit 1
+fi
 docker rm -f om2m-active mosquitto >/dev/null 2>&1 || true
-docker rename om2m-v7-old om2m-active && docker update --restart unless-stopped om2m-active >/dev/null
-docker rename mosquitto-v7-old mosquitto && docker update --restart unless-stopped mosquitto >/dev/null
 cp "$RT/v7-backup-$STAMP/sui.properties" "$RT/v7-backup-$STAMP/sui.mappings.properties" "$RT/"
 cp "$RT/sui.properties" /tmp/sui.properties; cp "$RT/sui.mappings.properties" /tmp/sui.mappings.properties
 sudo install -m 755 "$RT/v7-backup-$STAMP/provision-das.sh" /usr/local/bin/provision-das.sh
 sudo install -m 755 "$RT/v7-backup-$STAMP/das-watchdog.sh"  /usr/local/bin/das-watchdog.sh
-docker start mosquitto om2m-active >/dev/null
-echo "rolled back to v7"
+if [ "$MODE" = containers ]; then
+  docker rename om2m-v7-old om2m-active && docker update --restart unless-stopped om2m-active >/dev/null
+  docker rename mosquitto-v7-old mosquitto && docker update --restart unless-stopped mosquitto >/dev/null
+  docker start mosquitto om2m-active >/dev/null
+else
+  # The v7 definitions (RECOVERY.md "Full recovery sequence", step 3). The
+  # snapshot keeps the v7 image's entrypoint, Cmd and Env (checked 2026-11-10),
+  # so only ports and mounts are restated here. The v7 broker config is the
+  # full-mesh one that loops (ROLLOUT_V8.md F) - rolling back brings that back.
+  cp "$RT/v7-backup-$STAMP/mosquitto-mesh.conf" /tmp/mosquitto-mesh.conf
+  docker run -d --name mosquitto --restart unless-stopped --network host \
+    -v /tmp/mosquitto-mesh.conf:/mosquitto/config/mosquitto.conf:ro \
+    eclipse-mosquitto:2 /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf >/dev/null
+  docker run -d --name om2m-active --restart unless-stopped -p 8282:8282 -p 8080:8282 \
+    -v /home/user/.sui/sui_config:/root/.sui/sui_config:rw \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /tmp/sui.properties:$CONF/sui.properties \
+    -v /tmp/sui.mappings.properties:$CONF/sui.mappings.properties \
+    -v /tmp/current-parent-poa:/tmp/current-parent-poa \
+    "$IMG:rpi$N-v7-final" >/dev/null
+fi
+echo "rolled back to v7 ($MODE)"
 EOF
     } | ssh_n "$n" bash -s
   done

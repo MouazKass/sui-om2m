@@ -1,0 +1,47 @@
+
+################################################################################
+#  CONCEPT 8 - AUDIT TRAIL
+################################################################################
+
+=== THE AUDIT TRAIL OBJECT ON-CHAIN ===
+    trail id : 0x23258d81e9a31b6c205160082ac76f5e439c0c2db1e270fc4ed83d314de4b2dc
+    owner    : {'Shared': {'initial_shared_version': 929501855}}
+    ring_size: 512 | records written (next_slot): 7
+
+=== AN ORDINARY oneM2M RETRIEVE APPENDS A RECORD AND EMITS AN EVENT ===
+    HTTP 200
+    Sui GRANT originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=1 digest=7oEX73yFSCaaPfeA6qZyTY8Fb62Bus5C8XQceti9bjd7 (3968 ms)
+    event: cap_token::TokenUsed
+       {"new_use_count": "8", "token_id": "0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4"}
+    event: audit::AccessLogged
+       {"decision": 1.0, "requested_op": 1.0, "requester": "0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10", "resource_id": "/in-cse/Csui-dac-ae", "timestamp_ms": "1794277679137", "token_uses": "8", "trust_at_check": "100"}
+    records written: 7 -> 8
+    [PASS] the GRANT appended to the trail
+
+=== v8 / A7: A NODE CANNOT WRITE AN AUDIT RECORD DIRECTLY ===
+    rpi1 tries to append a forged GRANT for itself via audit::log.
+$ [rpi1] sui client ptb --move-call $PKG_V8::audit::log @0x23258d81e9a31b6c205160082ac76f5e439c0c2db1e270fc4ed83d314de4b2dc @0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 '"/in-cse/Csui-dac-ae"' 1u8 1u8 100 0 @0x6
+    -> execution failed on-chain: NonEntryFunctionInvoked in command 0  digest=92uvTW4vTGt3msFK2HK6pgSGiejMsiixMXqPH8pP2bSa
+    [PASS] rejected
+    rpi1 tries to write a forged DENY through evaluator::log_denied.
+$ [rpi1] sui client ptb --move-call $PKG_V8::evaluator::log_denied @0x23258d81e9a31b6c205160082ac76f5e439c0c2db1e270fc4ed83d314de4b2dc @0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 '"/in-cse/Csui-dac-ae"' 1u8 0 @0x6
+    -> execution failed on-chain: NonEntryFunctionInvoked in command 0  digest=29czbtFeY9WcVYGJSUMm4ofmVQ696onjXGUCzUnTjtv3
+    [PASS] rejected
+    records written: 8 -> 8 (unchanged)
+
+=== IMMUTABILITY IS STRUCTURAL (audit module surface) ===
+    90:    public fun resize(
+    109:    public(package) fun log(
+    155:    public fun ring_size(trail: &AuditTrail): u64 { trail.ring_size }
+    156:    public fun count(trail: &AuditTrail): u64 { trail.next_slot }
+    159:    public fun decision_granted(): u8 { DECISION_GRANTED }
+    160:    public fun decision_denied():  u8 { DECISION_DENIED  }
+    162:    #[test_only] public fun init_for_testing(ctx: &mut sui::tx_context::TxContext) { init(ctx) }
+    (no edit or delete of a past record; log is package-only)
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: the trail is an on-chain object; each decision appends a record
+and emits AccessLogged; no external party can write, edit or delete records.
+--------------------------------------------------------------------------------
+RESULT: 3 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

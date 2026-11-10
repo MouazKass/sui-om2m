@@ -1,0 +1,43 @@
+
+=== verify rpi1 ===
+om2m-active mouazkass/om2m-sui-in:rpi1-v8 Up 47 minutes
+mosquitto eclipse-mosquitto:2 Up 47 minutes
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+Lease anchored for 1200000 ms digest=Ee3YJphGfW5bp4ooFdne91xNrGhZ2WgLQdD5Exv9srEV (1183 ms)
+PoA published on-chain: http://10.25.96.200:8282/ digest=E92yUy2bmRSEDrZqZJQHPAdK5QnafSHpVtdBLrWTPCyk (1045 ms)
+sui-das: 200
+sui-dac-ae: 200
+
+=== verify rpi2 ===
+om2m-active mouazkass/om2m-sui-in:rpi2-v8 Up 59 seconds
+mosquitto eclipse-mosquitto:2 Up 47 minutes
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+[ERROR] - org.eclipse.om2m.core.controller.Controller  
+om2mException
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+[ERROR] - org.eclipse.om2m.core.router.Router  
+OM2M exception caught in Router: Already registered
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+sui-das: 200
+sui-dac-ae: 200
+
+=== verify rpi3 ===
+om2m-active mouazkass/om2m-sui-in:rpi3-v8 Up 47 minutes
+mosquitto eclipse-mosquitto:2 Up 47 minutes
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+Claim rejected on-chain: MoveAbort(MoveLocation { module: ModuleId { address: 0x88f0b0f7…, name: Identifier("failover") }, function_name: Some("claim_parent"), instruction: 22 }, 3) -- Error in 1st command, from '0x88f0b0f7…::failover::claim_parent' (instruction 22), abort code: 3 (digest=xvCaeyZmro1Caek6tTK9VfvP2CGLmCAX1wKvF9yYfyi)
+sui-das: 200
+sui-dac-ae: 200
+
+=== gossip wire format on the mesh (expect v2) ===
+     30 v2|0x27dacda1bdcb3fb8dc2a4b0d77b420deea5
+     30 v2|0x4be6060abaff0b4b6b7229558887f5f054c
+     28 v2|0xef9c6271d8c6cc9e1d9707a117f876e7a86
+
+=== C2: ordinary RETRIEVE on the DAC-protected AE as Csensor-001 (mapped on rpi3) ===
+HTTP 200
+Sui DAC consult: originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=2
+Sui GRANT originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=1 digest=3BBiNEMDeoQtyctsh4MZeB1sKBe3EnVXSPbDxyuzdnkj (1259 ms)

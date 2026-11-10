@@ -1,0 +1,57 @@
+
+################################################################################
+#  CONCEPT 10 - LIVE SYSTEM LOGS (pulled fresh from the running nodes)
+################################################################################
+
+=== PLUGIN STARTUP (rpi3): subsystems initialise in order ===
+    [sui-debug] step 8: failover.start() returned
+    [sui-debug] step 9: starting TrustScoringEngine
+    NativePtbBuilder ready: 1 keypair(s) loaded
+    [trust] gossip signing ENABLED
+    [trust] engine started. self=0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 tick=1000ms window=60000ms alpha=0.3 adminCap=0x38e59f73d7d2afdb2f59eb
+    [sui-debug] step 10: TrustScoringEngine started
+    [sui] Plugin ready. nodeAddress=0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 env=testnet
+    NativePtbBuilder ready: 1 keypair(s) loaded
+    [PASS] rpi3 plugin is up
+
+=== ACCESS DECISIONS (rpi3): ordinary oneM2M requests decided on-chain ===
+    Sui DAC consult: originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=2
+    Sui GRANT originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=1 digest=7oEX73yFSCaaPfeA6qZyTY8Fb62Bus5C8XQceti9bjd7 (3968 ms)
+    [PASS] rpi3 logged an on-chain decision
+
+=== TRUST ENGINE (rpi2): autonomous peer scoring ===
+    [trust] 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 tier 4->3 NOT yet on-chain (chain score 100 = tier 4); retrying next tick
+    [trust] 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 tier 4->3 NOT yet on-chain (chain score 100 = tier 4); retrying next tick
+    [trust] 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 tier 4->3 NOT yet on-chain (chain score 100 = tier 4); retrying next tick
+    [trust] 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 tier 4->3 NOT yet on-chain (chain score 100 = tier 4); retrying next tick
+    [trust] 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 tier 4->3 NOT yet on-chain (chain score 100 = tier 4); retrying next tick
+    [trust] 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 tier 4->3 NOT yet on-chain (chain score 100 = tier 4); retrying next tick
+    [PASS] rpi2 trust engine running
+
+=== SIGNED GOSSIP (rpi1): the peer-attestation channel ===
+    [trust] gossip signing ENABLED
+    [trust] gossip connected to tcp://10.25.96.200:1883 sub=om2m/trust/obs/0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f/+ pub=om2m/trust/obs/0xe49d6
+    [PASS] rpi1 gossip is signed
+
+=== FAILOVER (all nodes): who is parent, and the parent anchoring its lease ===
+  [rpi1]
+    Cluster current parent = 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+    Cluster current parent = 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+    Cluster current parent = 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+  [rpi2]
+    Chain names this node parent but parent duties were not running; taking them up now (lease anchor + PoA)
+    Lease anchored for 1200000 ms digest=32wELWRMyfZh7LXWz3QM7YogBctHqDTrwbDkJYLEskbP (1845 ms)
+    PoA published on-chain: http://10.25.96.201:8282/ digest=6s45QC5rWnbxLK75tQPtbGzKHSmp8yTA2nUkybXmU6fu (1439 ms)
+  [rpi3]
+    PoA published on-chain: http://10.25.96.203:8282/ digest=3orY86CACikY1j7MXr5DmPA9SH1if1toB1ArfvjLur7X (1016 ms)
+    Cluster current parent = 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+    Parent duties stopped (deposed): lease anchor + self-check cancelled (presence heartbeat continues).
+    [PASS] the on-chain parent (rpi2) has anchored its lease
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: the subsystems are live on the real nodes - the DAS deciding
+ordinary requests on-chain, the trust engine scoring peers, signed gossip, and
+the failover manager following the chain's parent. This is the running system.
+--------------------------------------------------------------------------------
+RESULT: 5 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

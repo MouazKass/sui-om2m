@@ -101,6 +101,10 @@ gen_sui_properties() {  # node
 sui.cli.path=$cli
 sui.env=testnet
 sui.package.id=$PKG_V8
+# Type-origin package id: Move type names (e.g. ParentPoaKey) keep the id of the
+# package that defined them across compatible upgrades. Stays $PKG_V8 even when
+# sui.package.id moves to an upgraded package (v9). Plugin default: sui.package.id.
+sui.package.original.id=$PKG_V8
 sui.identity.registry.id=$ID_REG
 sui.trust.registry.id=$TRUST_REG
 sui.policy.registry.id=$POLICY_REG
@@ -353,7 +357,7 @@ print(json.dumps({
  "das": "$DAS_NODE",
  "originators": ["admin:admin", "Csensor-001"],
  "tokens": {"$RES_PROTECTED_CNT": "$TOKEN_SUI_PROTECTED_CNT", "$RES_DAC_AE": "$TOKEN_SUI_DAC_AE"},
- "shared": {"sui.package.id": "$PKG_V8", "sui.identity.registry.id": "$ID_REG",
+ "shared": {"sui.package.id": "$PKG_V8", "sui.package.original.id": "$PKG_V8", "sui.identity.registry.id": "$ID_REG",
             "sui.trust.registry.id": "$TRUST_REG", "sui.policy.registry.id": "$POLICY_REG",
             "sui.audit.trail.id": "$AUDIT_TRAIL", "sui.failover.cluster.id": "$CLUSTER",
             "sui.clock.id": "0x6", "sui.graphql.url": "$GRAPHQL_URL", "sui.use.native.rpc": "true"},

@@ -6,7 +6,7 @@
 set -uo pipefail
 NODE="${1:-10.25.96.203}"; N="${2:-30}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
 BASE=http://127.0.0.1:8282
-ssh_n() { sshpass -p "$PW" ssh -o StrictHostKeyChecking=no user@$NODE "$@"; }
+ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 
 echo "# baseline OM2M RETRIEVE latency (no chain)  node=$NODE  n=$N"
 # create a plain unprotected container to read (idempotent; ignore 409)

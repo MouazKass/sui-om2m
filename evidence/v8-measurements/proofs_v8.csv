@@ -1,0 +1,51 @@
+utc,proof,call,outcome,digest,net_gas_mist
+2026-11-10T01:57:30Z,01,rpi3:trust::increase_guarded,abort:4,AQgvoUawC1NM2X4Qvgu23BYRqUtf8Un3sH1voYbEFxWH,
+2026-11-10T01:58:18Z,02,rpi1:trust::decrease_guarded,success,HPh4KkrZXuqXQqWcsY3kSJQCKtf8qb9yUjjpPma4tj6J,1000600
+2026-11-10T01:58:30Z,02,rpi2:trust::increase_guarded,abort:4,623koyjYzNLDtmhMNeus45N7nwfwdQjyXEPv6io4sc5n,
+2026-11-10T01:58:34Z,02,rpi1:trust::increase_guarded,abort:6,22pMAWeEDCuCQ9PFrn8MiSCtZeEJoP5p1iriPkcnz1mY,
+2026-11-10T01:58:39Z,02,rpi1:trust::increase_guarded,abort:7,3f86ohQfSbztz29qFkbJbZ9etmbJwAuybADWTFxFFKEV,
+2026-11-10T01:59:25Z,02,rpi1:trust::increase_guarded,success,5fRLxEwX8zcnM9jXDuzUApvWZLwPevMmiap6e1cgB9tu,1000600
+2026-11-10T02:00:31Z,03,rpi3:DAC RETRIEVE Csensor-001,success,RsZ5wWqDdaafZvfTWkwudf82AtMU4h7cBRDJX1y8eh2,
+2026-11-10T02:00:37Z,03,rpi1:ptb,error,,
+2026-11-10T02:01:26Z,04,rpi3:DAC GRANT (receipt chain),success,8kY91Xj5RcaAgCSSvLDeAXn19S3saiya5ZzgzqbhqLQt,
+2026-11-10T02:01:33Z,04,rpi3:ptb,error,7yP5pwuejALcT1Yu25vrkZ5hZWCHbJf8mkG4yE3Pi8Yt,
+2026-11-10T02:01:37Z,04,rpi3:ptb,error,5jjtHS5ocFVUyURByNmZgordJV5YKAZJkwXFNZf4Lr8N,
+2026-11-10T02:02:10Z,04,rpi3:DAC GRANT (receipt chain),success,3iQkde2LppVDwfTdFXADvxuF1Sbgzjf3wMRFukxV5Vj8,
+2026-11-10T02:02:17Z,04,rpi3:ptb,failed,64eTujpkcEdnkXuFnmMam3F9776vw4bbuLt7ihPvH4Ry,
+2026-11-10T02:02:23Z,04,rpi3:ptb,failed,FAFuxRgvasXWQ6oFysaaqYuPnsF4dXism8Sn2qua1i2H,
+2026-11-10T02:03:10Z,05,rpi3:DAC DELETE Csensor-001,deny,,
+2026-11-10T02:03:18Z,05,rpi3:ptb,abort:4,3CV9QeHwixzrT2dMDrsifLutp44dYcrSndACBUfVPSA7,
+2026-11-10T02:04:50Z,06,rpi3:failover::renew_lease,abort:7,6cbzbwAPxzUoAn3uXqh9PPkeCP8mF9WrMqdVV4frcHcX,
+2026-11-10T02:04:55Z,06,rpi2:failover::renew_lease,abort:4,EYPPazjAjeknkhM8ELBxTX19TMdkbJnh16Qdaq3SgWSu,
+2026-11-10T02:05:00Z,06,rpi2:failover::claim_parent,abort:3,BR9YtwxZyYJhtggrjVyi9i37nPFBEypiXZMNmhuNSWAs,
+2026-11-10T02:05:04Z,06,rpi3:failover::renew_lease,success,9ZPmiAAMVu4fXTsj8HLBqXEqxvKPzxeVaQLRgPUe3FZe,1000276
+2026-11-10T02:05:11Z,06,rpi2:failover::claim_parent,success,6smm8w2k9DWA7k5tfSb8u13uEtnWpY9MacjPNSpcvaRK,1000276
+2026-11-10T02:05:17Z,06,rpi1:failover::claim_parent,abort:3,E4CKpeqpQDzFtCU1cQF5sTNgpvg1KtcW14295g6Qx3hZ,
+2026-11-10T02:18:55Z,06,rpi2:failover::renew_lease,abort:7,9skQXdKkgB3abMUPiK7xix1b9ZdHqr93ZxHc6SAWJxVw,
+2026-11-10T02:19:00Z,06,rpi3:failover::renew_lease,error,,
+2026-11-10T02:19:05Z,06,rpi3:failover::claim_parent,abort:3,4jBR2MdWTo7wb1dSr7LbKtqoPGi6k2tUxQfBcsjefq9A,
+2026-11-10T02:19:11Z,06,rpi2:failover::renew_lease,success,5MpjnPF87MULEQoxb4jzLHDfLQjGN3S1V3RU58z9Mmst,1000276
+2026-11-10T02:19:19Z,06,rpi3:failover::claim_parent,success,ui51Sz9k1X5YD1i7GqvprghAJafEAc7e6czf721RhFP,1000276
+2026-11-10T02:19:24Z,06,rpi1:failover::claim_parent,abort:3,4emkmaRc4SqvwYJtr2ESnFgdKZbkc94ayt8pWQUuJiPE,
+2026-11-10T02:22:21Z,06,rpi3:failover::renew_lease,abort:7,B9bG1yvaKXN9rfgkodhyWx9gVLmtoVyNEHNZbJEhBrFT,
+2026-11-10T02:22:25Z,06,rpi2:failover::renew_lease,abort:4,DpjwHuP5KsaNPuT9VtoSFTmRfd3iH54qkMcoFKS7x4KY,
+2026-11-10T02:22:31Z,06,rpi2:failover::claim_parent,abort:3,7vsosNgrVhBuVqRNSeZq7zNMMR2HBUXQ9E8op5ohZyeU,
+2026-11-10T02:22:36Z,06,rpi3:failover::renew_lease,success,Go56XbAKeb2ohZKj3r2SF2hQftg5pcc3PqPiNwpvCjw7,1000276
+2026-11-10T02:22:44Z,06,rpi2:failover::claim_parent,success,DkQb91bcU8zmMVHLV8xkXuU7zMzF3ijyxVAoLfH3sKFP,1000276
+2026-11-10T02:22:50Z,06,rpi1:failover::claim_parent,abort:3,63goE4tfptkCAP3BRntXheR2qs4f1BW8Nbi5637f6gRN,
+2026-11-10T02:25:37Z,07,publisher:cap_token::mint,success,3KosYLbNjAc88FvxpjxgHwRh4PmxkxGwda645XFiVht7,3128232
+2026-11-10T02:25:44Z,07,rpi3:evolution::bootstrap,success,DuFa2y2VyKkbJ8mEcxrDNAdscytRNHrpCf1HSaoxHZtS,5134712
+2026-11-10T02:25:51Z,07,rpi3:evolution::evolve,success,5NAc3rwuJbosFhfK7jHfkvfcejvq6YHo9YwUj5em14RT,1000725
+2026-11-10T02:26:02Z,07,rpi1:trust::decrease_guarded,success,6FbJv4UqGpheuAkuERSSph6hTADW3kCafR9BNRFTodnh,1000600
+2026-11-10T02:26:07Z,07,rpi3:evolution::evolve,success,AfEKyr5BBCHzEGm4eQBqgKryxvcbqJ9NqKhQ9yFjthB,1000725
+2026-11-10T02:27:08Z,07,rpi1:trust::increase_guarded,success,3GUzu53fcSn222ZGahkx1uS7nXKUvmximmV9NCkEutBf,1000600
+2026-11-10T02:27:13Z,07,rpi3:evolution::evolve,success,Ac3E6Ujxi9JBMohKVjkawgkW2Zi9DMeELpo9aTAxKdtP,1000725
+2026-11-10T02:28:09Z,08,rpi3:DAC GRANT (audit append),success,7oEX73yFSCaaPfeA6qZyTY8Fb62Bus5C8XQceti9bjd7,
+2026-11-10T02:28:12Z,08,rpi1:ptb,failed,92uvTW4vTGt3msFK2HK6pgSGiejMsiixMXqPH8pP2bSa,
+2026-11-10T02:28:17Z,08,rpi1:ptb,failed,29czbtFeY9WcVYGJSUMm4ofmVQ696onjXGUCzUnTjtv3,
+2026-11-10T02:29:17Z,09,publisher:trust::grant_admin_registered,success,8UYKm2m6oc5cuKHam4anWzLm9FL4UjoEDUEL2ea2cowo,2535906
+2026-11-10T02:29:27Z,09,publisher:trust::revoke_admin,success,62Je1jeBZrJsC798RcbZjBGnL9RNGAagnRJutXyVEdWf,757530
+2026-11-10T02:29:37Z,09,rpi2:trust::increase_guarded,abort:5,FiXzekgDdzBSsh7RnuTt7zVs4mkPBrfEyZp7o7TTkonN,
+2026-11-10T02:29:42Z,09,rpi2:trust::grant_admin_registered,abort:5,7uja2YrxkECu4E1uxk9NXjv3nABCvc64CT7gvySkzknC,
+2026-11-10T02:29:47Z,09,rpi2:trust::add_node,abort:5,5ksyL1wr9tQJQisxCmXtS7KPZKMp4xtp4jioRQsNovh9,
+2026-11-10T02:29:51Z,09,rpi2:trust::burn_admin,success,7pxyku13fBqqsukLqDAdrVVZK6jsPRte4KnXJ5P8Xbkz,-291609

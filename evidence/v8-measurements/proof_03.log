@@ -1,0 +1,47 @@
+
+################################################################################
+#  CONCEPT 3 - CAPABILITY TOKENS
+################################################################################
+
+=== THE TOKEN AS AN ON-CHAIN OBJECT (owner, resource, ops mask) ===
+$ sui client object $CAP_TOKEN_RPI3_DAC --json
+    objectId     : 0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4
+    type         : cap_token::CapToken
+    owner        : 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+    resource_id  : /in-cse/Csui-dac-ae
+    allowed_ops  : 3 = READ+WRITE
+    uses / max   : 4 / 1000000
+    expiry_ms    : 1809813902000
+
+=== NON-COPYABLE: the Move type has key+store but NO 'copy' ability ===
+    55:    public struct CapToken has key, store {
+
+=== AN ORDINARY oneM2M RETRIEVE, AUTHORIZED ON-CHAIN WITH THE TOKEN ===
+$ curl http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H 'X-M2M-Origin: Csensor-001'   (on rpi3)
+    (a plain RETRIEVE: no NOTIFY header, no DAS URL. The static ACPs grant
+     Csensor-001 nothing, so OM2M consults the DAC -> the Sui DAS -> one PTB.)
+    HTTP 200
+    Sui DAC consult: originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=2
+    Sui GRANT originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=1 digest=RsZ5wWqDdaafZvfTWkwudf82AtMU4h7cBRDJX1y8eh2 (1772 ms)
+    [PASS] HTTP 200 and an on-chain GRANT (digest RsZ5wWqDdaafZvfTWkwudf82AtMU4h7cBRDJX1y8eh2)
+
+=== v8 / A4: ANOTHER NODE CANNOT SPEND THIS TOKEN ===
+    rpi1 (registered, trusted) builds the full receipt chain but presents
+    rpi3's token. Pre-v8 validate_for_use never checked the signer; now
+    cap_token.move asserts signer == requester == token.owner - and Sui
+    itself refuses to let rpi1 put an object it does not own in a tx.
+$ [rpi1] sui client ptb --move-call $PKG_V8::identity::verify @0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 --assign r1   --move-call $PKG_V8::trust::require_min r1 @0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 '"/in-cse/Csui-dac-ae"' 50 @0x6 --assign r2   --move-call $PKG_V8::cap_token::validate_for_use r2 @0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4 1u8 @0x6 --assign r3   --move-call $PKG_V8::policy::evaluate r3 @0x6196d3329541ca840734a59ca1d773883317ae0d350f63d89213ebf2a9bb4b6c @0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 @0x6 --assign r4   --move-call $PKG_V8::evaluator::decide_and_log r4 @0x23258d81e9a31b6c205160082ac76f5e439c0c2db1e270fc4ed83d314de4b2dc @0x6
+    -> not executed:
+       code: 'Client specified an invalid argument', message: "Error checking transaction input objects: Transaction was not signed by the correct sender: Object 0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4 is owned by account address 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10, but given owner/signer address is 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9", source: RpcError(Status { code: InvalidArgument, message: "Error checking transaction input objects: Transaction was not signed by the correct sender: Object 0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4 is owned by account address 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10, but given owner/signer address is 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9", details: b"\x08\x03\x12\xea\x02Error checking transaction input objects: Transaction was not signed by the correct sender: Object 0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4 is owned by account address 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10, but given owner/signer address is 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9", metadata: MetadataMap { headers: {"content-type": "application/grpc", "alt-svc": "h3=\":443\"; ma=2592000", "content-length": "0", "via": "1.1 google", "x-sui-chain-id": "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD", "x-sui-chain": "testnet", "x-sui-epoch": "1279", "x-sui-checkpoint-height": "404752528", "x-sui-timestamp-ms": "1794276036517", "x-sui-timestamp": "2026-11-10T02:00:36.517Z", "x-sui-lowest-available-checkpoint": "399390119", "x-sui-lowest-available-checkpoint-objects": "399390119", "server": "sui-node/1.83.1-235054145e00", "vary": "origin, access-control-request-method, access-control-request-headers", "access-control-allow-origin": "*", "access-control-expose-headers": "*", "server-timing": "finish_request;dur=1", "date": "Tue, 10 Nov 2026 02:00:36 GMT"} }, source: None })
+       Caused by:
+           0: RPC error: code: 'Client specified an invalid argument', message: "Error checking transaction input objects: Transaction was not signed by the correct sender: Object 0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4 is owned by account address 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10, but given owner/signer address is 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9"
+           1: code: 'Client specified an invalid argument', message: "Error checking transaction input objects: Transaction was not signed by the correct sender: Object 0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4 is owned by account address 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10, but given owner/signer address is 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9"
+    [PASS] rejected before execution: rpi1 cannot use an object owned by rpi3 (nothing on-chain, no gas)
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: the capability is a real on-chain object with a fixed owner,
+resource and ops mask; its Move type is non-copyable; an ordinary oneM2M request
+is granted on-chain with it (digest above); and no other node can spend it.
+--------------------------------------------------------------------------------
+RESULT: 2 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

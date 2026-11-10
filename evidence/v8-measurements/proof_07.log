@@ -1,0 +1,57 @@
+
+################################################################################
+#  CONCEPT 7 - SELF-EVOLVING TOKENS
+################################################################################
+
+  Tier map: >=90 CUSTODIAN(15) | >=75 TRUSTED(7) | >=50 STANDARD(3) | >=25 BASIC(1) | <25 PROBATION(1)
+
+=== SETUP: mint a proof token to rpi3 (publisher's IssuerCap) and bootstrap its tier ===
+$ [publisher] sui client call --package $PKG_V8 --module cap_token --function mint --args 0x09988c2ca2cac5443bc3ca2c01ca228699220280073d22abe17c437fdeb046b4 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 '"/proof/evolution"' 1 1796869532000 100
+    -> Success   digest=3KosYLbNjAc88FvxpjxgHwRh4PmxkxGwda645XFiVht7   gas=3128232 MIST
+    [PASS] proof token minted (expected success)
+$ [rpi3] sui client call --package $PKG_V8 --module evolution --function bootstrap --args 0xa1989b97522d5b5d350933af93c0543683915f07f022184cf93f8b56b8e61360 0x6
+    -> Success   digest=DuFa2y2VyKkbJ8mEcxrDNAdscytRNHrpCf1HSaoxHZtS   gas=5134712 MIST
+    [PASS] tier fields bootstrapped (dynamic fields on the same object) (expected success)
+    proof token: 0xa1989b97522d5b5d350933af93c0543683915f07f022184cf93f8b56b8e61360
+
+=== START: rpi3 score 100 ===
+$ [rpi3] sui client call --package $PKG_V8 --module evolution --function evolve --args 0xa1989b97522d5b5d350933af93c0543683915f07f022184cf93f8b56b8e61360 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> Success   digest=5NAc3rwuJbosFhfK7jHfkvfcejvq6YHo9YwUj5em14RT   gas=1000725 MIST
+    [PASS] evolve at the starting score (expected success)
+    ops now: 15 = READ+WRITE+DELETE+ADMIN   (rpi3 score 100)
+
+=== STEP 1: a peer lowers rpi3's trust across the 90 boundary (A12: at most 15) ===
+$ [rpi1] sui client call --package $PKG_V8 --module trust --function decrease_guarded --args 0x9dd24879e5b93881596f2e4d71d270e5284e7487e365250905763e22717b01ba 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 11 0x6
+    -> Success   digest=6FbJv4UqGpheuAkuERSSph6hTADW3kCafR9BNRFTodnh   gas=1000600 MIST
+    [PASS] rpi1 lowers rpi3 by 11 (expected success)
+
+=== STEP 2: rpi3 evolves its token - the mask NARROWS in place ===
+$ [rpi3] sui client call --package $PKG_V8 --module evolution --function evolve --args 0xa1989b97522d5b5d350933af93c0543683915f07f022184cf93f8b56b8e61360 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> Success   digest=AfEKyr5BBCHzEGm4eQBqgKryxvcbqJ9NqKhQ9yFjthB   gas=1000725 MIST
+    [PASS] evolve after the demotion (expected success)
+    ops now: 7 = READ+WRITE+DELETE   (rpi3 score 89)
+    [PASS] 15 -> 7 on the same object id (ADMIN dropped)
+
+=== v8 / A9: evolve takes no node address - it scores the signer ===
+    100:    public fun evolve(
+    106:        let node_addr = tx_context::sender(ctx);
+    107:        assert!(cap_token::owner(token) == node_addr, E_NOT_TOKEN_OWNER);
+
+=== RESTORE: raise rpi3 back and re-evolve (leave the system as found) ===
+    (waiting 51s for the 60 s per-target write interval, A12)
+$ [rpi1] sui client call --package $PKG_V8 --module trust --function increase_guarded --args 0x9dd24879e5b93881596f2e4d71d270e5284e7487e365250905763e22717b01ba 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 11 0x6
+    -> Success   digest=3GUzu53fcSn222ZGahkx1uS7nXKUvmximmV9NCkEutBf   gas=1000600 MIST
+    [PASS] rpi1 restores rpi3 by 11 (expected success)
+$ [rpi3] sui client call --package $PKG_V8 --module evolution --function evolve --args 0xa1989b97522d5b5d350933af93c0543683915f07f022184cf93f8b56b8e61360 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> Success   digest=Ac3E6Ujxi9JBMohKVjkawgkW2Zi9DMeELpo9aTAxKdtP   gas=1000725 MIST
+    [PASS] re-evolve after the restore (expected success)
+    ops now: 15 = READ+WRITE+DELETE+ADMIN   (rpi3 score 100)
+    [PASS] mask widened back to 15
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: as rpi3's on-chain trust crosses a tier boundary the token's ops
+mask narrows (and later widens) in place, on the same object id; the score used
+is always the signer's own (A9), and each step is bounded by A12.
+--------------------------------------------------------------------------------
+RESULT: 9 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

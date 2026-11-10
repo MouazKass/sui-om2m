@@ -6,7 +6,7 @@
 set -uo pipefail
 NODE="${1:-10.25.96.203}"; N="${2:-12}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
 BASE=http://127.0.0.1:8282
-ssh_n() { sshpass -p "$PW" ssh -o StrictHostKeyChecking=no user@$NODE "$@"; }
+ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 
 echo "# native-path access latency  node=$NODE  n=$N (1 cold discarded)"
 ssh_n "for i in \$(seq 1 $N); do

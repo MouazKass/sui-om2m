@@ -1,0 +1,38 @@
+
+################################################################################
+#  CONCEPT 5 - POLICY ENFORCEMENT
+################################################################################
+
+=== THE POLICY ON-CHAIN (read with dev-inspect, no signature) ===
+    has_policy(/in-cse/Csui-dac-ae)    = True
+    min_trust_for(/in-cse/Csui-dac-ae) = 50
+    token allowed_ops         = 3.0 (READ|WRITE; DELETE=4 is not in the mask)
+
+=== AN ORDINARY oneM2M DELETE OUTSIDE THE GRANTED OPS = DENY (fail-closed) ===
+$ curl -X DELETE http://127.0.0.1:8282/~/in-cse/in-name/sui-dac-ae -H 'X-M2M-Origin: Csensor-001'   (on rpi3)
+    HTTP 403
+    Sui DAC consult: originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=4
+    Sui DENY originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=4 err=cap_token::E_OP_NOT_ALLOWED (abort 4) [raw: MoveAbort(MoveLocation { module: ModuleId { address: 0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1, name: Identifier("cap_token") }, function_name: Some("validate_for_use"), instruction: 55 }, 4) -- Error in 3rd command, from '0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1::cap_token::validate_for_use' (instruction 55), abort code: 4]
+    AE after: 200
+    [PASS] HTTP 403, Sui DENY, resource untouched
+
+=== THE SAME DENIAL, SIGNED DIRECTLY: the chain itself refuses op DELETE ===
+$ [rpi3] sui client ptb --move-call $PKG_V8::identity::verify @0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 --assign r1   --move-call $PKG_V8::trust::require_min r1 @0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 '"/in-cse/Csui-dac-ae"' 50 @0x6 --assign r2   --move-call $PKG_V8::cap_token::validate_for_use r2 @0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4 4u8 @0x6 --assign r3   --move-call $PKG_V8::policy::evaluate r3 @0x6196d3329541ca840734a59ca1d773883317ae0d350f63d89213ebf2a9bb4b6c @0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 @0x6 --assign r4   --move-call $PKG_V8::evaluator::decide_and_log r4 @0x23258d81e9a31b6c205160082ac76f5e439c0c2db1e270fc4ed83d314de4b2dc @0x6
+    -> MoveAbort code 4   digest=3CV9QeHwixzrT2dMDrsifLutp44dYcrSndACBUfVPSA7
+    [PASS] op DELETE rejected by the token mask (cap_token E_OP_NOT_ALLOWED) (expected abort:4)
+
+=== v8 / A5: THE TRUST GATE HAS NO CALLER-SUPPLIED SCORE ===
+    185:    public fun evaluate(
+    197:        let trust_score = trust::score_of(trust_reg, requester, clock);
+    200:        assert!(trust_score >= p.min_trust, E_TRUST_BELOW_MIN);
+    (pre-v8 evaluate took 'requester_trust: u64' from the caller; any PTB could
+     pass 100. It now reads the score from the TrustRegistry for the requester
+     the receipt chain carried forward.)
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: the policy (min_trust, ops mask) is on-chain; a request outside
+the granted operations is DENIED on the real oneM2M path (fail-closed) and by the
+contract itself; the trust gate reads the registry, never a caller's number.
+--------------------------------------------------------------------------------
+RESULT: 2 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

@@ -4,7 +4,7 @@
 set -uo pipefail
 NODE="${1:-10.25.96.203}"; TARGET="${2:-100}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
 BASE=http://127.0.0.1:8282
-ssh_n() { sshpass -p "$PW" ssh -o StrictHostKeyChecking=no user@"$NODE" "$@"; }
+ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 
 echo "# clean latency: collecting $TARGET GRANT samples  node=$NODE"
 # fire TARGET+15 requests (buffer for any that don't log), 1.2s apart so each logs

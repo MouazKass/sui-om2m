@@ -29,7 +29,14 @@ public final class NativePtbBuilder {
 
     public static final class Config {
         public final String rpcUrl;
+        /** Call target: every MoveCall goes to this package. */
         public final byte[] packageId;
+        /**
+         * Type origin: the package id used to spell Move TYPE names (e.g. the
+         * ParentPoaKey dynamic-field key). Equal to packageId until the package
+         * is upgraded; after an upgrade it stays the original id.
+         */
+        public final byte[] typeOriginPackageId;
         public final String identityRegistryId;
         public final String trustRegistryId;
         public final String policyRegistryId;
@@ -42,8 +49,19 @@ public final class NativePtbBuilder {
                       String identityReg, String trustReg, String policyReg,
                       String auditTrail, String suiClock,
                       long gasBudget, long minTrustRequired) {
+            this(rpcUrl, packageHex, packageHex, identityReg, trustReg, policyReg,
+                 auditTrail, suiClock, gasBudget, minTrustRequired);
+        }
+
+        public Config(String rpcUrl, String packageHex, String typeOriginPackageHex,
+                      String identityReg, String trustReg, String policyReg,
+                      String auditTrail, String suiClock,
+                      long gasBudget, long minTrustRequired) {
             this.rpcUrl = rpcUrl;
             this.packageId = BcsEncoder.hexTo32(packageHex);
+            this.typeOriginPackageId = BcsEncoder.hexTo32(
+                (typeOriginPackageHex == null || typeOriginPackageHex.trim().isEmpty())
+                    ? packageHex : typeOriginPackageHex.trim());
             this.identityRegistryId = identityReg;
             this.trustRegistryId = trustReg;
             this.policyRegistryId = policyReg;
@@ -498,33 +516,72 @@ public final class NativePtbBuilder {
     }
 
     /**
-     * Read the current parent's PoA from chain via the Cluster's dynamic field.
-     * Returns the URL string or null if no PoA has been set yet.
-     */
-    /**
      * The ParentPoaKey field on clusters created under the v2 package
      * (0x1583a958...) keeps that frozen type tag even when later versions
-     * update it in place. Clusters created by a fresh publish (v7, v8) carry
-     * the configured package's tag instead, so both are tried.
+     * update it in place, so it is always tried as a fallback.
      */
     static final String LEGACY_V2_PKG =
         "0x1583a958b1e6afa8a996dbd0933be1b1d2bdbe01f0c7d04322b9dacb22464699";
-    /** BCS of {@code ParentPoaKey {}}: Move gives empty structs a dummy_field: bool = false. */
+    /** BCS of an empty Move struct key: Move gives it a dummy_field: bool = false. */
     static final String PARENT_POA_KEY_BCS_B64 = "AA==";
 
+    /**
+     * Package ids whose {@code ::failover::ParentPoaKey} type tag is tried, in
+     * order. Type tags carry the TYPE-ORIGIN package id, never the upgraded
+     * call target: after the v9 compatible upgrade the key is still
+     * {@code <v8 id>::failover::ParentPoaKey}. Pure, unit-tested.
+     */
+    static String[] poaTypePackages(String typeOrigin0x) {
+        return typeOrigin0x.equalsIgnoreCase(LEGACY_V2_PKG)
+            ? new String[] { LEGACY_V2_PKG }
+            : new String[] { typeOrigin0x, LEGACY_V2_PKG };
+    }
+
+    /**
+     * v9 (F2): set_parent_poa also records who published the PoA under
+     * {@code ParentPoaOwnerKey}, and claim_parent clears both. A PoA whose
+     * recorded owner is not the cluster's current parent belongs to a deposed
+     * parent and must be ignored. No owner field (v8, or a v9 cluster whose PoA
+     * was written before the upgrade) means "no owner information": today's
+     * behaviour, accept. Pure, unit-tested.
+     */
+    static boolean acceptPoa(String owner0x, String currentParent0x) {
+        if (owner0x == null || owner0x.isEmpty()) return true;
+        return currentParent0x != null && owner0x.equalsIgnoreCase(currentParent0x);
+    }
+
+    static String hex0x(byte[] id32) {
+        StringBuilder h = new StringBuilder("0x");
+        for (byte b : id32) h.append(String.format("%02x", b & 0xFF));
+        return h.toString();
+    }
+
+    /**
+     * Read the current parent's PoA from the Cluster's dynamic field. Returns
+     * the URL, or null if none is set, it belongs to a deposed parent (v9
+     * owner check), or the read failed.
+     */
     public String fetchParentPoa(String clusterId) {
         try {
-            StringBuilder pkgHex = new StringBuilder("0x");
-            for (byte b : cfg.packageId) pkgHex.append(String.format("%02x", b & 0xFF));
-            String[] pkgs = pkgHex.toString().equalsIgnoreCase(LEGACY_V2_PKG)
-                ? new String[] { LEGACY_V2_PKG }
-                : new String[] { pkgHex.toString(), LEGACY_V2_PKG };
             LOG.info("[fetchParentPoa] start clusterId=" + clusterId + " graphql=" + fetcher.endpoint());
-            for (String pkg : pkgs) {
+            for (String pkg : poaTypePackages(hex0x(cfg.typeOriginPackageId))) {
                 JsonNode v = fetcher.getDynamicFieldJson(
                     clusterId, pkg + "::failover::ParentPoaKey", PARENT_POA_KEY_BCS_B64);
                 if (v == null) continue;               // no field under this tag
                 String poa = decodeVecU8String(v);
+                // Owner key lives in the same (type-origin) package as ParentPoaKey.
+                // Absent on v8: GraphQL returns a null dynamicField, nothing changes.
+                JsonNode o = fetcher.getDynamicFieldJson(
+                    clusterId, pkg + "::failover::ParentPoaOwnerKey", PARENT_POA_KEY_BCS_B64);
+                if (o != null && !o.isNull()) {
+                    String owner = o.asText("");
+                    String parent = fetcher.getMoveObjectJson(clusterId).path("current_parent").asText("");
+                    if (!acceptPoa(owner, parent)) {
+                        LOG.info("[fetchParentPoa] ignoring PoA " + poa + ": published by " + owner
+                                 + ", current parent is " + parent);
+                        return null;
+                    }
+                }
                 LOG.info("[fetchParentPoa] found under " + pkg + ": " + poa);
                 return poa;
             }

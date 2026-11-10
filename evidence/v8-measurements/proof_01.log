@@ -1,0 +1,57 @@
+
+################################################################################
+#  CONCEPT 1 - SELF-SCORING PREVENTION
+################################################################################
+
+=== PART A: a foreign module calling the unguarded primitive cannot compile ===
+
+$ cat selfscore_attack_test/sources/attack.move   (the bypass attempt)
+    module selfscore_attack::attack {
+        use om2m_access::trust::{Self, AdminCap, TrustRegistry};
+        use sui::clock::Clock;
+    
+        /// Attempt to raise `victim`'s score by calling the UNGUARDED primitive,
+        /// skipping the sender != node assertion that increase_guarded enforces.
+        public fun try_self_score(
+            admin: &AdminCap,
+            registry: &mut TrustRegistry,
+            victim: address,
+            amount: u64,
+            clock: &Clock,
+        ) {
+            // Direct call to the unguarded primitive. This is the bypass attempt.
+            trust::increase(admin, registry, victim, amount, clock);
+        }
+    }
+
+$ sui move build   (in WSL, on a scratch copy of move/ + selfscore_attack_test/)
+    INCLUDING DEPENDENCY om2m_access
+    BUILDING selfscore_attack
+    [0m[1m[38;5;9merror[E04001][0m[1m: restricted visibility[0m
+        [0m[34m┌─[0m ./sources/attack.move:19:9
+        [0m[34m│[0m
+    [0m[34m 19[0m [0m[34m│[0m         [0m[31mtrust::increase(admin, registry, victim, amount, clock)[0m;
+        [0m[34m│[0m         [0m[31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [0m[31mInvalid call to 'public(package)' visible function 'om2m_access::trust::increase'[0m
+        [0m[34m│[0m
+        [0m[34m┌─[0m ../move/sources/trust.move:176:5
+        [0m[34m│[0m
+    [0m[34m176[0m [0m[34m│[0m     public(package) fun increase(
+        [0m[34m│[0m     [0m[34m---------------[0m [0m[34mA 'public(package)' function can only be called from the same address and package as module 'om2m_access::trust' in package 'om2m_access'. This call is from address 'selfscore_attack' in package 'selfscore_attack'[0m
+    
+    Failed to build Move modules: Compilation error.
+    [PASS] the bypass module does not compile (trust::increase is public(package))
+
+=== PART B: a node signing a call to raise ITS OWN score is aborted on-chain ===
+    rpi3, using its own key and its own AdminCap, targets its own address.
+
+$ [rpi3] sui client call --package $PKG_V8 --module trust --function increase_guarded --args 0x38e59f73d7d2afdb2f59ebb85295d2d420771bcd102a5e8a7b599d2a7c034363 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10 5 0x6
+    -> MoveAbort code 4   digest=AQgvoUawC1NM2X4Qvgu23BYRqUtf8Un3sH1voYbEFxWH
+    [PASS] rpi3 self-raise rejected (E_SELF_SCORING) (expected abort:4)
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: no adversary-published module can reach the unguarded primitive
+(Part A), and the guarded path aborts when the signer is the node being scored
+(Part B, code 4). The aborted transaction is on-chain under the digest above.
+--------------------------------------------------------------------------------
+RESULT: 2 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

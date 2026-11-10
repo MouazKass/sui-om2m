@@ -1,0 +1,71 @@
+
+################################################################################
+#  CONCEPT 6 - FAILOVER
+################################################################################
+
+    parent=rpi3   claimer=rpi2   racer=rpi1
+
+=== STATE BEFORE ===
+    current_parent   : 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+    epoch            : 1 | trust_gate: 50
+    lease_expires_ms : 1794277370781 (+1087 s from now)
+
+=== v8 / A10: THE PARENT CANNOT TAKE A LEASE LONGER THAN MAX_LEASE_MS (1 h) ===
+$ [rpi3] sui client call --package $PKG_V8 --module failover --function renew_lease --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 3600001 0x6
+    -> MoveAbort code 7   digest=6cbzbwAPxzUoAn3uXqh9PPkeCP8mF9WrMqdVV4frcHcX
+    [PASS] renew 3,600,001 ms rejected (E_LEASE_TOO_LONG) (expected abort:7)
+
+=== A NON-PARENT CANNOT RENEW THE LEASE ===
+$ [rpi2] sui client call --package $PKG_V8 --module failover --function renew_lease --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 60000 0x6
+    -> MoveAbort code 4   digest=EYPPazjAjeknkhM8ELBxTX19TMdkbJnh16Qdaq3SgWSu
+    [PASS] rpi2 renewing rpi3's lease rejected (E_NOT_PARENT_ROLE) (expected abort:4)
+
+=== A CLAIM WHILE THE LEASE IS VALID IS REFUSED ===
+$ [rpi2] sui client call --package $PKG_V8 --module failover --function claim_parent --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> MoveAbort code 3   digest=BR9YtwxZyYJhtggrjVyi9i37nPFBEypiXZMNmhuNSWAs
+    [PASS] rpi2 claim on a valid lease rejected (E_LEASE_STILL_VALID) (expected abort:3)
+
+=== SETUP: the parent lets its lease lapse (renew to 0 ms = gone silent on-chain) ===
+$ [rpi3] sui client call --package $PKG_V8 --module failover --function renew_lease --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0 0x6
+    -> Success   digest=9ZPmiAAMVu4fXTsj8HLBqXEqxvKPzxeVaQLRgPUe3FZe   gas=1000276 MIST
+    [PASS] rpi3 renews to 0 ms (expected success)
+
+=== THE TAKEOVER: rpi2 claims the parent role with its own key ===
+$ [rpi2] sui client call --package $PKG_V8 --module failover --function claim_parent --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> Success   digest=6smm8w2k9DWA7k5tfSb8u13uEtnWpY9MacjPNSpcvaRK   gas=1000276 MIST
+    [PASS] rpi2 claim after lapse accepted (expected success)
+
+=== THE RACE: rpi1 claims the same seat right after ===
+$ [rpi1] sui client call --package $PKG_V8 --module failover --function claim_parent --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> MoveAbort code 3   digest=E4CKpeqpQDzFtCU1cQF5sTNgpvg1KtcW14295g6Qx3hZ
+    [PASS] rpi1 second claim rejected - one winner per epoch (E_LEASE_STILL_VALID) (expected abort:3)
+
+=== STATE AFTER ===
+    current_parent   : 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+    epoch            : 2 | trust_gate: 50
+    lease_expires_ms : 1794276370572 (+49 s from now)
+    epoch: 1 -> 2
+    [PASS] epoch advanced by exactly one
+
+=== THE LIVE SYSTEM CONVERGES (no human action): rpi2's plugin must take up parent duties ===
+    claim_parent grants only a 60 s lease, so rpi2 has to anchor a fresh one itself.
+    (watching for 120 s)
+    [rpi1]
+    [rpi2]
+    [rpi3]
+      Cluster current parent = 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+      Cluster current parent = 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+      Cluster current parent = 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+      Parent duties stopped (deposed): lease anchor + self-check cancelled (presence heartbeat continues).
+    current_parent   : 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+    epoch            : 2 | trust_gate: 50
+    lease_expires_ms : 1794276370572 (-77 s from now)
+    [FAIL] cluster did not converge: parent=rpi2 lease_expires_ms=1794276370572 now=1794276449000
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: parent, lease and epoch are on-chain; renewals are bounded and
+parent-only; a claim needs a lapsed lease; exactly one follower wins and the epoch
+advances by one; and the running plugins converge on the winner by themselves.
+--------------------------------------------------------------------------------
+RESULT: 7 assertion(s) held, 1 failed
+--------------------------------------------------------------------------------

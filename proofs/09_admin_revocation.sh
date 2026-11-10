@@ -1,69 +1,55 @@
 #!/usr/bin/env bash
-# CONCEPT 9 - ADMIN CAP REVOCATION (TR7). An AdminCap can be revoked on-chain;
-# once revoked it is no longer valid and cannot write scores.
-cd "$(dirname "$0")/.." && source scripts/env.sh
+# CONCEPT 9 - ADMIN CAP REVOCATION (TR7, A1/A2/A8).
+# An AdminCap can be revoked on-chain; once revoked it can neither write a
+# score nor mint a replacement cap for itself (v8 / A2: the GRANTING cap is
+# validated too, so revoked authority cannot be laundered into a fresh cap).
+#
+# v8 change: the proof no longer revokes a production cap (the v7 script
+# revoked rpi2's real cap and left it broken). It grants rpi2 a THROWAWAY cap,
+# revokes that, attacks with it, and has rpi2 burn it at the end.
+PROOF_ID=09; source "$(dirname "$0")/lib_v8.sh"
+banner "CONCEPT 9 - ADMIN CAP REVOCATION"
+valid() { dev_inspect trust is_cap_valid "$TRUST_REG" "$1"; }
 
-# We revoke rpi2's admin cap as the demonstration (publisher holds the authority
-# AdminCap and the registry). Adjust TARGET_CAP if you prefer a throwaway cap.
-TARGET_CAP=$ADMINCAP_RPI2
-
-is_valid() {
-  sui client call --package "$PKG_V7" --module trust --function is_cap_valid \
-    --args "$TRUST_REG" "$1" --dev-inspect 2>/dev/null \
-    | grep -iE "return|value|true|false" | head -1
-}
-
-echo
-echo "################################################################################"
-echo "#  CONCEPT 9 - ADMIN CAP REVOCATION (TR7)"
-echo "################################################################################"
-echo
-echo "    Target AdminCap: $TARGET_CAP"
-echo
-echo "=== VALIDITY BEFORE: the cap is registered as valid ==="
-echo
-echo "\$ sui client call --package \$PKG_V7 --module trust --function is_cap_valid \\"
-echo "    --args $TRUST_REG $TARGET_CAP   (dev-inspect read)"
-echo
-echo "    is_cap_valid before: $(is_valid "$TARGET_CAP")"
-echo
-echo "=== THE OPERATION: revoke the AdminCap on-chain ==="
-echo
-echo "\$ sui client call \\"
-echo "    --package $PKG_V7 \\"
-echo "    --module trust --function revoke_admin \\"
-echo "    --args $TR_ADMIN_CAP \\"
-echo "           $TRUST_REG \\"
-echo "           $TARGET_CAP \\"
-echo "    --gas-budget 50000000"
-echo
-sui client call --package "$PKG_V7" --module trust --function revoke_admin \
-    --args "$TR_ADMIN_CAP" "$TRUST_REG" "$TARGET_CAP" \
-    --gas-budget 50000000 2>&1 | grep -iE "Transaction Digest|Status|MoveAbort" | head -3 | sed 's/^/    /'
+echo "=== SETUP: the publisher grants rpi2 a throwaway AdminCap (registered as valid) ==="
+pub_call trust grant_admin_registered "$TR_ADMIN_CAP" "$TRUST_REG" "$RPI2"
+expect "throwaway cap granted" success
+X=$(python -c "
+import sys,json; t=sys.stdin.read(); d=json.loads(t[t.find('{'):])
+print(next(c['objectId'] for c in d['objectChanges'] if c.get('type')=='created' and c.get('objectType','').endswith('::trust::AdminCap')))" <<<"$LAST_OUT")
+echo "    throwaway cap: $X (owner rpi2)"
 sleep 3
+V0=$(valid "$X"); echo "    is_cap_valid before: $V0"
 echo
-echo "=== VALIDITY AFTER: the cap is no longer in the valid set ==="
+
+echo "=== THE OPERATION: revoke it on-chain ==="
+pub_call trust revoke_admin "$TR_ADMIN_CAP" "$TRUST_REG" "$X"
+expect "revoke_admin" success
+sleep 3
+V1=$(valid "$X"); echo "    is_cap_valid after:  $V1"
+[ "${V0,,}" = true ] && [ "${V1,,}" = false ] && { echo "    [PASS] valid -> revoked"; PROOF_PASS=$((${PROOF_PASS:-0}+1)); } \
+  || { echo "    [FAIL] validity $V0 -> $V1"; PROOF_FAIL=$((${PROOF_FAIL:-0}+1)); }
 echo
-echo "    is_cap_valid after:  $(is_valid "$TARGET_CAP")"
+
+echo "=== CONSEQUENCE 1: the revoked cap can no longer write a score ==="
+node_call rpi2 trust increase_guarded "$X" "$TRUST_REG" "$RPI1" 1 0x6
+expect "score write with the revoked cap rejected (E_CAP_REVOKED)" abort 5
 echo
-echo "=== CONSEQUENCE: the revoked cap can no longer write a score ==="
-echo "    rpi2 tries to score rpi1 using its now-revoked cap."
+echo "=== CONSEQUENCE 2 (v8 / A2): it cannot mint itself a fresh, valid cap ==="
+node_call rpi2 trust grant_admin_registered "$X" "$TRUST_REG" "$RPI2"
+expect "grant from a revoked cap rejected (E_CAP_REVOKED)" abort 5
 echo
-sshpass -p user ssh user@10.25.96.201 \
-  "docker exec om2m-active sui client call \
-     --package $PKG_V7 --module trust --function increase_guarded \
-     --args $TARGET_CAP $TRUST_REG $RPI1 3 0x6 \
-     --gas-budget 50000000 2>&1 | grep -iE 'MoveAbort|abort|Status' | head -3 | sed 's/^/    /'"
+echo "=== CONSEQUENCE 3 (v8 / A1): it cannot register a node ==="
+node_call rpi2 trust add_node "$X" "$TRUST_REG" 0x000000000000000000000000000000000000000000000000000000000000dead 100 0x6
+expect "add_node with a revoked cap rejected (E_CAP_REVOKED)" abort 5
 echo
-echo "    abort code 5 = E_CAP_REVOKED (assert_cap_valid rejects the revoked cap)"
+echo "=== CLEANUP: rpi2 burns the throwaway cap ==="
+node_call rpi2 trust burn_admin "$TRUST_REG" "$X"
+expect "throwaway cap burned" success
+echo "    rpi2's production cap is untouched: is_cap_valid(\$ADMINCAP_RPI2) = $(valid "$ADMINCAP_RPI2")"
 echo
-echo "--------------------------------------------------------------------------------"
-echo "WHAT THIS SHOWS: an AdminCap's validity is on-chain state; revoke_admin removes"
-echo "it from the valid set (before->after), and a subsequent score write with the"
-echo "revoked cap is rejected (code 5). Admin authority is revocable."
-echo "--------------------------------------------------------------------------------"
-echo
-echo "NOTE: this revokes rpi2's real admin cap. To restore it afterwards, re-grant:"
-echo "  sui client call --package \$PKG_V7 --module trust --function grant_admin \\"
-echo "    --args \$TR_ADMIN_CAP $RPI2 --gas-budget 50000000"
-echo "  (then re-register validity via bootstrap_valid_caps if your flow requires it)"
+hr
+echo "WHAT THIS SHOWS: an AdminCap's validity is on-chain state; revoke_admin removes it"
+echo "from the valid set; afterwards the cap can write no score (code 5), mint no"
+echo "replacement and register no node. Admin authority is revocable and stays revoked."
+summary

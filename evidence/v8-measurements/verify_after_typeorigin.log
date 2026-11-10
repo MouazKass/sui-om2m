@@ -1,0 +1,47 @@
+
+=== verify rpi1 ===
+om2m-active mouazkass/om2m-sui-in:rpi1-v8 Up 49 seconds
+mosquitto eclipse-mosquitto:2 Up 49 seconds
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+NativePtbBuilder ready: 1 keypair(s) loaded
+NativePtbBuilder ready: 1 keypair(s) loaded
+[trust] B6 observer epoch 1794277053 -> 1794281072 (persist=/var/lib/sui-om2m/trust-ema.properties.epoch)
+Lease anchored for 1200000 ms digest=C2RsQ3mUA4fPB5rgiEkk1gqUZjRemfJteyN99BMWrgX (2034 ms)
+sui-das: 200
+sui-dac-ae: 200
+
+=== verify rpi2 ===
+om2m-active mouazkass/om2m-sui-in:rpi2-v8 Up 47 seconds
+mosquitto eclipse-mosquitto:2 Up 48 seconds
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+[ERROR] - org.eclipse.om2m.core.controller.Controller  
+om2mException
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+[ERROR] - org.eclipse.om2m.core.router.Router  
+OM2M exception caught in Router: Already registered
+org.eclipse.om2m.commons.exceptions.ConflictException: Already registered
+sui-das: 200
+sui-dac-ae: 200
+
+=== verify rpi3 ===
+om2m-active mouazkass/om2m-sui-in:rpi3-v8 Up 46 seconds
+mosquitto eclipse-mosquitto:2 Up 46 seconds
+CSE: 200
+restart policy: unless-stopped, log: {"max-file":"5","max-size":"50m"}
+NativePtbBuilder ready: 1 keypair(s) loaded
+NativePtbBuilder ready: 1 keypair(s) loaded
+[trust] B6 observer epoch 1794277069 -> 1794281083 (persist=/var/lib/sui-om2m/trust-ema.properties.epoch)
+sui-das: 200
+sui-dac-ae: 200
+
+=== gossip wire format on the mesh (expect v2) ===
+     30 v2|0x27dacda1bdcb3fb8dc2a4b0d77b420deea5
+     30 v2|0x4be6060abaff0b4b6b7229558887f5f054c
+     30 v2|0xef9c6271d8c6cc9e1d9707a117f876e7a86
+
+=== C2: ordinary RETRIEVE on the DAC-protected AE as Csensor-001 (mapped on rpi3) ===
+HTTP 200
+Sui DAC consult: originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=2
+Sui GRANT originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=1 digest=9QKP2sX86hgeMHFwShqDwT3SbHTBZzd1kn9AYE7gcgVi (2831 ms)

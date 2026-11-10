@@ -77,6 +77,7 @@ public final class FailoverManager implements MqttCallback {
     private ScheduledFuture<?> watchdogTask;
     private ScheduledFuture<?> anchorTask;
     private ScheduledFuture<?> parentSelfCheckTask;
+    private ScheduledFuture<?> chainSyncTask;
 
     // FM5: surface gas-exhaustion distinctly from ordinary claim rejection.
     private final java.util.concurrent.atomic.AtomicLong gasFailureCount =
@@ -109,9 +110,26 @@ public final class FailoverManager implements MqttCallback {
         // health is observable by its peers.
         startPresenceBeats();
 
-        if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
+        // refreshCurrentParent() above already starts duties when the chain
+        // names us; this covers a read that failed at startup.
+        if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get()) && !parentDutiesRunning()) {
             startParentDuties();
         }
+
+        // Chain sync, on EVERY node. The chain decides who is parent; each
+        // node re-reads it on a fixed cadence (a free GraphQL read) instead of
+        // only when its heartbeat watchdog trips. Without this, a node that
+        // became parent on-chain other than through its own successful claim
+        // (a claim that landed although the client saw an error or timeout,
+        // or a claim signed outside the plugin) never started parent duties:
+        // its 60 s claim lease lapsed and nobody noticed, because the old
+        // parent's presence beats kept every follower's watchdog quiet.
+        // Observed live 2026-11-10 (proofs/06_failover.sh run 1).
+        chainSyncTask = scheduler.scheduleAtFixedRate(() -> {
+            try {
+                refreshCurrentParent();
+            } catch (Throwable _t) { /* never let the sync kill the scheduler */ }
+        }, cfg.parentSelfCheckPeriodMs, cfg.parentSelfCheckPeriodMs, TimeUnit.MILLISECONDS);
 
         LOG.info("Failover manager started. parent=" + currentParentAddr.get() + " self=" + cfg.nodeAddress + " parentPoa=[" + cfg.parentPoa + "] poaFile=[" + cfg.poaFilePath + "]");
     }
@@ -121,6 +139,7 @@ public final class FailoverManager implements MqttCallback {
         if (watchdogTask  != null) watchdogTask.cancel(false);
         if (anchorTask    != null) anchorTask.cancel(false);
         if (parentSelfCheckTask != null) parentSelfCheckTask.cancel(false);
+        if (chainSyncTask != null) chainSyncTask.cancel(false);
         scheduler.shutdownNow();
         if (mqtt != null) {
             try { mqtt.disconnect(); } catch (MqttException ignored) {}
@@ -286,15 +305,8 @@ public final class FailoverManager implements MqttCallback {
             cfg.leaseAnchorPeriodMs,
             TimeUnit.MILLISECONDS);
 
-        // FM3: while we are parent, periodically confirm the chain still
-        // names us. If it doesn't, refreshCurrentParent() -> stopParentDuties().
-        parentSelfCheckTask = scheduler.scheduleAtFixedRate(() -> {
-            try {
-                if (cfg.nodeAddress.equalsIgnoreCase(currentParentAddr.get())) {
-                    refreshCurrentParent();
-                }
-            } catch (Throwable _t) { /* never let the self-check kill the scheduler */ }
-        }, cfg.parentSelfCheckPeriodMs, cfg.parentSelfCheckPeriodMs, TimeUnit.MILLISECONDS);
+        // FM3 (confirming the chain still names us) is covered by the
+        // chain-sync task scheduled in start(), which runs on every node.
     }
 
     /**
@@ -338,6 +350,20 @@ public final class FailoverManager implements MqttCallback {
             LOG.info("Parent duties stopped (deposed): lease anchor + self-check cancelled"
                      + " (presence heartbeat continues).");
         }
+    }
+
+    private synchronized boolean parentDutiesRunning() {
+        return anchorTask != null && !anchorTask.isDone();
+    }
+
+    /**
+     * The chain is the source of truth for the parent role: if it names this
+     * node and parent duties are not running, they must be started, however
+     * the node came to be named (pure, unit-tested in ParentReconcileTest).
+     */
+    static boolean shouldTakeUpParentDuties(String chainParent, String self, boolean dutiesRunning) {
+        return chainParent != null && self != null && !dutiesRunning
+            && chainParent.equalsIgnoreCase(self);
     }
 
     /** Mirrors failover::MAX_LEASE_MS (A10). renew_lease aborts above it. */
@@ -405,7 +431,7 @@ public final class FailoverManager implements MqttCallback {
                 if (n == null) {
                     org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config nc =
                         new org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config(
-                            cfg.rpcUrl, cfg.packageId,
+                            cfg.rpcUrl, cfg.packageId, cfg.packageOriginalId,
                             cfg.identityRegistryId, cfg.trustRegistryId,
                             cfg.policyRegistryId, cfg.auditTrailId,
                             cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
@@ -622,16 +648,23 @@ public final class FailoverManager implements MqttCallback {
             if (!parent.isEmpty()) {
                 String previous = currentParentAddr.get();
                 currentParentAddr.set(parent);
-                LOG.info("Cluster current parent = " + parent);
                 // Detect parent change. If it's not us, read the new PoA from
                 // chain and persist it for follower bootstrapping.
                 boolean changed = (previous == null) || previous.isEmpty()
                         || !previous.equalsIgnoreCase(parent);
+                if (changed) LOG.info("Cluster current parent = " + parent);
+                if (shouldTakeUpParentDuties(parent, cfg.nodeAddress, parentDutiesRunning())) {
+                    LOG.warn("Chain names this node parent but parent duties were not running;"
+                             + " taking them up now (lease anchor + PoA)");
+                    startParentDuties();
+                }
                 if (changed && !parent.equalsIgnoreCase(cfg.nodeAddress)) {
                     // FM3: the chain now names someone else as parent. If we were
                     // running parent duties, tear them down before switching role.
                     stopParentDuties();  // FM3
                     onParentChanged(parent);
+                } else if (!changed && !parent.equalsIgnoreCase(cfg.nodeAddress)) {
+                    followParentPoa();
                 }
             } else {
                 LOG.info("Cluster has no current parent yet");
@@ -653,7 +686,7 @@ public final class FailoverManager implements MqttCallback {
                         if (n == null) {
                             org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config nc =
                                 new org.eclipse.om2m.sui.sdk.NativePtbBuilder.Config(
-                                    cfg.rpcUrl, cfg.packageId,
+                                    cfg.rpcUrl, cfg.packageId, cfg.packageOriginalId,
                                     cfg.identityRegistryId, cfg.trustRegistryId,
                                     cfg.policyRegistryId, cfg.auditTrailId,
                                     cfg.suiClockId, cfg.gasBudget, cfg.minTrust);
@@ -676,6 +709,7 @@ public final class FailoverManager implements MqttCallback {
                     return;
                 }
                 LOG.info("New parent PoA: " + poa);
+                lastFollowedPoa = poa;
                 // Persist to file for the MN-CSE container's startup wrapper.
                 String path = cfg.poaFilePath;
                 if (path != null && !path.isEmpty()) {
@@ -691,6 +725,37 @@ public final class FailoverManager implements MqttCallback {
                 LOG.warn("onParentChanged failed: " + e.getMessage());
             }
         });
+    }
+
+    /** The PoA this follower last persisted (null until the first one). */
+    private volatile String lastFollowedPoa;
+
+    /**
+     * Followers re-check the advertised PoA on every chain sync. The on-chain
+     * PoA is not bound to the parent that set it, so right after a takeover it
+     * still holds the DEPOSED parent's URL until the new parent publishes its
+     * own (seconds later). onParentChanged read it in that window on
+     * 2026-11-10 and persisted the old parent's PoA with nothing to correct
+     * it. Re-reading on each sync converges within one period. Cheap: one
+     * GraphQL read, and a write only when the value changed.
+     */
+    private void followParentPoa() {
+        if (cfg.poaFilePath == null || cfg.poaFilePath.isEmpty()) return;
+        try {
+            String poa = nativePtb().fetchParentPoa(cfg.clusterId);
+            if (!poaNeedsUpdate(poa, lastFollowedPoa)) return;
+            writeLocalPoa(poa);
+            LOG.info("Parent PoA changed on-chain: " + lastFollowedPoa + " -> " + poa + " (written to " + cfg.poaFilePath + ")");
+            lastFollowedPoa = poa;
+            invokeRoleSwitch("mn", poa);
+        } catch (Throwable t) {
+            LOG.warn("PoA follow read failed (retry next sync): " + t);
+        }
+    }
+
+    /** Pure: persist a newly read PoA only if it is non-empty and differs. */
+    static boolean poaNeedsUpdate(String chainPoa, String lastWritten) {
+        return chainPoa != null && !chainPoa.isEmpty() && !chainPoa.equals(lastWritten);
     }
 
     /** Invoke /root/role-switch.sh role POA. Async via Runtime.exec. */

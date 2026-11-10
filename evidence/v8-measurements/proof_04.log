@@ -1,0 +1,39 @@
+
+################################################################################
+#  CONCEPT 4 - ATOMIC DECISION / NO TOCTOU
+################################################################################
+
+=== Fire an ordinary oneM2M RETRIEVE (real DAC path), then inspect its tx ===
+    HTTP 200
+    Sui GRANT originator=Csensor-001 resource=/in-cse/Csui-dac-ae op=1 digest=3iQkde2LppVDwfTdFXADvxuF1Sbgzjf3wMRFukxV5Vj8 (2793 ms)
+
+$ sui client tx-block 3iQkde2LppVDwfTdFXADvxuF1Sbgzjf3wMRFukxV5Vj8 --json   (the PTB's command list)
+    status: success | Move calls inside this ONE transaction: 5
+      step 0: identity::verify(input 0)
+      step 1: trust::require_min(result 0, input 1, input 2, input 3, input 4)
+      step 2: cap_token::validate_for_use(result 1, input 5, input 6, input 4)
+      step 3: policy::evaluate(result 2, input 7, input 1, input 4)
+      step 4: evaluator::decide_and_log(result 3, input 8, input 4)
+    [PASS] one tx, five steps, each consuming the previous step's receipt
+
+=== v8 / A6: SKIPPING A STEP IS A TYPE ERROR (policy step left out) ===
+    rpi3 builds a legitimate chain up to the TokenReceipt, then hands it straight
+    to decide_and_log, which only accepts a PolicyReceipt.
+$ [rpi3] sui client ptb --move-call $PKG_V8::identity::verify @0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 --assign r1   --move-call $PKG_V8::trust::require_min r1 @0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 '"/in-cse/Csui-dac-ae"' 50 @0x6 --assign r2   --move-call $PKG_V8::cap_token::validate_for_use r2 @0x5e5e9deb4a717640748e193c3ee9470a7bcdaeb08615df2848ce16651d8516e4 1u8 @0x6 --assign r3   --move-call $PKG_V8::evaluator::decide_and_log r3 @0x23258d81e9a31b6c205160082ac76f5e439c0c2db1e270fc4ed83d314de4b2dc @0x6
+    -> execution failed on-chain: CommandArgumentError { arg_idx: 0, kind: TypeMismatch } in command 3  digest=64eTujpkcEdnkXuFnmMam3F9776vw4bbuLt7ihPvH4Ry
+    [PASS] rejected - no GRANT can be logged without passing policy::evaluate
+
+=== v8 / A6: A RECEIPT CANNOT BE DROPPED (chain started, never finished) ===
+    rpi3 calls identity::verify alone. IdentityReceipt has no 'drop', so a
+    transaction that does not hand it on cannot complete.
+$ [rpi3] sui client ptb --move-call $PKG_V8::identity::verify @0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8
+    -> execution failed on-chain: UnusedValueWithoutDrop { result_idx: 0, secondary_idx: 0 }  digest=FAFuxRgvasXWQ6oFysaaqYuPnsF4dXism8Sn2qua1i2H
+    [PASS] rejected (unused value without drop)
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: identity, trust, token, policy and the audit write are five
+commands inside ONE transaction, committed atomically - no check-to-use window.
+Since v8 the steps are bound by receipts: none can be skipped or left dangling.
+--------------------------------------------------------------------------------
+RESULT: 3 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

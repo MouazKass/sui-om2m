@@ -1,0 +1,18 @@
+event,utc_ms,node,detail
+stop,1794279127842,rpi2,"lease remaining 642 s; epoch 4"
+chain_parent,1794279776905,rpi1,"epoch 4 -> 5; lease_expires_ms 1794279834702"
+chain_anchor,1794279784023,rpi1,"lease_expires_ms 1794280977327"
+log:Parent,1794279773553,rpi1,"Parent silence detected (639930 ms); claim gate: CLAIM (lease_expires_ms=1794279770083, trust=100, gate=50)"
+log:CLAIM,1794279775113,rpi1,"CLAIM ACCEPTED ? we are now parent of cluster 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f digest=77CzuFGEQ66RuG1gCnQHVTVeW4S3LtTQkXNcWSyedg7y (1558 ms)"
+log:Rebuilding,1794279776573,rpi1,"Rebuilding transaction after stale object version (attempt 2)"
+log:Lease,1794279777756,rpi1,"Lease anchored for 1200000 ms digest=Ee3YJphGfW5bp4ooFdne91xNrGhZ2WgLQdD5Exv9srEV (1183 ms)"
+log:Rebuilding,1794279779421,rpi1,"Rebuilding transaction after stale object version (attempt 2)"
+log:PoA,1794279780467,rpi1,"PoA published on-chain: http://10.25.96.200:8282/ digest=E92yUy2bmRSEDrZqZJQHPAdK5QnafSHpVtdBLrWTPCyk (1045 ms)"
+log:Parent,1794279151766,rpi3,"Parent silence detected (16619 ms); claim gate: LEASE_VALID (lease_expires_ms=1794279770083, trust=100, gate=50)"
+log:Parent,1794279775499,rpi3,"Parent silence detected (641619 ms); claim gate: CLAIM (lease_expires_ms=1794279770083, trust=100, gate=50)"
+log:Claim,1794279776784,rpi3,"Claim rejected on-chain: MoveAbort(MoveLocation { module: ModuleId { address: 0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1, name: Identifier('failover') }, function_name: Some('claim_parent'), instr"
+log:Cluster,1794279777022,rpi3,"Cluster current parent = 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9"
+log:New,1794279777270,rpi3,"New parent PoA: http://10.25.96.201:8282/"
+log:Parent,1794279785283,rpi3,"Parent PoA changed on-chain: http://10.25.96.201:8282/ -> http://10.25.96.200:8282/ (written to /etc/sui-cluster/current-parent-poa)"
+restart,1794279805302,rpi2,"docker start"
+rejoin,1794279839719,rpi2,"parent=0xef9c6271"
