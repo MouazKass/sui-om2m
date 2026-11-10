@@ -75,8 +75,9 @@ else
   is "$(inspect_value "$PKG_V9" quorum holds_cluster_cap "$COUNCIL" "$CLUSTER")" true "holds_cluster_cap"
 
   say "H: the review's attack, simulated (nobody signs)"
-  is "$(inspect_outcome "$R1" "$PKG_V9" trust revoke_admin "$CAP_A" "$TRUST_REG" "$CAP_B")" \
-     "abort:trust::revoke_admin:8" "$A revoking $B's cap via v9 -> E_GOVERNED"
+  # E_GOVERNED (8) is raised by the guard trust::assert_not_governed, which revoke_admin calls.
+  r=$(inspect_outcome "$R1" "$PKG_V9" trust revoke_admin "$CAP_A" "$TRUST_REG" "$CAP_B")
+  case "$r" in abort:trust::*:8) P "$A revoking $B's cap via v9 -> E_GOVERNED ($r)";; *) F "v9 peer-revoke attack: $r, want trust abort code 8";; esac
   r=$(inspect_outcome "$R1" "$PKG_V8" trust revoke_admin "$CAP_A" "$TRUST_REG" "$CAP_B")
   case "$r" in abort:trust::*:5) P "same attack via the old v8 package id -> E_CAP_REVOKED ($r)";; *) F "v8-path attack: $r, want abort code 5";; esac
   is "$(inspect_outcome "$R1" "$PKG_V9" trust revoke_admin "$CAP_A" "$TRUST_REG" "$CAP_A")" \

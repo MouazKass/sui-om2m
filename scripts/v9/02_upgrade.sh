@@ -13,6 +13,10 @@
 #   02_upgrade.sh combine SIG1 SIG2  combine two signers' suiSignature values
 #                                    -> deploy/v9/upgrade.multisig
 #   02_upgrade.sh execute            submit tx + multisig, record PKG_V9
+#   02_upgrade.sh direct             OPTION A (2026-11-10): the publisher still holds the
+#                                    UpgradeCap and signs the upgrade itself. Refuses if the
+#                                    cap has moved to a multisig. Needs CONFIRM='upgrade <v8> to v9'
+#                                    when not interactive.
 #
 # Rebuild ("build") whenever the gas coin used in the tx changes: signatures
 # cover the exact bytes, so a stale tx must be rebuilt and re-signed.
@@ -40,6 +44,25 @@ stage() {
 }
 
 upgrade_owner() { object_owner "$UPGRADE_CAP"; }
+
+# record_upgrade <upgrade.json>: check success, record PKG_V9 + UPGRADE_TX.
+record_upgrade() {
+  python3 - "$1" > "$V9_DIR/upgrade.ids" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+st=d["effects"]["status"]
+if st.get("status")!="success": sys.exit(f"FATAL: upgrade failed: {st}")
+pkg=[c["packageId"] for c in d.get("objectChanges",[]) if c.get("type")=="published"]
+if len(pkg)!=1: sys.exit(f"FATAL: expected one published package, got {pkg}")
+print(pkg[0], d["digest"])
+PY
+  local pkg tx; read -r pkg tx < "$V9_DIR/upgrade.ids"; rm -f "$V9_DIR/upgrade.ids"
+  record PKG_V9 "$pkg"; record UPGRADE_TX "$tx"
+  check_v9_package "$pkg"
+  echo "OK: v9 published at $pkg (tx $tx). Types keep the original id $PKG_V8."
+  echo "Update move/Published.toml (published-at=$pkg, version=2) in the repo, then"
+  echo "      scripts/v9/03_switch_plugin.sh v9"
+}
 
 case "$CMD" in
   dry-run)
@@ -125,21 +148,18 @@ PY
     confirm "upgrade $PKG_V8 to v9"
     say "executing the multisig-signed upgrade"
     "$SUI" client execute-signed-tx --tx-bytes "$(cat "$TX_FILE")" --signatures "$(cat "$SIG_FILE")" --json > "$V9_DIR/upgrade.json"
-    python3 - "$V9_DIR/upgrade.json" > "$V9_DIR/upgrade.ids" <<'PY'
-import json,sys
-d=json.load(open(sys.argv[1]))
-st=d["effects"]["status"]
-if st.get("status")!="success": sys.exit(f"FATAL: upgrade failed: {st}")
-pkg=[c["packageId"] for c in d.get("objectChanges",[]) if c.get("type")=="published"]
-if len(pkg)!=1: sys.exit(f"FATAL: expected one published package, got {pkg}")
-print(pkg[0], d["digest"])
-PY
-    read -r pkg tx < "$V9_DIR/upgrade.ids"; rm -f "$V9_DIR/upgrade.ids"
-    record PKG_V9 "$pkg"; record UPGRADE_TX "$tx"
-    echo "OK: v9 published at $pkg (tx $tx). Types keep the original id $PKG_V8."
-    echo "Update move/Published.toml (published-at=$pkg, version=2) in the repo, then"
-    echo "      scripts/v9/03_switch_plugin.sh"
+    record_upgrade "$V9_DIR/upgrade.json"
     ;;
 
-  *) sed -n '2,20p' "$0"; exit 1;;
+  direct)
+    require_publisher
+    [ "$(upgrade_owner)" = "AddressOwner:$PUBLISHER" ]       || die "UpgradeCap is owned by $(upgrade_owner), not the publisher: use build/combine/execute (multisig)"
+    stage
+    confirm "upgrade $PKG_V8 to v9"
+    say "executing the publisher-signed upgrade (option A)"
+    "$SUI" client upgrade --upgrade-capability "$UPGRADE_CAP" --gas-budget "$GAS_BUDGET" --json > "$V9_DIR/upgrade.json"
+    record_upgrade "$V9_DIR/upgrade.json"
+    ;;
+
+  *) sed -n '2,24p' "$0"; exit 1;;
 esac

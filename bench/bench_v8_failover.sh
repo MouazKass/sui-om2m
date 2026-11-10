@@ -24,7 +24,7 @@ KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}"
 mapfile -t NODES < <(inv_nodes active)
 declare -A IP=() NAME=()
 for _n in "${NODES[@]}"; do IP[$_n]=${INV_IP[$_n]}; NAME[${INV_ADDR[$_n]}]=$_n; done
-on() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@${IP[$1]}" "${@:2}"; }
+on() { ssh -F "$INV_SSH_CONFIG" -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@${IP[$1]}" "${@:2}"; }
 now_ms() { python -c 'import time;print(int(time.time()*1000))'; }
 cluster() {  # -> "parent lease_expires_ms epoch"
   python - "$CLUSTER" <<'EOF'

@@ -8,7 +8,7 @@
 #
 #   scripts/onboard_node.sh <name> status            read-only: what is done, what is next
 #   scripts/onboard_node.sh <name> preflight         SSH key auth, hostname/MAC vs inventory, OS/arch, sudo, disk, clock
-#   scripts/onboard_node.sh <name> docker            install Docker CE exactly like rpi1-3 (docker.com apt repo, trixie, arm64)
+#   scripts/onboard_node.sh <name> docker            install Docker CE like rpi1-3 (docker.com apt repo, suite = node codename, arm64)
 #   scripts/onboard_node.sh <name> images            copy the OM2M base image + eclipse-mosquitto:2 from a donor node
 #                                                    (DONOR=rpi2 to choose), tagged :<name>-base
 #   scripts/onboard_node.sh <name> sui-key           install the sui CLI (same binary as the donor) and generate the
@@ -52,7 +52,7 @@ MIN_FREE_GB=20
 
 say() { echo; echo "=== $NAME: $* ==="; }
 die() { echo "FATAL: $*" >&2; exit 1; }
-ssh_to() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "user@$1" "${@:2}"; }
+ssh_to() { ssh -F "$INV_SSH_CONFIG" -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "user@$1" "${@:2}"; }
 on() { ssh_to "$IP" "$@"; }
 wsl_run() { printf '%s\n' "$1" | wsl.exe -d Ubuntu -- bash -s 2>&1 | tr -d '\r'; }
 REPO_WSL=$(printf '%s' "$REPO" | sed -E 's#^/([a-zA-Z])/#/mnt/\L\1/#')
@@ -97,7 +97,7 @@ EOF
   [ "$(v user)" = user ]                     || { echo "  MISMATCH: scripts assume login user 'user'"; bad=1; }
   [ "$(v mac)" = "${INV_MAC[$NAME]}" ]       || { echo "  MISMATCH eth0 MAC: inventory says ${INV_MAC[$NAME]} (wrong Pi at this IP?)"; bad=1; }
   [ "$(v arch)" = aarch64 ]                  || { echo "  arch must be aarch64 (the images are arm64)"; bad=1; }
-  [ "$(v os)" = trixie ]                     || { echo "  OS must be Debian trixie like rpi1-3 (docker.list pins trixie)"; bad=1; }
+  case "$(v os)" in trixie|bookworm) ;; *) echo "  OS must be Debian trixie (rpi1-3) or bookworm (rpi4/rpi5); docker suite follows the node"; bad=1;; esac
   [ "$(v sudo)" = ok ]                       || { echo "  passwordless sudo is required (as on rpi1-3)"; bad=1; }
   [ "$(v free_gb)" -ge $MIN_FREE_GB ]        || { echo "  need >= ${MIN_FREE_GB} GB free on / (images ~4 GB + logs)"; bad=1; }
   [ "$(v ntp)" = yes ]                       || echo "  WARN: clock not NTP-synchronised (trust clock-drift signal and leases depend on it)"
@@ -118,7 +118,7 @@ docker_step() {
     sudo install -m 0755 -d /etc/apt/keyrings
     [ -s /etc/apt/keyrings/docker.asc ] || sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
     sudo chmod a+r /etc/apt/keyrings/docker.asc
-    echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable" \
+    echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release; echo $VERSION_CODENAME) stable" \
       | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
     sudo apt-get update -q
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -162,7 +162,12 @@ sui_key() {
     ssh_to "${INV_IP[$d]}" "cat /usr/local/bin/sui" | on "sudo tee /usr/local/bin/sui >/dev/null && sudo chmod 755 /usr/local/bin/sui"
     [ "$(on "sha256sum /usr/local/bin/sui | cut -d' ' -f1")" = "$want" ] || die "sui CLI copy mismatch"
   fi
-  on '/usr/local/bin/sui --version'
+  # The donor binary (and the official ubuntu-aarch64 release) needs glibc >= 2.39:
+  # fine on trixie (rpi1-3), too new for bookworm (rpi4/rpi5, glibc 2.36). There it
+  # runs inside a throwaway debian:trixie-slim container ON THE PI (--network none,
+  # the caller's uid, only ~/.sui mounted), so the key is still generated on the node.
+  on 'mkdir -p "$HOME/.sui/sui_config"; /usr/local/bin/sui --version >/dev/null 2>&1 || docker image inspect debian:trixie-slim >/dev/null 2>&1 || docker pull -q debian:trixie-slim >/dev/null'
+  on 'sui_run() { if /usr/local/bin/sui --version >/dev/null 2>&1; then /usr/local/bin/sui "$@"; else docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME="$HOME" -v "$HOME/.sui:$HOME/.sui" -v "${T:-/tmp}:${T:-/tmp}" -v /usr/local/bin/sui:/usr/local/bin/sui:ro debian:trixie-slim /usr/local/bin/sui "$@"; fi; }; sui_run --version'
   # Generate (or find) the node key ON the Pi. The container mounts
   # ~/.sui/sui_config at /root/.sui/sui_config, so client.yaml names the
   # container path - exactly the layout of rpi1-3. A temporary host-path
@@ -171,18 +176,19 @@ sui_key() {
   addr=$(on 'set -euo pipefail
     D=$HOME/.sui/sui_config; mkdir -p "$D"; chmod 775 "$D"
     T=$(mktemp -d); trap "rm -rf $T" EXIT
+    sui_run() { if /usr/local/bin/sui --version >/dev/null 2>&1; then /usr/local/bin/sui "$@"; else docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME="$HOME" -v "$HOME/.sui:$HOME/.sui" -v "${T:-/tmp}:${T:-/tmp}" -v /usr/local/bin/sui:/usr/local/bin/sui:ro debian:trixie-slim /usr/local/bin/sui "$@"; fi; }
     [ -s "$D/sui.keystore" ] || { printf "[]\n" > "$D/sui.keystore"; chmod 600 "$D/sui.keystore"; }
     [ -s "$D/sui.aliases" ]  || printf "[]\n" > "$D/sui.aliases"
-    [ -s "$D/external.keystore" ] || printf "[]" > "$D/external.keystore"
-    [ -s "$D/external.aliases" ]  || printf "[]" > "$D/external.aliases"
+    [ -s "$D/external.keystore" ] || printf "{}" > "$D/external.keystore"   # a JSON object, as on rpi1-3 ([] breaks the CLI)
+    [ -s "$D/external.aliases" ]  || printf "{}" > "$D/external.aliases"
     n=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))))" "$D/sui.keystore")
     printf -- "---\nkeystore:\n  File: %s/sui.keystore\nenvs:\n  - alias: testnet\n    rpc: \"https://fullnode.testnet.sui.io:443\"\n    ws: ~\n    basic_auth: ~\nactive_env: testnet\nactive_address: ~\n" "$D" > "$T/client.yaml"
     if [ "$n" = 0 ]; then
       # JSON includes the recovery phrase: parse out the address only, never print the rest.
-      /usr/local/bin/sui client --client.config "$T/client.yaml" new-address ed25519 --json 2>/dev/null \
+      sui_run client --client.config "$T/client.yaml" new-address ed25519 --json 2>/dev/null \
         | python3 -c "import json,sys; print(json.load(sys.stdin)[\"address\"])"
     elif [ "$n" = 1 ]; then
-      /usr/local/bin/sui client --client.config "$T/client.yaml" addresses --json 2>/dev/null \
+      sui_run client --client.config "$T/client.yaml" addresses --json 2>/dev/null \
         | python3 -c "import json,sys; d=json.load(sys.stdin); a=d.get(\"addresses\") or []; print(a[0][1] if a and isinstance(a[0], list) else d.get(\"activeAddress\") or \"\")"
     else
       echo "FATAL: $D/sui.keystore holds $n keys; a node must hold exactly one" >&2; exit 1
@@ -250,7 +256,7 @@ host_step() {
   on "mkdir -p $d"
   for f in provision-das.sh das-watchdog.sh sui-das-provision.service das-watchdog.service das-watchdog.timer \
            gas-watchdog.py install-gas-watchdog.sh sui-gas-watchdog.service sui-gas-watchdog.timer sui-gas-watchdog.default; do
-    scp -q -i "$KEY" -o BatchMode=yes "$REPO/deploy/v8/host/$f" "user@$IP:$d/$f"
+    scp -q -F "$INV_SSH_CONFIG" -i "$KEY" -o BatchMode=yes "$REPO/deploy/v8/host/$f" "user@$IP:$d/$f"
   done
   on "set -euo pipefail
     sudo install -m 755 $d/provision-das.sh /usr/local/bin/provision-das.sh

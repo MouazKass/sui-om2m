@@ -34,7 +34,7 @@ GAP_S="${GAP_S:-3}"
 KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}"
 NODE="${NODE:-${INV_IP[$(inv_das)]}}"
 mkdir -p "$OUT"
-on() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@$NODE" "$@"; }
+on() { ssh -F "$INV_SSH_CONFIG" -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@$NODE" "$@"; }
 
 START_UTC=$(on 'date -u +%FT%TZ')
 echo "# bench_v8_dac  node=$NODE  N=$N  gap=${GAP_S}s  start=$START_UTC"

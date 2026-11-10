@@ -31,7 +31,7 @@ NODE="${1:-${INV_IP[$(inv_das)]}}"
 PW="${PW:-user}"
 ORIG="${ORIG:-admin:admin}"          # originator that owns a valid CapToken on this node
 BASE=http://127.0.0.1:8282
-ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
+ssh_n() { ssh -F "$INV_SSH_CONFIG" -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 
 echo "# provision_das.sh  node=$NODE  $(date -u +%H:%M:%SZ)"
 

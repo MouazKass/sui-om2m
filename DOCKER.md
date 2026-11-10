@@ -1,6 +1,12 @@
 # Docker Images
 
-## CURRENT (v8, 2026-11-10) — read this first; older sections below are history
+## CURRENT (v9 on 5 nodes, 2026-11-10) — read this first; older sections below are history
+
+Five nodes, all from `deploy/inventory.tsv`: rpi1–3 (Debian trixie) and rpi4/rpi5
+(Debian bookworm, added 2026-11-10, reached through rpi1 as an SSH jump host). The
+plugin calls package v9 (`sui.package.id`); Move types keep the v8 id
+(`sui.package.original.id`). The image layout is the v8 one below; the bundle running on
+all five is `fd87d2e0`. Record: ROLLOUT_V9.md.
 
 Per node, image `mouazkass/om2m-sui-in`:
 
@@ -8,6 +14,7 @@ Per node, image `mouazkass/om2m-sui-in`:
 |---|---|
 | `:rpiN-v8` | **Running.** The v7 snapshot plus the v8 bundle, with the Equinox cache cleared. Rebuilt by `scripts/v8/04_cutover.sh prepare`. |
 | `:rpiN-v7-final` | **Rollback point.** `docker commit` of the live v7 container. Carries the FM4 `cseType=in-cse` fix, which exists only in that container's writable layer, so v8 images are built *from* this snapshot. |
+| `:rpiN-base` | rpi4/rpi5 only: a copy of rpi1's `:rpi1-v7-final` (`sha256:13f63ead…`, loaded by `scripts/onboard_node.sh images`). Their `:rpiN-v8` is built from it; they have no v7 history, so `rollback` leaves them on v8. |
 | `:rpiN-v6`, `:rpi1` | History. **Never recreate a container from `:rpi1`**: it has the FM4 5103 loop and v1 config. |
 
 **Do not hand-run `docker run`.** The container definitions live in exactly one
@@ -23,7 +30,12 @@ To ship a plugin, config or mesh change: build in WSL (`scripts/build_bundle.sh`
 then `04_cutover.sh prepare` → (`config`) → `redeploy` → `verify`. Use `set -o pipefail`
 if you pipe the output: a masked `prepare` failure once let `redeploy` ship the previous build.
 
-Reboot-tested on rpi2 on 2026-11-10: everything came back with no human action.
+Reboot-tested on rpi2 (v8) and on rpi4 (v9, bookworm) on 2026-11-10: everything came
+back with no human action; rpi4 was fully provisioned 1 min 45 s after boot.
+
+The CSE container still bind-mounts `/tmp/current-parent-poa` (a v7 leftover nothing
+reads). It must be a **directory** on the host, as in every image; `04_cutover.sh`
+creates it that way.
 
 **Host services outside the containers** (systemd, enabled, survive reboots):
 `sui-das-provision.service`, `das-watchdog.timer` (DAS/C2 resources), and

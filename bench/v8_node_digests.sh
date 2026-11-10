@@ -13,7 +13,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 declare -A IP=(); for _n in "${INV_ALL[@]}"; do IP[$_n]=${INV_IP[$_n]}; done
 echo "kind,digest,node" > "$OUT"
 for n in $(inv_nodes active); do
-  ssh -i "$KEY" -o BatchMode=yes "user@${IP[$n]}" "docker logs --since $SINCE om2m-active 2>&1" | python -c '
+  ssh -F "$INV_SSH_CONFIG" -i "$KEY" -o BatchMode=yes "user@${IP[$n]}" "docker logs --since $SINCE om2m-active 2>&1" | python -c '
 import sys,re
 pats=[("plugin_renew_lease", r"Lease anchored .*digest=(\w{32,})"),
       ("plugin_set_parent_poa", r"PoA published on-chain: .*digest=(\w{32,})"),

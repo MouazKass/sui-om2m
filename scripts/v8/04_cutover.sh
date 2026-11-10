@@ -68,8 +68,8 @@ CONF=$PRODUCT/configuration
 JAR_IN=$PRODUCT/plugins/org.eclipse.om2m.sui-0.1.0-SNAPSHOT.jar
 JAR_LOCAL="$REPO/plugin/target/org.eclipse.om2m.sui-0.1.0-SNAPSHOT.jar"
 
-ssh_n() { ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@${IP[$1]}" "${@:2}"; }
-scp_n() { scp -q -i "$KEY" -o BatchMode=yes "$2" "user@${IP[$1]}:$3"; }
+ssh_n() { ssh -F "$INV_SSH_CONFIG" -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@${IP[$1]}" "${@:2}"; }
+scp_n() { scp -q -F "$INV_SSH_CONFIG" -i "$KEY" -o BatchMode=yes "$2" "user@${IP[$1]}:$3"; }
 wsl_run() { printf '%s\n' "$1" | wsl.exe -d Ubuntu -- bash -s 2>&1 | tr -d '\r'; }
 say() { echo; echo "=== $* ==="; }
 
@@ -238,7 +238,12 @@ cp "$RT/v8/sui.properties" "$RT/sui.properties"
 cp "$RT/v8/sui.mappings.properties" "$RT/sui.mappings.properties"
 cp "$RT/sui.properties" /tmp/sui.properties
 cp "$RT/sui.mappings.properties" /tmp/sui.mappings.properties
-[ -e /tmp/current-parent-poa ] || touch /tmp/current-parent-poa
+# Legacy v7 mount (start_mn_cse.sh); nothing in v8 reads it. It is a DIRECTORY on
+# every node: docker created it on rpi1-3, and their images (and the :rpiN-base
+# copies of rpi1-v7-final on rpi4/rpi5) carry a directory there, so the host side
+# must be one too (an empty file here made rpi4's first deploy fail, 2026-11-10).
+[ -f /tmp/current-parent-poa ] && [ ! -s /tmp/current-parent-poa ] && rm -f /tmp/current-parent-poa
+mkdir -p /tmp/current-parent-poa
 
 # --- THE container definitions (the only place they live) ---
 # Broker first, so the mesh is up when the CSE starts gossiping.

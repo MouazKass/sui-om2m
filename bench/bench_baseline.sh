@@ -10,7 +10,7 @@ REPO="${REPO:-$INV_REPO}"
 . "$INV_REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
 NODE="${1:-${INV_IP[$(inv_das)]}}"; N="${2:-30}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
 BASE=http://127.0.0.1:8282
-ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
+ssh_n() { ssh -F "$INV_SSH_CONFIG" -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 
 echo "# baseline OM2M RETRIEVE latency (no chain)  node=$NODE  n=$N"
 # create a plain unprotected container to read (idempotent; ignore 409)

@@ -10,7 +10,7 @@ REPO="${REPO:-$INV_REPO}"
 . "$INV_REPO/scripts/lib/inventory.sh"; inv_load   # nodes: deploy/inventory.tsv
 NODE="${1:-${INV_IP[$(inv_das)]}}"; N="${2:-12}"; PW="${PW:-user}"; ORIG="${ORIG:-admin:admin}"
 BASE=http://127.0.0.1:8282
-ssh_n() { ssh -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
+ssh_n() { ssh -F "$INV_SSH_CONFIG" -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes user@"$NODE" "$@"; }   # v8: key auth (password automation removed)
 
 echo "# native-path access latency  node=$NODE  n=$N (1 cold discarded)"
 ssh_n "for i in \$(seq 1 $N); do

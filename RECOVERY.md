@@ -79,6 +79,44 @@ from Git Bash on the laptop. Every step checks first and skips work already done
 A node added this way has no v7 history: `04_cutover.sh rollback` leaves it on v8 and says
 so. Run `scripts/v8/04_cutover.sh verify` afterwards to check the whole cluster.
 
+#### What onboarding rpi4 and rpi5 actually ran into (2026-11-10; full record in ROLLOUT_V9.md)
+
+- **The Pi appears and disappears: check DHCP first.** A fresh Raspberry Pi OS image puts
+  eth0 ("Wired connection 1") on DHCP. This subnet has **no DHCP server**, so
+  NetworkManager waits 45 s, logs `ip-config-unavailable`, drops the link, and retries
+  minutes later. `journalctl -u NetworkManager | grep ip-config-unavailable` shows it.
+  Fix (what rpi1–3 have):
+  `sudo nmcli con mod "Wired connection 1" ipv4.method manual ipv4.addresses 10.25.96.20N/24 ipv4.gateway 10.25.96.1 ipv4.dns 192.168.36.135`
+  then `sudo nmcli con up "Wired connection 1"` (run it detached: the session drops). Add
+  `127.0.1.1 <hostname>` to `/etc/hosts`. rpi4/rpi5 keep the old profile at
+  `/root/wired1.nmconnection.pre-static`.
+- **The VPN does not route every address.** .204/.205 are not routed to the laptop. Put
+  `rpi1` in the node's `jump` column in `deploy/inventory.tsv`; every script then reaches
+  it through rpi1 (`ProxyJump`, in the ssh_config that `scripts/lib/inventory.sh`
+  generates; your own `~/.ssh/config` is not used). For a one-off command:
+  `ssh -i ~/.ssh/id_ed25519_suiom2m -o ProxyCommand="ssh -i ~/.ssh/id_ed25519_suiom2m -W %h:%p user@10.25.96.200" user@10.25.96.204`.
+- **"Software caused connection abort" / "banner exchange" errors in bursts.** rpi1's
+  OpenSSH 10 penalises a source address for connections that never authenticate
+  (`PerSourcePenalties noauth:1`, min 15 s). VPN hiccups produce exactly those, and a
+  burst locks the laptop out of rpi1, and therefore out of rpi4/rpi5, for a while. Wait a
+  minute and re-run the step (all steps are idempotent). Do not hammer it with retries.
+- **Debian bookworm on a new Pi is fine.** preflight accepts trixie or bookworm; Docker's
+  apt suite follows the node. The `sui` binary needs glibc 2.39 (bookworm has 2.36), so
+  `sui-key` runs it in a throwaway `debian:trixie-slim` container on the Pi. The key is
+  still generated there and never leaves it.
+- **Wallet files.** `external.keystore` and `external.aliases` must be `{}` (JSON objects);
+  `[]` makes the CLI refuse the whole wallet ("expected a map"). Fixed in `onboard_node.sh`.
+- **`/tmp/current-parent-poa` must be a directory** (legacy v7 mount). If a deploy fails
+  with "not a directory", remove the empty file; `04_cutover.sh` now creates a directory.
+- **Faucet top-ups are not spendable gas.** The faucet pays into the *address balance*;
+  the plugin and the container CLI pay gas only with `Coin` objects. A new node funded only
+  by the faucet cannot send a transaction. Check with GraphQL
+  `address(address: "0x…") { balance(coinType: "0x2::sui::SUI") { coinBalance addressBalance } }`;
+  give the node a coin from the publisher (`sui client ptb --split-coins gas "[250000000]" --assign c --transfer-objects "[c.0]" @<addr>`).
+- **After governance (v9 council armed) the publisher cannot admit a node.**
+  `scripts/onboard_onchain.sh` prints the council proposals instead; run them with
+  `scripts/v9/council.sh propose|approve|execute` (3 of 5 members must sign).
+
 ### Gas watchdog (testnet faucet top-up, 2026-11-10)
 
 Source: `deploy/v8/host/gas-watchdog.py` → `/usr/local/bin/sui-gas-watchdog`, units

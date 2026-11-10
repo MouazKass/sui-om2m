@@ -9,3 +9,9 @@ deploy/v8/host/* text eol=lf
 
 # esp32/: deployed to Linux (python shebangs, systemd units, configs) and built by g++/Arduino
 esp32/** text eol=lf
+# deploy/v8/*.env and deploy/v9/*.env are sourced by bash (WSL, Git Bash); the per-node
+# *.properties are uploaded to the Pis and read by java.util.Properties, where a CR
+# would end up inside every value. Pin both to LF (core.autocrlf=true on the laptop).
+deploy/**/*.env text eol=lf
+deploy/**/*.properties text eol=lf
+deploy/**/*.json text eol=lf

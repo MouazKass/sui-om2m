@@ -22,7 +22,12 @@ cd "$REPO"
 # shellcheck disable=SC1091
 source deploy/v8/env.v8.sh
 : "${PKG_V8:?env.v8.sh did not set PKG_V8}"
-PKG=$PKG_V8
+# Call the package the nodes call. After the v9 upgrade (deploy/v9/deployment.env)
+# that is PKG_V9; types keep the original v8 id. Once governance is armed, the
+# v8 cap paths abort by design, so a proof must not call them by accident.
+# shellcheck disable=SC1091
+[ -f deploy/v9/deployment.env ] && source deploy/v9/deployment.env
+PKG=${PKG_V9:-$PKG_V8}
 
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}"
 GAS_BUDGET="${GAS_BUDGET:-20000000}"
@@ -37,7 +42,7 @@ for _n in "${NODES[@]}"; do
   [ -n "${NODE_CAP[$_n]}" ] || { echo "FATAL: $_cv missing from env.v8.sh - regenerate (scripts/v8/03_gen_config.sh)" >&2; exit 1; }
 done
 
-on()      { ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@${NODE_IP[$1]}" "${@:2}"; }
+on()      { ssh -F "$INV_SSH_CONFIG" -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 "user@${NODE_IP[$1]}" "${@:2}"; }
 wsl_run() { printf '%s\n' "$1" | wsl.exe -d Ubuntu -- bash -s 2>&1 | tr -d '\r'; }
 name_of() { local a=${1,,}; for n in "${NODES[@]}"; do [ "${NODE_ADDR[$n],,}" = "$a" ] && { echo "$n"; return; }; done; echo "$1"; }
 
