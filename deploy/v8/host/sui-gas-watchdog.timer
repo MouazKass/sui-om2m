@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Sui-OM2M gas watchdog every 30 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -25,6 +25,15 @@ if you pipe the output: a masked `prepare` failure once let `redeploy` ship the 
 
 Reboot-tested on rpi2 on 2026-11-10: everything came back with no human action.
 
+**Host services outside the containers** (systemd, enabled, survive reboots):
+`sui-das-provision.service`, `das-watchdog.timer` (DAS/C2 resources), and
+`sui-gas-watchdog.timer` (testnet faucet top-up below 1.0 SUI; installed with
+`deploy/v8/host/install-gas-watchdog.sh`). Status:
+`systemctl list-timers 'das-watchdog*' 'sui-gas-watchdog*'`; logs:
+`journalctl -t sui-gas-watchdog`; disable: `ENABLED=0` in
+`/etc/default/sui-gas-watchdog`. Details in RECOVERY.md → Gas watchdog. It never
+touches the containers.
+
 ---
 
 ## Current published images (Docker Hub, mouazkass/om2m-sui-in)

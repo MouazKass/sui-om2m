@@ -1,0 +1,10 @@
+# /etc/default/sui-gas-watchdog - overrides for /usr/local/bin/sui-gas-watchdog
+# Set ENABLED=0 to disable without removing the timer.
+ENABLED=1
+THRESHOLD_SUI=1.0
+MIN_INTERVAL_H=6
+DAILY_CAP=3
+# FAUCET=https://faucet.testnet.sui.io
+# GRAPHQL=https://graphql.testnet.sui.io/graphql
+# CONFIG=/home/user/sui-runtime-config/sui.properties
+# STATE_DIR=/var/lib/sui-om2m/faucet

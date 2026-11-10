@@ -19,6 +19,37 @@ Most of the manual steps further down are **no longer needed**. They're kept as 
 - **Never** grant an originator static access on `acp_admin` or `acp_sui_dac`.
   DynamicAuthorizationConsultation is only consulted when the static check FAILS, so a
   static grant silently bypasses the chain.
+- **Gas runs low:** nothing to do. `sui-gas-watchdog.timer` (host, every 30 min ± 5) tops a
+  node up from the testnet faucet when its balance drops below 1.0 SUI. See
+  [Gas watchdog](#gas-watchdog-testnet-faucet-top-up-2026-11-10) below.
+
+### Gas watchdog (testnet faucet top-up, 2026-11-10)
+
+Source: `deploy/v8/host/gas-watchdog.py` → `/usr/local/bin/sui-gas-watchdog`, units
+`sui-gas-watchdog.{service,timer}`, overrides `/etc/default/sui-gas-watchdog`. Install or
+upgrade on a Pi: copy `deploy/v8/host/{gas-watchdog.py,install-gas-watchdog.sh,sui-gas-watchdog.*}`
+into one directory and run `sudo ./install-gas-watchdog.sh` (it installs `python3-argon2`,
+self-tests, and enables the timer).
+
+- **What it does:** reads only `sui.node.address` from `~/sui-runtime-config/sui.properties`
+  (no key), checks the balance over GraphQL, and below `THRESHOLD_SUI` solves the faucet's
+  v3 proof of work ([spec](https://faucet.sui.io/pow-spec/); Argon2d, about 22 s at the
+  Pi's ~134 hashes/s) and requests one payout. Only the recipient address goes out.
+- **Guards:** one payout request per 6 h, 3 POSTs per rolling 24 h, 1 h backoff after
+  `funds_unavailable`/`not_ready`/`overloaded`, 24 h backoff after a client error
+  (`invalid_proof` etc., which needs a human). A lost response or `payout_status_unknown`
+  is never re-ground: the same proof is resubmitted and its digest resolved on-chain first.
+- **Status:** `systemctl list-timers sui-gas-watchdog.timer`;
+  `sudo sui-gas-watchdog --status` (state); `sudo sui-gas-watchdog --dry-run` (balance and
+  guards, never contacts the faucet); `sudo sui-gas-watchdog --self-test` (spec vectors).
+- **Logs:** `journalctl -u sui-gas-watchdog -t sui-gas-watchdog`. Every submitted proof and
+  faucet response is kept in `/var/lib/sui-om2m/faucet/` (`*-proof.json`, `*-response.json`).
+- **Disable:** `ENABLED=0` in `/etc/default/sui-gas-watchdog`, or
+  `sudo systemctl disable --now sui-gas-watchdog.timer`.
+- **Verified 2026-11-10:** self-test plus 4 caught mutations; dry runs on all three Pis (above
+  threshold, no request); one real top-up on rpi2 (1.3893 → 2.3893 SUI, digest
+  `HmzdpRHtBTDMGjosBo6PU2rpG1t3A2jSHz16j7Wg5Npc`, from faucet `0x059e21c1…`), then the
+  6 h guard refused an immediate second request.
 
 ---
 

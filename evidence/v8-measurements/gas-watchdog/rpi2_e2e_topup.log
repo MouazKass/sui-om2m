@@ -1,0 +1,22 @@
+{
+  "recipient": "0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5",
+  "checkpointSeq": "404840655",
+  "nonce": "2309350820069741890",
+  "hashHex": "0003550595f853c77628844593de8feb3797b5a1f300c6b56dc2899c41a4fde4"
+}
+{
+  "http": 200,
+  "body": {
+    "status": "success",
+    "digest": "HmzdpRHtBTDMGjosBo6PU2rpG1t3A2jSHz16j7Wg5Npc",
+    "recipient": "0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5",
+    "amountMist": "1000000000",
+    "difficulty": "3000"
+  }
+}
+Nov 10 11:59:39 rpi2-iot sui-gas-watchdog[19315]: balance 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 = 1.3893 SUI, threshold 1.0000 SUI
+Nov 10 11:59:39 rpi2-iot sui-gas-watchdog[19315]: above threshold; nothing to do
+Nov 10 12:00:02 rpi2-iot sui-gas-watchdog[19435]: balance 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 = 1.3893 SUI, threshold 2.0000 SUI
+Nov 10 12:00:03 rpi2-iot sui-gas-watchdog[19435]: solved checkpoint 404840655 after 137 hashes in 1.0s (difficulty 3000)
+Nov 10 12:00:04 rpi2-iot sui-gas-watchdog[19435]: payout success: 1000000000 MIST, digest HmzdpRHtBTDMGjosBo6PU2rpG1t3A2jSHz16j7Wg5Npc
+Nov 10 12:00:08 rpi2-iot sui-gas-watchdog[19435]: balance now 2.3893 SUI

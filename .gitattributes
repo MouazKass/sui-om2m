@@ -2,3 +2,5 @@
 # bash fail outright ("set: pipefail\r: invalid option"), so pin them to LF
 # regardless of the checkout platform or editor.
 *.sh text eol=lf
+# Python and systemd files installed on the Pis are LF too.
+deploy/v8/host/* text eol=lf

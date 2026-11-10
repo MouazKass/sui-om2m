@@ -1,0 +1,12 @@
+[Unit]
+Description=Sui-OM2M gas watchdog (testnet faucet top-up below threshold)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sui-gas-watchdog
+SyslogIdentifier=sui-gas-watchdog
+# Grinding is CPU-bound for ~20 s; keep it below the OM2M container.
+Nice=10
+TimeoutStartSec=600
