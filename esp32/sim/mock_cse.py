@@ -207,6 +207,8 @@ def onem2m(path):
                 return err(400, 4000, "bad body")
             if "lbl" in attrs:
                 target["lbl"] = list(attrs["lbl"])
+            if "daci" in attrs:
+                target["daci"] = list(attrs["daci"])
             target["lt"] = now_ts()
             return reply(200, 2004, public(target))
 

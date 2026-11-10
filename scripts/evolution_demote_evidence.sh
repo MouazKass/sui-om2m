@@ -31,6 +31,8 @@
 #   ./evolution_demote_evidence.sh <TOKEN_OBJECT_ID>
 #
 set -uo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/lib/legacy_guard.sh"
+legacy_guard "$(basename "$0")" "demotes a token signed by the publisher's trust cap"
 
 if [ $# -lt 1 ]; then
     echo "usage: $0 <bootstrapped-CapToken-object-id>"

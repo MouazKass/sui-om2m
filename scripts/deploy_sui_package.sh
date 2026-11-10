@@ -18,6 +18,8 @@
 #
 
 set -euo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/lib/legacy_guard.sh"
+legacy_guard "$(basename "$0")" "publishes an unrelated new package and prints sui.properties for it"
 
 cd "$(dirname "$0")/../move"
 

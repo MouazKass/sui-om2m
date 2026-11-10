@@ -92,6 +92,9 @@ for e in d.get("events",[]):
     if e.get("type","").endswith("::quorum::Proposed"):  print("proposal_id", pj.get("proposal_id"))
     if e.get("type","").endswith("::quorum::Approved"):  print("approvals", pj.get("approvals"))
     if e.get("type","").endswith("::quorum::Executed"):  print("executed action", pj.get("action"))
+for c in d.get("objectChanges",[]):
+    if c.get("type")=="created" and c.get("objectType","").endswith("::cap_token::CapToken"):
+        print("created CapToken", c.get("objectId"))
 sys.exit(0 if st.get("status")=="success" else 1)'
 }
 

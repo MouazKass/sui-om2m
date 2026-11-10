@@ -1,0 +1,19 @@
+# esp32/sim/live_failover.sh esp32-dht-01 rpi2 60, run on rpi1 2026-11-10 (v9 live, parent rpi2 epoch 6)
+# temporary rule matched ONLY uid 64999 (the simulator) -> 10.25.96.201:1883; removed at the end (iptables -S OUTPUT afterwards: -P OUTPUT ACCEPT only)
+22:19:24 brokers rpi1=10.25.96.200:1883,rpi2=10.25.96.201:1883,rpi3=10.25.96.203:1883,rpi4=10.25.96.204:1883,rpi5=10.25.96.205:1883; home rpi2 (10.25.96.201); sim uid 64999
+22:19:54 home broker rpi2 goes dark for this uid only
+   rule: -A OUTPUT -d 10.25.96.201/32 -p tcp -m tcp --dport 1883 -m owner --uid-owner 64999 -j DROP
+22:20:54 rule removed: rpi2 reachable again
+22:21:54 SIGUSR1: stop readings, drain until every reading is acked
+22:21:55 simulator exited
+   sim: [esp32-dht-01] event        power-up epoch 1 boot db841e8c, 5 brokers, home rpi2
+   sim: [esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 1.1
+   sim: [esp32-dht-01] event        connected rpi3 (10.25.96.203:1883) session 1.2
+   sim: [esp32-dht-01] event        home rpi2 stable for 30s: moving back
+   sim: [esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 1.3
+   sim: [esp32-dht-01] event        finished: 75 readings taken, 0 unacknowledged []
+rc=0
+
+# stored on the parent (rpi2 CSE, esp32-dht-01/data?rcn=4):
+stored 75 distinct 75 min 0 max 74 missing [] dupes 0
+written by bridge on: {'rpi2': 27, 'rpi3': 48}

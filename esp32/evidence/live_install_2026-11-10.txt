@@ -1,0 +1,65 @@
+# deploy_to_pis.sh install, 2026-11-10 (v9 live, parent rpi2 epoch 6)
+
+## first pass (22:07-22:09): installer sed bug + OM2M DAC-cache poisoning
+- rpi2: bridge crash-looped: 'cluster.target=parent needs graphql_url, cluster_id and package_original_id'.
+  install.sh's sed patterns required a space after '=' but the template has empty values ('cluster_id ='). Fixed: '^key *=.*'.
+- rpi1/3/4/5 smoke tests: 'Resource not found'. rpi2 CSE log: 8x 'Router internal error' =
+  JdbcSQLException FK_AE_DAC_JOIN_AE_ID ... ('/in-cse/Cipe-bridge-probe') on INSERT INTO AE_DAC_JOIN.
+  Cause: each --check DELETEd its probe AE while it still carried daci; EclipseLink kept it in the cached
+  sui-dac AE list and re-inserted the link on the next AE create. Fix: CSE.delete_ae = PUT daci=[] then DELETE.
+  Verified on rpi5's local CSE: create/unlink/delete x3, each next create 201. rpi2 cleared by the planned redeploy.
+
+## second pass (22:24), patched bridge, all five
+== installing on rpi1
+active
+self = rpi1
+target = parent
+cluster_id = 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f
+1) bridge --check against its target CSE (creates, writes, rejects a duplicate, deletes a probe)
+   duplicate contentInstance name rejected (409): exactly-once storage holds
+   probe deleted (HTTP 200): ACP attached correctly, nothing left behind
+         "rn" : "e94334981-s0",
+   ri /in-cse/Csmoke-test-rpi1 acpi ['/in-cse/acp-166619039', '/in-cse/acp-242725464'] daci ['/in-cse/dac-327038851']
+== installing on rpi2
+active
+self = rpi2
+target = parent
+cluster_id = 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f
+1) bridge --check against its target CSE (creates, writes, rejects a duplicate, deletes a probe)
+   duplicate contentInstance name rejected (409): exactly-once storage holds
+   probe deleted (HTTP 200): ACP attached correctly, nothing left behind
+         "rn" : "e94334991-s0",
+   ri /in-cse/Csmoke-test-rpi2 acpi ['/in-cse/acp-166619039', '/in-cse/acp-242725464'] daci ['/in-cse/dac-327038851']
+== installing on rpi3
+active
+self = rpi3
+target = parent
+cluster_id = 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f
+1) bridge --check against its target CSE (creates, writes, rejects a duplicate, deletes a probe)
+   duplicate contentInstance name rejected (409): exactly-once storage holds
+   probe deleted (HTTP 200): ACP attached correctly, nothing left behind
+         "rn" : "e94335002-s0",
+   ri /in-cse/Csmoke-test-rpi3 acpi ['/in-cse/acp-166619039', '/in-cse/acp-242725464'] daci ['/in-cse/dac-327038851']
+== installing on rpi4
+active
+self = rpi4
+target = parent
+cluster_id = 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f
+1) bridge --check against its target CSE (creates, writes, rejects a duplicate, deletes a probe)
+   duplicate contentInstance name rejected (409): exactly-once storage holds
+   probe deleted (HTTP 200): ACP attached correctly, nothing left behind
+         "rn" : "e94335014-s0",
+   ri /in-cse/Csmoke-test-rpi4 acpi ['/in-cse/acp-166619039', '/in-cse/acp-242725464'] daci ['/in-cse/dac-327038851']
+== installing on rpi5
+active
+self = rpi5
+target = parent
+cluster_id = 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f
+1) bridge --check against its target CSE (creates, writes, rejects a duplicate, deletes a probe)
+   duplicate contentInstance name rejected (409): exactly-once storage holds
+   probe deleted (HTTP 200): ACP attached correctly, nothing left behind
+         "rn" : "e94335027-s0",
+   ri /in-cse/Csmoke-test-rpi5 acpi ['/in-cse/acp-166619039', '/in-cse/acp-242725464'] daci ['/in-cse/dac-327038851']
+
+rpi2 OM2M log after the second pass: 0 FK_AE_DAC_JOIN errors. deploy_to_pis.sh status: active on rpi1..rpi5.
+rpi3: v1 bridge upgraded in place on the first pass; backup /etc/om2m-ipe-bridge/v1-backup-20261110-220834

@@ -36,11 +36,14 @@ grep -q "const ROLE_MN_CSE: u8 = 2;" "$REPO/move/sources/identity.move" || die "
 
 if [ -n "${COUNCIL:-}" ]; then
   die "governance is armed (COUNCIL=$COUNCIL): the publisher cannot admit nodes any more.
-  Admit $NAME by council proposals from member nodes (each needs k approvals):
-    quorum ACT_ID_REGISTER (20)      target=$ADDR text=\"${INV_CSEID[$NAME]}\" value=$ROLE
-    quorum ACT_TRUST_ADD_NODE (12)   target=$ADDR value=$INITIAL_SCORE
-    quorum ACT_TRUST_GRANT_ADMIN (10) target=$ADDR
-    quorum ACT_ADD_MEMBER (1)        target=$ADDR   (raise the threshold first if 2k would no longer exceed n)
+  (the genesis trust AdminCap was also revoked by council proposal 5, 2026-11-10).
+  Admit $NAME by council proposals from member nodes, from Git Bash; each one is
+  'propose' on one member, 'approve' on k-1 others, then 'execute':
+    scripts/v9/council.sh propose rpi1 id-register       $ADDR ${INV_CSEID[$NAME]} $ROLE
+    scripts/v9/council.sh propose rpi1 trust-add-node    $ADDR '' $INITIAL_SCORE
+    scripts/v9/council.sh propose rpi1 trust-grant-admin $ADDR
+    scripts/v9/council.sh propose rpi1 add-member        $ADDR   (raise the threshold first if 2k would no longer exceed n)
+    scripts/v9/council.sh approve <member> <proposal-id>; scripts/v9/council.sh execute <member> <proposal-id>
   See V9_DESIGN.md and move/tests/quorum_tests.move (onboard_node_identity_then_trust)."
 fi
 

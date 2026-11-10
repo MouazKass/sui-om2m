@@ -17,6 +17,8 @@
 # Non-destructive to production: mints a FRESH token; never touches 0xef3e0c....
 
 set -uo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/lib/legacy_guard.sh"
+legacy_guard "$(basename "$0")" "mints/evolves a v4 token with the publisher's IssuerCap"
 DO_REVOKE=0
 [ "${1:-}" = "--revoke" ] && DO_REVOKE=1
 

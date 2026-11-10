@@ -13,6 +13,8 @@
 # Edit the addresses below before running.
 
 set -euo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/lib/legacy_guard.sh"
+legacy_guard "$(basename "$0")" "seeds the v1 registries with the publisher's admin caps"
 
 source ./env.sh  # exports PKG, IDENTITY_REG, TRUST_REG, POLICY_REG,
                  # AUDIT_TRAIL, ISSUER_CAP, ID_ADMIN_CAP, TR_ADMIN_CAP,

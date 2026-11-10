@@ -7,8 +7,13 @@
 #
 # Who signs what:
 #   node_call rpiN ...  - signed by that node's own key, inside its container
-#   pub_call ...        - signed by the publisher, inside WSL (the publisher
-#                         key never leaves WSL)
+#   council_do ...      - a 3-of-5 council action (v9): proposed, approved and
+#                         executed by member nodes via scripts/v9/council.sh,
+#                         each signing with its own key. The proofs hold no
+#                         publisher cap: since v9 every admin action
+#                         (cap grant/revoke, mint, policy, node admission) is
+#                         a council decision, and the publisher's genesis
+#                         trust cap has been revoked by one.
 #   pub_read / score    - read-only (object / tx-block / dev-inspect), WSL CLI
 #
 # Each signing helper prints one line and sets LAST_DIGEST / LAST_STATUS /
@@ -116,12 +121,32 @@ node_ptb() {
   _report "$n:ptb"
 }
 
-# pub_call <module> <function> <args...>   (signed by the publisher in WSL)
-pub_call() {
-  local m=$1 f=$2; shift 2
-  echo "\$ [publisher] sui client call --package \$PKG_V8 --module $m --function $f --args $*"
-  _parse_tx "$(wsl_run "sui client call --package $PKG --module $m --function $f --args $* --gas-budget $GAS_BUDGET --json")"
-  _report "publisher:$m::$f"
+# council_do <label> <action> [target] [text] [v1] [v2] [v3]
+# One k-of-n council decision (scripts/v9/council.sh): the first council signer
+# proposes (which counts as its approval), the next ones approve until the
+# threshold, the first executes. Signers default to the first three active nodes
+# (COUNCIL_SIGNERS overrides). Sets LAST_* from the EXECUTE transaction.
+COUNCIL_SH="$REPO/scripts/v9/council.sh"
+council_do() {
+  local label=$1 out pid s; shift
+  local -a signers; read -r -a signers <<<"${COUNCIL_SIGNERS:-${NODES[*]:0:3}}"
+  echo "\$ council.sh propose ${signers[0]} $*   (approve: ${signers[*]:1}; execute: ${signers[0]})"
+  LAST_DIGEST=; LAST_STATUS=error; LAST_CODE=; LAST_GAS=; LAST_OUT=
+  out=$(bash "$COUNCIL_SH" propose "${signers[0]}" "$@" 2>&1); LAST_OUT=$out
+  pid=$(awk '$1=="proposal_id"{print $2}' <<<"$out")
+  if [ -z "$pid" ]; then echo "$out" | tail -4 | sed 's/^/    /'; _report "council:$label"; return 0; fi
+  echo "    proposal $pid  ($(head -1 <<<"$(grep -E '^[1-9A-HJ-NP-Za-km-z]{32,} ' <<<"$out")" | cut -d' ' -f1))"
+  for s in "${signers[@]:1}"; do
+    out=$(bash "$COUNCIL_SH" approve "$s" "$pid" 2>&1) || { LAST_OUT=$out; echo "$out" | tail -4 | sed 's/^/    /'; _report "council:$label"; return 0; }
+    echo "    approved by $s ($(grep -oE '^[1-9A-HJ-NP-Za-km-z]{32,}' <<<"$out" | head -1))"
+  done
+  out=$(bash "$COUNCIL_SH" execute "${signers[0]}" "$pid" 2>&1); LAST_OUT=$out
+  local line; line=$(grep -E '^[1-9A-HJ-NP-Za-km-z]{32,} ' <<<"$out" | head -1)
+  LAST_DIGEST=$(cut -d' ' -f1 <<<"$line")
+  case "$(cut -d' ' -f2 <<<"$line")" in success) LAST_STATUS=success;; "") LAST_STATUS=error;; *) LAST_STATUS=abort;; esac
+  [ "$LAST_STATUS" = error ] && echo "$out" | tail -4 | sed 's/^/    /'
+  LAST_PROPOSAL=$pid
+  _report "council:$label"
 }
 
 # Read-only helpers (no signature).

@@ -531,7 +531,8 @@ sui client call --package $PKG_V9 --module quorum --function deposit_cluster_cap
   aborts with `E_CAP_REVOKED`.
 - [ ] This step is **one-way**.
 - [ ] `02_bootstrap.sh` can no longer register nodes or mint tokens. From now
-  on, onboarding is a proposal.
+  on, onboarding is a proposal. (Enforced in the script since 2026-11-10:
+  `--simulate`/`--execute` against `deploy/v8` exit 3 via `scripts/lib/legacy_guard.sh`.)
 
 ### H. Verification on the live system
 - [ ] Read checks:

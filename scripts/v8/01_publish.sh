@@ -6,6 +6,15 @@
 #
 #   scripts/v8/01_publish.sh            # DRY RUN (default): build, test, simulate
 #   scripts/v8/01_publish.sh --execute  # really publish (signs + spends gas)
+#   scripts/v8/01_publish.sh --execute --fresh-publish
+#                                       # required once deploy/v8/deployment.env exists
+#
+# SINCE v9 (2026-11-10): the live package is a compatible UPGRADE of this v8
+# publish and its types still carry the v8 id, so deploy/v8/deployment.env must
+# never be overwritten. A second --execute would create a new, unrelated
+# deployment (new registries, new caps, no council). It is refused unless
+# --fresh-publish is given, and then writes to deploy/fresh-<UTC time>/ instead.
+# Changes to the live system go through scripts/v9/02_upgrade.sh and the council.
 #
 # Why a FRESH publish and not an upgrade: A6/A7 change function signatures and
 # visibility across 5 of 8 modules, which a compatible upgrade forbids.
@@ -22,6 +31,17 @@ GAS_BUDGET="${GAS_BUDGET:-500000000}"   # 0.5 SUI cap; unused gas is refunded
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$REPO/deploy/v8"
+if [ "$MODE" = "--execute" ] && [ -f "$OUT/deployment.env" ]; then
+  if [ "${2:-}" != "--fresh-publish" ]; then
+    echo "REFUSED: deploy/v8/deployment.env already exists and the live v9 package depends on it." >&2
+    echo "  Upgrading the live system:   scripts/v9/02_upgrade.sh (see ROLLOUT_V9.md)" >&2
+    echo "  Admin actions on v9:         scripts/v9/council.sh propose|approve|execute|status" >&2
+    echo "  A deliberate, separate deployment: $0 --execute --fresh-publish" >&2
+    exit 3
+  fi
+  OUT="$REPO/deploy/fresh-$(date -u +%Y%m%dT%H%M%SZ)"
+  echo "== --fresh-publish: new deployment recorded in $OUT (deploy/v8 untouched) =="
+fi
 cd "$REPO/move"
 mkdir -p "$OUT"
 

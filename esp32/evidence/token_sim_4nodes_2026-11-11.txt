@@ -1,0 +1,11 @@
+# Free dry-run (sui client ptb --dry-run, nothing submitted) of the full v8/v9 access PTB
+# identity::verify -> trust::require_min -> cap_token::validate_for_use -> policy::evaluate -> evaluator::decide_and_log
+# signed-as each node with its own key inside om2m-active, using that node's council-minted READ token, resource /in-cse/Cesp32-dht-01, 2026-11-11
+rpi1 token 0xe5934c14… op=1 (dry-run, sender=rpi1): success
+rpi1 token 0xe5934c14… op=4 (dry-run, sender=rpi1): failure due to MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("cap_token") }, function: 2, instruction: 55, function_name: Some("validate_for_use") }, 4) in command 2
+rpi3 token 0xea7fc17c… op=1 (dry-run, sender=rpi3): success
+rpi3 token 0xea7fc17c… op=4 (dry-run, sender=rpi3): failure due to MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("cap_token") }, function: 2, instruction: 55, function_name: Some("validate_for_use") }, 4) in command 2
+rpi4 token 0xac92b92e… op=1 (dry-run, sender=rpi4): success
+rpi4 token 0xac92b92e… op=4 (dry-run, sender=rpi4): failure due to MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("cap_token") }, function: 2, instruction: 55, function_name: Some("validate_for_use") }, 4) in command 2
+rpi5 token 0xe3a37517… op=1 (dry-run, sender=rpi5): success
+rpi5 token 0xe3a37517… op=4 (dry-run, sender=rpi5): failure due to MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("cap_token") }, function: 2, instruction: 55, function_name: Some("validate_for_use") }, 4) in command 2

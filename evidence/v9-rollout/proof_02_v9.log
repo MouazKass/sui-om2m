@@ -1,0 +1,43 @@
+
+################################################################################
+#  CONCEPT 2 - TRUST ENGINE / PEER SCORING
+################################################################################
+
+    rpi2 effective score before: 97
+
+=== A PEER LOWERS ANOTHER PEER'S SCORE (valid: signer rpi1, target rpi2) ===
+$ [rpi1] sui client call --package $PKG_V8 --module trust --function decrease_guarded --args 0x9dd24879e5b93881596f2e4d71d270e5284e7487e365250905763e22717b01ba 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 3 0x6
+    -> Success   digest=EszYdDFKdJY2cWec89VYgEDqwPTrVyB4spxEqqn5zoqQ   gas=1000600 MIST
+    [PASS] rpi1 -> rpi2 decrease by 3 (expected success)
+    rpi2 effective score after:  94
+
+=== THE TARGET CANNOT RAISE ITS OWN SCORE (self-scoring guard) ===
+$ [rpi2] sui client call --package $PKG_V8 --module trust --function increase_guarded --args 0xe160cad9bdc43b1c4dfea33fbf7b8ee36c00cad1dc744ba14b578a07df0e0208 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 3 0x6
+    -> MoveAbort code 4   digest=GJi6nQcHMwmhCf15tz5LicXNY4mLZZs6d2Wv389uYUo1
+    [PASS] rpi2 self-raise rejected (E_SELF_SCORING) (expected abort:4)
+
+=== v8 / A12: A SINGLE WRITE CANNOT MOVE A SCORE BY MORE THAN 15 ===
+$ [rpi1] sui client call --package $PKG_V8 --module trust --function increase_guarded --args 0x9dd24879e5b93881596f2e4d71d270e5284e7487e365250905763e22717b01ba 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 16 0x6
+    -> MoveAbort code 6   digest=HvuZH294WYgL8zyMZdrUXWMjmAqZUtXjibmdBxD4hSV4
+    [PASS] delta 16 rejected (E_DELTA_TOO_LARGE) (expected abort:6)
+
+=== v8 / A12: A SECOND WRITE TO THE SAME NODE WITHIN 60 s IS REJECTED ===
+$ [rpi1] sui client call --package $PKG_V8 --module trust --function increase_guarded --args 0x9dd24879e5b93881596f2e4d71d270e5284e7487e365250905763e22717b01ba 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 3 0x6
+    -> MoveAbort code 7   digest=BizsovpH8ztUbg2L1MJ9W3BiNvE3fqgrTbMEfe8TtiAc
+    [PASS] immediate second write rejected (E_RATE_LIMITED) (expected abort:7)
+
+=== RESTORE: after the interval, the same peer write succeeds ===
+    (waiting 44s for the 60 s per-target write interval, A12)
+$ [rpi1] sui client call --package $PKG_V8 --module trust --function increase_guarded --args 0x9dd24879e5b93881596f2e4d71d270e5284e7487e365250905763e22717b01ba 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5 3 0x6
+    -> Success   digest=5wkbkEpjg1EXTZa9o7DPJ6gn9aX5bgLQvbD6g8NbgKg4   gas=1000600 MIST
+    [PASS] rpi1 -> rpi2 increase by 3 after 60 s (expected success)
+    rpi2 effective score restored: 97 (started at 97)
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: scores are written on-chain through the guarded path; a peer can
+move a DIFFERENT peer's score (Success, digests above), the node itself cannot
+(code 4), and no single signer can move a score by more than 15 per minute
+(codes 6 and 7) - a compromised peer's damage is bounded until it is revoked.
+--------------------------------------------------------------------------------
+RESULT: 5 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

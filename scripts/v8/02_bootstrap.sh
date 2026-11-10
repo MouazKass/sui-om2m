@@ -50,6 +50,16 @@ DEPLOY_ENV="${DEPLOY_ENV:-$REPO/deploy/v8/deployment.env}"
 SUI_BIN="${SUI_BIN:-sui}"
 LOG_DIR="$(dirname "$DEPLOY_ENV")/bootstrap"
 
+# Since v9 the v8 deployment is governed by the council: the publisher's caps
+# abort (E_GOVERNED) or are revoked. Plan mode signs nothing and stays allowed;
+# --simulate/--execute against deploy/v8 are refused. Bootstrapping a separate
+# deployment made with 01_publish.sh --execute --fresh-publish (DEPLOY_ENV
+# pointing at deploy/fresh-*/deployment.env) is still allowed.
+if [ "$MODE" != "--plan" ] && [ "$(cd "$(dirname "$DEPLOY_ENV")" 2>/dev/null && pwd)" = "$REPO/deploy/v8" ]; then
+  source "$REPO/scripts/lib/legacy_guard.sh"
+  legacy_guard "$(basename "$0") $MODE" "bootstraps the v8 registries as the publisher"
+fi
+
 GAS_BUDGET="${GAS_BUDGET:-20000000}"
 INITIAL_SCORE="${INITIAL_SCORE:-80}"
 TRUST_GATE="${TRUST_GATE:-50}"

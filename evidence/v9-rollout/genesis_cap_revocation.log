@@ -1,0 +1,16 @@
+
+=== propose action 11 by rpi1 (target 0x33e6daadfcb32b1e627b91e3b7eba8299e8a5ad3c031479d4a7573c654198cf0, text '', values 0/0/0, ttl 86400000 ms) ===
+HVjxQ5XMsZnjU91Pq8MsZcSqFy3MKt6QNWAYuzVpVPvc success 
+proposal_id 5
+
+=== approve proposal 5 by rpi4 ===
+5TZXqNjA9QdViM2BDH2VcZZMYehsKoLbBiB27u4ULDpa success 
+approvals 2
+
+=== approve proposal 5 by rpi5 ===
+7uztXhd1kiXShCKoeXvBAXhWJkXAZrpUVgSxe7Up7m15 success 
+approvals 3
+
+=== execute proposal 5 (action 11) by rpi1 ===
+CHDdqJhsuabCV44onWAN82tpmWAeBmCthbSUKtyyxjG2 success 
+executed action 11.0

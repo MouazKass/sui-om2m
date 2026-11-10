@@ -1,0 +1,55 @@
+=== 0. before
+    00:27:33 parent=rpi2 epoch=6 lease_left=600s
+=== 1. hand the parent role rpi2 -> rpi3 (rpi2 lapses its lease, rpi3 claims with its own key)
+$ [rpi2] sui client call --package $PKG_V8 --module failover --function renew_lease --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0 0x6
+    -> Success   digest=Co3rJ3ZGKgU7yNqzgEi5YTYbegJa1hLdUyBvtJ6nxD2Y   gas=1000276 MIST
+$ [rpi3] sui client call --package $PKG_V8 --module failover --function claim_parent --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> Success   digest=9XwVk5zRrJQtxtonusg3oMD4VZBm9D2Ypo2SBsqdzHGy   gas=-3027321 MIST
+    00:28:06 parent=rpi3 epoch=7 lease_left=1192s
+    rpi3's own plugin log:
+      Lease anchored for 1200000 ms digest=HAXDfZdpAyZZkRgojixRyhn5y4UvkcKTzy4cv8FLiNq2 (1888 ms)
+=== 2. six readings from the simulated ESP32 (rpi1, home broker rpi2); bridges write to the NEW parent
+      [esp32-dht-01] ok           {"v":2,"id":"esp32-dht-01","epoch":94342507,"boot":"41b837ec","seq":3,"ts":1794342513,"up_ms":6021,"rssi":-72,"via":"rpi2","temperature":25.3,"humidity":61.0,"light_raw":2064,"light_pct":50}
+      [esp32-dht-01] ok           {"v":2,"id":"esp32-dht-01","epoch":94342507,"boot":"41b837ec","seq":4,"ts":1794342515,"up_ms":8028,"rssi":-65,"via":"rpi2","temperature":25.1,"humidity":61.0,"light_raw":2164,"light_pct":52}
+      [esp32-dht-01] ok           {"v":2,"id":"esp32-dht-01","epoch":94342507,"boot":"41b837ec","seq":5,"ts":1794342517,"up_ms":10036,"rssi":-56,"via":"rpi2","temperature":25.1,"humidity":59.4,"light_raw":2280,"light_pct":55}
+      [esp32-dht-01] event        finished: 6 readings taken, 0 unacknowledged []
+=== 3. protected read ON rpi3 (now parent) with rpi3's own council-minted token
+  == 1. RETRIEVE esp32-dht-01 as Cesp32-reader-01 -> expect GRANT
+     latest reading: {"epoch":94342507,"humidity":59.4,"light_pct":55,"light_raw":2280,"node":"rpi2","rx_ts":1794342517600,"seq":5,"temperature":25.1,"ts":1794342517}
+     HTTP 200
+  
+     Sui GRANT originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=1 digest=9sZoJZQzW4oJr7Qd6Ba8jjJDFwQJfsFFbDdXwXu3Xa4g (3254 ms)
+  == 2. DELETE esp32-dht-01 as Cesp32-reader-01 -> expect 403 / DENY, no transaction
+     HTTP 403
+     Sui DENY originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=4 source=SIMULATED err=cap_token::E_OP_NOT_ALLOWED (abort 4) [raw: precheck: MoveAbort(MoveLocation { module: ModuleId { address: 0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("cap_token") }, function_name: Some("validate_for_use"), instruction: 55 }, 4) -- Error in 3rd command, from '0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a::cap_token::validate_for_use' (instruction 55), abort code: 4]
+  == 3. control: RETRIEVE esp32-dht-01/data/la as Cesp32-reader-01 -> expect 403, no Sui line
+     HTTP 403
+     (nothing above = the DAS was not consulted, as expected)
+=== 4. restore: hand the parent role back rpi3 -> rpi2
+$ [rpi3] sui client call --package $PKG_V8 --module failover --function renew_lease --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0 0x6
+    -> Success   digest=9tdYiBE6dv9GxMxd6bHEYabnjws6PfDoThTtLEMpzeT2   gas=1000276 MIST
+$ [rpi2] sui client call --package $PKG_V8 --module failover --function claim_parent --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> Success   digest=6doE2kSvW9jXGsp8zEL8tS9Ts7UGP8ZX9HZEXaJdpGPn   gas=-3027321 MIST
+    00:29:29 parent=rpi2 epoch=8 lease_left=1190s
+    rpi2's own plugin log:
+      Lease anchored for 1200000 ms digest=5yV8vjpdAcHRHDVms8HAM4WsbZj6dWdsiVvYShZKgfkH (1742 ms)
+      Parent duties stopped (deposed): lease anchor + self-check cancelled (presence heartbeat continues).
+      Lease anchored for 1200000 ms digest=E4dZsufXGoMdcGHmkxqqc9MngRDcxdJ8RnpDvDJ4PQ13 (1475 ms)
+=== 5. after restore: readings + protected read on rpi2
+      [esp32-dht-01] ok           {"v":2,"id":"esp32-dht-01","epoch":94342590,"boot":"90617d72","seq":3,"ts":1794342596,"up_ms":6023,"rssi":-68,"via":"rpi2","temperature":24.9,"humidity":60.7,"light_raw":2025,"light_pct":49}
+      [esp32-dht-01] ok           {"v":2,"id":"esp32-dht-01","epoch":94342590,"boot":"90617d72","seq":4,"ts":1794342598,"up_ms":8030,"rssi":-51,"via":"rpi2","temperature":25.0,"humidity":59.3,"light_raw":2160,"light_pct":52}
+      [esp32-dht-01] ok           {"v":2,"id":"esp32-dht-01","epoch":94342590,"boot":"90617d72","seq":5,"ts":1794342600,"up_ms":10036,"rssi":-58,"via":"rpi2","temperature":25.2,"humidity":60.3,"light_raw":2213,"light_pct":54}
+      [esp32-dht-01] event        finished: 6 readings taken, 0 unacknowledged []
+  == 1. RETRIEVE esp32-dht-01 as Cesp32-reader-01 -> expect GRANT
+     latest reading: {"epoch":94342590,"humidity":60.3,"light_pct":54,"light_raw":2213,"node":"rpi2","rx_ts":1794342600648,"seq":5,"temperature":25.2,"ts":1794342600}
+     HTTP 200
+  
+     Sui GRANT originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=1 digest=CM6jb7CfDek25amcbvSjPZvbhcQ6twHaC5GD2iL8AMTS (1503 ms)
+  == 2. DELETE esp32-dht-01 as Cesp32-reader-01 -> expect 403 / DENY, no transaction
+     HTTP 403
+     Sui DENY originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=4 source=SIMULATED err=cap_token::E_OP_NOT_ALLOWED (abort 4) [raw: precheck: MoveAbort(MoveLocation { module: ModuleId { address: 0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("cap_token") }, function_name: Some("validate_for_use"), instruction: 55 }, 4) -- Error in 3rd command, from '0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a::cap_token::validate_for_use' (instruction 55), abort code: 4]
+  == 3. control: RETRIEVE esp32-dht-01/data/la as Cesp32-reader-01 -> expect 403, no Sui line
+     HTTP 403
+     (nothing above = the DAS was not consulted, as expected)
+=== 6. final
+    00:30:17 parent=rpi2 epoch=8 lease_left=1142s

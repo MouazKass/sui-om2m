@@ -1,0 +1,59 @@
+
+################################################################################
+#  CONCEPT 9 - ADMIN CAP REVOCATION
+################################################################################
+
+=== SETUP: the council grants rpi2 a throwaway AdminCap (3-of-5, registered as valid) ===
+$ council.sh propose rpi1 trust-grant-admin 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5   (approve: rpi2 rpi3; execute: rpi1)
+    proposal 1  (A6ekiF6x9NkhTcrh51GQR7SXqxQ2AE5uzyUWsJMg3wb7)
+    approved by rpi2 (7G6Li1HdJvWsHYLW9jdSpgnRCrrnFNAceSqTEpoFUvq)
+    approved by rpi3 (BbNbCKPgQcV5WAvjaDqzEEzxFjm5pDJYGpXc2dDJHUGL)
+    -> Success   digest=3AAWpAE9JWwonmLuqKGbWr5TN31rvvxLmN8T8ue9rtud   gas= MIST
+    [PASS] council grant executed (expected success)
+    throwaway cap: 0x7b13798be65cbe04858dacc488295c0d37d0033b6eb94058986cdd6adb1a3fc4 (owner rpi2)
+    is_cap_valid before: True
+
+=== v9: NO SINGLE CAP CAN REVOKE ANOTHER ONE (the pre-council path is closed) ===
+$ [rpi1] sui client call --package $PKG_V8 --module trust --function revoke_admin --args 0x9dd24879e5b93881596f2e4d71d270e5284e7487e365250905763e22717b01ba 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x7b13798be65cbe04858dacc488295c0d37d0033b6eb94058986cdd6adb1a3fc4
+    -> MoveAbort code 8   digest=8GeBNHMo2RQjxuVD8BHJqZFT46k2SJ9uhfXGvmFMWPLD
+    [PASS] rpi1 alone revoking rpi2's cap rejected (E_GOVERNED) (expected abort:8)
+
+=== THE OPERATION: the council revokes it on-chain (3-of-5) ===
+$ council.sh propose rpi1 trust-revoke-admin 0x7b13798be65cbe04858dacc488295c0d37d0033b6eb94058986cdd6adb1a3fc4   (approve: rpi2 rpi3; execute: rpi1)
+    proposal 2  (3x2r6TYbfJtAKaPApv9ULHdDQ5fcBxHYEodpFy7f5qEj)
+    approved by rpi2 (Fn8DTVkiJvdgmqE3QLarAGLCNxgDycsnTaiBrXr51Xgi)
+    approved by rpi3 (6eGhmV5va1yT9x88V1pKrxJv1NKT27Hfb3AVzfczdk2j)
+    -> Success   digest=3mYWffL5ReCpPSjemVYVq7dXzE65hsHByTE7mATHMGUU   gas= MIST
+    [PASS] council revoke executed (expected success)
+    is_cap_valid after:  False
+    [PASS] valid -> revoked
+
+=== CONSEQUENCE 1: the revoked cap can no longer write a score ===
+$ [rpi2] sui client call --package $PKG_V8 --module trust --function increase_guarded --args 0x7b13798be65cbe04858dacc488295c0d37d0033b6eb94058986cdd6adb1a3fc4 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9 1 0x6
+    -> MoveAbort code 5   digest=5WxFymtttuLvVNVWR8AcfRHP7piAuyRizZZDkSKLhv5o
+    [PASS] score write with the revoked cap rejected (E_CAP_REVOKED) (expected abort:5)
+
+=== CONSEQUENCE 2: it cannot mint itself a fresh cap ===
+$ [rpi2] sui client call --package $PKG_V8 --module trust --function grant_admin_registered --args 0x7b13798be65cbe04858dacc488295c0d37d0033b6eb94058986cdd6adb1a3fc4 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x4be6060abaff0b4b6b7229558887f5f054cbe7d9836ba56eff35d848e13dc1f5
+    -> MoveAbort code 8   digest=7mkKukRut4CAoUG2TZsdG3A7iEF1xSisjUkP7u45yX4G
+    [PASS] grant from the revoked cap rejected (E_GOVERNED: grants are council-only) (expected abort:8)
+
+=== CONSEQUENCE 3: it cannot register a node ===
+$ [rpi2] sui client call --package $PKG_V8 --module trust --function add_node --args 0x7b13798be65cbe04858dacc488295c0d37d0033b6eb94058986cdd6adb1a3fc4 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x000000000000000000000000000000000000000000000000000000000000dead 100 0x6
+    -> MoveAbort code 8   digest=DHxYDuN2MSWKHGpgLR3k1JXLCxKJoC2njFSBF15yrhZR
+    [PASS] add_node with the revoked cap rejected (E_GOVERNED: admission is council-only) (expected abort:8)
+
+=== CLEANUP: rpi2 burns the throwaway cap ===
+$ [rpi2] sui client call --package $PKG_V8 --module trust --function burn_admin --args 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x7b13798be65cbe04858dacc488295c0d37d0033b6eb94058986cdd6adb1a3fc4
+    -> Success   digest=3YxwVkfbY4zkUvM61EMWVV4wXFmxKwS63vJZ6ymnTkS4   gas=-291609 MIST
+    [PASS] throwaway cap burned (expected success)
+    rpi2's production cap is untouched: is_cap_valid($ADMINCAP_RPI2) = True
+
+--------------------------------------------------------------------------------
+WHAT THIS SHOWS: an AdminCap's validity is on-chain state. Granting and revoking a
+cap is a 3-of-5 council decision - a single cap holder is refused (code 8). Once
+revoked, the cap can write no score (code 5), mint no replacement and register no
+node. Admin authority is revocable, collectively, and stays revoked.
+--------------------------------------------------------------------------------
+RESULT: 8 assertion(s) held, 0 failed
+--------------------------------------------------------------------------------

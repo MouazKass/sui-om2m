@@ -20,13 +20,13 @@ step_evolve() { node_call rpi3 evolution evolve "$PT" "$TRUST_REG" 0x6; expect "
 
 PT=${PROOF_TOKEN:-$(grep -s '^PROOF_TOKEN=' evidence/v8-measurements/proof_token.env | cut -d= -f2)}
 if [ -z "$PT" ]; then
-  echo "=== SETUP: mint a proof token to rpi3 (publisher's IssuerCap) and bootstrap its tier ==="
+  echo "=== SETUP: the council mints a proof token to rpi3 (3-of-5; it holds the IssuerCap) ==="
   EXP=$(( ($(date +%s) + 30*86400) * 1000 ))
-  pub_call cap_token mint "$ISSUER_CAP" "$RPI3" "'\"/proof/evolution\"'" 1 "$EXP" 100
+  # token-mint: target=owner text=resource value=expiry_ms value2=max_uses value3=ops
+  council_do mint-proof-token token-mint "$RPI3" /proof/evolution "$EXP" 100 1
   expect "proof token minted" success
-  PT=$(python -c "
-import sys,json; t=sys.stdin.read(); d=json.loads(t[t.find('{'):])
-print(next(c['objectId'] for c in d['objectChanges'] if c.get('type')=='created' and c.get('objectType','').endswith('::cap_token::CapToken')))" <<<"$LAST_OUT")
+  sleep 3
+  PT=$(created_object "$LAST_DIGEST" "::cap_token::CapToken")
   echo "PROOF_TOKEN=$PT" > evidence/v8-measurements/proof_token.env
   node_call rpi3 evolution bootstrap "$PT" 0x6
   expect "tier fields bootstrapped (dynamic fields on the same object)" success

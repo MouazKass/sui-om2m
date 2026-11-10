@@ -1,0 +1,7 @@
+owner: {'AddressOwner': '0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e'}
+publisher: 0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e
+is_cap_valid: False
+simulate decrease_guarded(genesis cap -> rpi2, 1):
+Dry run completed, execution status: failure
+MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("trust") }, function: 24, instruction: 26, function_name: Some("assert_cap_valid") }, 5) in command 0
+V2(TransactionEffectsV2 { status: Failure(ExecutionFailure { error: MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("trust") }, function: 24, instruction: 26, function_name: Some("assert_cap_valid") }, 5), comman

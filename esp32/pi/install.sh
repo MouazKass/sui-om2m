@@ -33,15 +33,15 @@ PROPS=$(getent passwd user | cut -d: -f6)/sui-runtime-config/sui.properties
 prop() { grep -E "^$1=" "$PROPS" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]'; }
 CL=$(prop sui.failover.cluster.id); PKG=$(prop sui.package.original.id); [[ -n "$PKG" ]] || PKG=$(prop sui.package.id)
 GQL=$(prop sui.graphql.url)
-sed -i -E "s|^client_id = .*|client_id = om2m-ipe-bridge-$NODE|; s|^node_label = .*|node_label = $NODE|; \
-           s|^self = .*|self = $NODE|" /etc/om2m-ipe-bridge/bridge.conf
+sed -i -E "s|^client_id *=.*|client_id = om2m-ipe-bridge-$NODE|; s|^node_label *=.*|node_label = $NODE|; \
+           s|^self *=.*|self = $NODE|" /etc/om2m-ipe-bridge/bridge.conf
 if [[ -n "$CL" && -n "$PKG" ]]; then
-  sed -i -E "s|^cluster_id = .*|cluster_id = $CL|; s|^package_original_id = .*|package_original_id = $PKG|" \
+  sed -i -E "s|^cluster_id *=.*|cluster_id = $CL|; s|^package_original_id *=.*|package_original_id = $PKG|" \
     /etc/om2m-ipe-bridge/bridge.conf
-  [[ -n "$GQL" ]] && sed -i -E "s|^graphql_url = .*|graphql_url = $GQL|" /etc/om2m-ipe-bridge/bridge.conf
+  [[ -n "$GQL" ]] && sed -i -E "s|^graphql_url *=.*|graphql_url = $GQL|" /etc/om2m-ipe-bridge/bridge.conf
 else
   echo "WARNING: no cluster/package id in $PROPS; falling back to target = local"
-  sed -i -E "s|^target = .*|target = local|" /etc/om2m-ipe-bridge/bridge.conf
+  sed -i -E "s|^target *=.*|target = local|" /etc/om2m-ipe-bridge/bridge.conf
 fi
 install -m 0644 systemd/om2m-ipe-bridge.service /etc/systemd/system/
 systemctl daemon-reload

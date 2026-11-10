@@ -1,0 +1,97 @@
+council 0xd98ce1133d02066b0158d03e3dc928061a33c67170a12d73053f3c140c1924e0   resource /in-cse/Cesp32-dht-01   reader Cesp32-reader-01
+signers: rpi1 rpi3 rpi4   token owners: rpi1 rpi3 rpi4 rpi5
+== 2. council token-mint READ for rpi1 (0xef9c6271d8...)
+   
+   === propose action 40 by rpi1 (target 0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9, text '/in-cse/Cesp32-dht-01', values 1796933915000/100000/1, ttl 86400000 ms) ===
+   4XEJt8jXejHpH6bLbd9RBNWjKKmrpHqoeWaPR5XjXNqS success 
+   proposal_id 7
+   
+   === approve proposal 7 by rpi3 ===
+   BxDadi5dE81vvYzuJW8eKiEX2bBA7AFaZ4et2e5nEb3W success 
+   approvals 2
+   
+   === approve proposal 7 by rpi4 ===
+   2rR7diq5UdvNAQWvPKSpqcRmYDt62yqYH89LyK6gduA4 success 
+   approvals 3
+   
+   === execute proposal 7 (action 40) by rpi1 ===
+   25fqBp1BykYYJ9SQsvfdyFg797kHnHDAmWwXiykR19q5 success 
+   executed action 40.0
+   created CapToken 0xe5934c1456bf231ef7562adcb4bfc844c2b4f8b102f3ef2fe8e34838f440ea7c
+== 2. council token-mint READ for rpi3 (0x27dacda1bd...)
+   
+   === propose action 40 by rpi1 (target 0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10, text '/in-cse/Cesp32-dht-01', values 1796933915000/100000/1, ttl 86400000 ms) ===
+   F9x67E9WnXKbhbMXfpzfQPaHdETXwQKaeaeynfRaPMgx success 
+   proposal_id 8
+   
+   === approve proposal 8 by rpi3 ===
+   HhJUtPxRPLvGY9LfJSxwb2LYLMYWdHvNXDU5kYobXMGc success 
+   approvals 2
+   
+   === approve proposal 8 by rpi4 ===
+   5v3CJB3rDZy2WtuLsr4t8k4HQFzgJVZBSAa7Y3Umr3sH success 
+   approvals 3
+   
+   === execute proposal 8 (action 40) by rpi1 ===
+   EsSjreVrgaBGmxW8Jfjq1AYnrh3wY9GCYbXDLPi4YXCP success 
+   executed action 40.0
+   created CapToken 0xea7fc17c39e410ff822c9aad8ac638b1fb9f1f433de0e01946cd1c7ab0d9c0b0
+== 2. council token-mint READ for rpi4 (0x7eeb2fbfc5...)
+   
+   === propose action 40 by rpi1 (target 0x7eeb2fbfc5f7287dc0488036ec3d2fa6eefe0531a1c18e33bbc65147fd8fdfc4, text '/in-cse/Cesp32-dht-01', values 1796933915000/100000/1, ttl 86400000 ms) ===
+   CbMj5ECtpgW2AptMWJjV4hQbse12d3qE7WWmxuXNx4Zv success 
+   proposal_id 9
+   
+   === approve proposal 9 by rpi3 ===
+   HSifFtQKy5qg5vkP1kVZvXhQnXahUCynUa2ku98M3VGq success 
+   approvals 2
+   
+   === approve proposal 9 by rpi4 ===
+   D8Wh6UC99on4PSokHnY3AVmJQaEnbjimNH11j1p2J4qW success 
+   approvals 3
+   
+   === execute proposal 9 (action 40) by rpi1 ===
+   13xyisTDPkH9dxkeP6eZB5a2ti5vFxkRdRQZu2XAqGdM success 
+   executed action 40.0
+   created CapToken 0xac92b92e63ef9434d90c898474a5c9d38c2ee68d137e3c3e711f1cd3cd38d8f6
+== 2. council token-mint READ for rpi5 (0xcadbb748da...)
+   
+   === propose action 40 by rpi1 (target 0xcadbb748da0d7c9fc351fb696fcc0b3999094f774c6425730a29911165391723, text '/in-cse/Cesp32-dht-01', values 1796933915000/100000/1, ttl 86400000 ms) ===
+   6YYqxMM9oqTyYbYui3GhJDRfe6KKUrvSwd4aXJtcQ65M success 
+   proposal_id 10
+   
+   === approve proposal 10 by rpi3 ===
+   EUjKtwX2mQuScxZ5aNSZ7dMexkbkamMvmpmFwYHancXS success 
+   approvals 2
+   
+   === approve proposal 10 by rpi4 ===
+   4pxoFD2G3t2Y1AgyU6R8QnLNbh2471gg7KhTkQ3es2r6 success 
+   approvals 3
+   
+   === execute proposal 10 (action 40) by rpi1 ===
+   B4Xm6XFjeYEFbMjDaR3irTHoy1E89LnVuMwHUDkoHa2F success 
+   executed action 40.0
+   created CapToken 0xe3a3751738d388a04c0743c184cdc8c7f6e9ff5cfc49dec0ce370e4f6ee6c199
+== 3. recorded in deploy/v9/mappings/rpi1.properties:
+   # rpi1: council-minted DAS mappings (esp32/das/protect_sensor.sh). Committed;
+   # appended to the generated sui.mappings.properties by scripts/v8/03_gen_config.sh.
+   addr.Cesp32-reader-01=0xef9c6271d8c6cc9e1d9707a117f876e7a8679509f141879bc05ae7bcffe1d5f9
+   token.Cesp32-reader-01\:\:/in-cse/Cesp32-dht-01=0xe5934c1456bf231ef7562adcb4bfc844c2b4f8b102f3ef2fe8e34838f440ea7c
+== 3. recorded in deploy/v9/mappings/rpi3.properties:
+   # rpi3: council-minted DAS mappings (esp32/das/protect_sensor.sh). Committed;
+   # appended to the generated sui.mappings.properties by scripts/v8/03_gen_config.sh.
+   addr.Cesp32-reader-01=0x27dacda1bdcb3fb8dc2a4b0d77b420deea5bb43d1047592ddadb19f35764ea10
+   token.Cesp32-reader-01\:\:/in-cse/Cesp32-dht-01=0xea7fc17c39e410ff822c9aad8ac638b1fb9f1f433de0e01946cd1c7ab0d9c0b0
+== 3. recorded in deploy/v9/mappings/rpi4.properties:
+   # rpi4: council-minted DAS mappings (esp32/das/protect_sensor.sh). Committed;
+   # appended to the generated sui.mappings.properties by scripts/v8/03_gen_config.sh.
+   addr.Cesp32-reader-01=0x7eeb2fbfc5f7287dc0488036ec3d2fa6eefe0531a1c18e33bbc65147fd8fdfc4
+   token.Cesp32-reader-01\:\:/in-cse/Cesp32-dht-01=0xac92b92e63ef9434d90c898474a5c9d38c2ee68d137e3c3e711f1cd3cd38d8f6
+== 3. recorded in deploy/v9/mappings/rpi5.properties:
+   # rpi5: council-minted DAS mappings (esp32/das/protect_sensor.sh). Committed;
+   # appended to the generated sui.mappings.properties by scripts/v8/03_gen_config.sh.
+   addr.Cesp32-reader-01=0xcadbb748da0d7c9fc351fb696fcc0b3999094f774c6425730a29911165391723
+   token.Cesp32-reader-01\:\:/in-cse/Cesp32-dht-01=0xe3a3751738d388a04c0743c184cdc8c7f6e9ff5cfc49dec0ce370e4f6ee6c199
+
+Next: scripts/v8/04_cutover.sh config, then ONLY="rpi1 rpi3 rpi4 rpi5" scripts/v8/04_cutover.sh redeploy
+(mappings are read once, at plugin start; the bridge re-provisions the AE after the wipe).

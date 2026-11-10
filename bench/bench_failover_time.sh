@@ -17,7 +17,7 @@ for _n in $(inv_nodes active); do
   NODE_HOST[${INV_ADDR[$_n]}]=${INV_IP[$_n]}; NODE_CONT[${INV_ADDR[$_n]}]=om2m-active
 done
 
-[[ -z "$CLUSTER_ID" ]] && { echo "ERROR: CLUSTER not set. source scripts/env.sh first." >&2; exit 1; }
+[[ -z "$CLUSTER_ID" ]] && { echo "ERROR: CLUSTER not set. source deploy/v8/env.v8.sh first (live cluster; scripts/env.sh holds retired pre-v9 ids)." >&2; exit 1; }
 command -v sui >/dev/null || { echo "ERROR: sui CLI not found" >&2; exit 1; }
 
 ssh_node() { local host="$1"; shift; ssh -F "$INV_SSH_CONFIG" -i "${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}" -o BatchMode=yes "${PARENT_USER}@${host}" "$@"; }   # v8: key auth

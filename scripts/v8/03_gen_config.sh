@@ -22,6 +22,10 @@
 #   V7_DIR        optional dir holding the LIVE v7 files as $V7_DIR/rpiN/sui.properties.
 #                 If present: sui.cli.path is carried over from it, and a key-level
 #                 v7 -> v8 diff is printed per node.
+#   EXTRA_MAPPINGS_DIR  committed per-node extra mapping lines, appended verbatim to
+#                 that node's sui.mappings.properties (default: <repo>/deploy/v9/mappings;
+#                 <name>.properties, written by esp32/das/protect_sensor.sh for
+#                 council-minted tokens). Checked by the self-check like the rest.
 #   SUI_CLI_PATH  sui.cli.path when V7_DIR does not supply it (default: /usr/local/bin/sui,
 #                 the value in config/sui.properties.sample - CONFIRM against the live file)
 #
@@ -35,6 +39,7 @@ DEPLOY_ENV="${DEPLOY_ENV:-$REPO/deploy/v8/deployment.env}"
 OUT_DIR="${OUT_DIR:-$REPO/deploy/v8}"
 ENV_SH="${ENV_SH:-$REPO/scripts/env.sh}"
 V7_DIR="${V7_DIR:-}"
+EXTRA_MAPPINGS_DIR="${EXTRA_MAPPINGS_DIR:-$REPO/deploy/v9/mappings}"
 PUBLISHER="0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e"
 GRAPHQL_URL="https://graphql.testnet.sui.io/graphql"
 
@@ -270,6 +275,11 @@ gen_mappings_peer() {  # node
 # SuiConfig.load() treats the file as optional; it is emitted anyway so the
 # bind-mount source exists and the absence of mappings is explicit.
 #
+# Exception: tokens the council minted to THIS node's own address (v9,
+# esp32/das/protect_sensor.sh) are appended at the end of this file from
+# deploy/v9/mappings/$n.properties, so the node can serve a protected read
+# when it is parent.
+#
 # Cross-node denial test (proofs/05_policy.sh style) - opt-in only, expected to
 # DENY (rejected input / E_NOT_TOKEN_OWNER), never GRANT:
 #addr.Csensor-001=${ADDR[$n]}
@@ -329,6 +339,11 @@ for n in "${NODES[@]}"; do
   d="$OUT_DIR/nodes/$n"; mkdir -p "$d"
   gen_sui_properties "$n" > "$d/sui.properties"
   if [ "$n" = "$DAS_NODE" ]; then gen_mappings_das "$n"; else gen_mappings_peer "$n"; fi > "$d/sui.mappings.properties"
+  if [ -f "$EXTRA_MAPPINGS_DIR/$n.properties" ]; then
+    { echo; echo "# --- council-minted entries, appended from deploy/v9/mappings/$n.properties"
+      echo "# (written by esp32/das/protect_sensor.sh; tokens owned by $n's own address)"
+      tr -d '' < "$EXTRA_MAPPINGS_DIR/$n.properties"; } >> "$d/sui.mappings.properties"
+  fi
   echo "wrote $d/sui.properties, $d/sui.mappings.properties"
 done
 gen_env_fragment > "$OUT_DIR/env.v8.sh"
@@ -404,9 +419,9 @@ $NODE_ROWS
 }))
 PY
 )
-python3 - "$OUT_DIR" "$EXPECT_JSON" <<'PY'
+python3 - "$OUT_DIR" "$EXPECT_JSON" "$EXTRA_MAPPINGS_DIR" <<'PY'
 import json, sys, os
-out, exp = sys.argv[1], json.loads(sys.argv[2])
+out, exp, extra_dir = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3]
 
 def load_java_properties(text):
     """java.util.Properties.load(Reader) semantics: logical lines with odd
@@ -486,8 +501,19 @@ for node, facts in exp["nodes"].items():
     check(p.get("trust.admin.cap.id") not in others, f"{node}: shares a trust cap with a peer")
 
     m, morder = load_java_properties(open(os.path.join(d, "sui.mappings.properties"), encoding="utf-8").read())
+    ef = os.path.join(extra_dir, node + ".properties")
+    extra = load_java_properties(open(ef, encoding="utf-8").read())[0] if os.path.isfile(ef) else {}
+    for k, v in extra.items():
+        if k.startswith("token."):
+            sep = k[6:].find("::")
+            check(sep > 0, f"{node}: extra token key lost its '::' -> {k!r} (C6)")
+            if sep > 0: print(f"  {node}: extra token key round-trips: originator={k[6:6+sep]!r} resource={k[6+sep+2:]!r} -> {v}")
+        elif k.startswith("addr."):
+            check(v == facts["addr"], f"{node}: extra {k} maps to {v}, not this node's own address (A3/A4 would refuse it)")
+        else:
+            check(False, f"{node}: stray extra mapping key {k!r} (a mis-escaped line?)")
     if node == exp["das"]:
-        want = {}
+        want = dict(extra)
         for o in exp["originators"]:
             want[f"addr.{o}"] = facts["addr"]
             for r, t in exp["tokens"].items():
@@ -495,6 +521,8 @@ for node, facts in exp["nodes"].items():
         check(m == want, f"{node}: mappings differ from expected:\n    got  {m}\n    want {want}")
         # Replay SuiConfig.load(): substring(6), indexOf("::"), split.
         for k, v in m.items():
+            if k in extra:
+                continue
             if k.startswith("token."):
                 rest = k[6:]; sep = rest.find("::")
                 check(sep > 0, f"{node}: token key lost its '::' -> {k!r} (C6)")
@@ -507,8 +535,8 @@ for node, facts in exp["nodes"].items():
             else:
                 check(False, f"{node}: stray mapping key {k!r} (a mis-escaped line?)")
     else:
-        check(m == {}, f"{node}: expected no active mappings, got {m}")
-        print(f"  {node}: no active mappings (fail-closed by design)")
+        check(m == extra, f"{node}: expected only the extra mappings {extra}, got {m}")
+        print(f"  {node}: " + (f"{len(extra)} council-minted mapping(s), nothing else" if extra else "no active mappings (fail-closed by design)"))
     print(f"  {node}: sui.properties {len(p)} keys parsed OK; trust.admin.cap.id={p.get('trust.admin.cap.id')}")
 
 if fail:

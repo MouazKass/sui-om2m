@@ -77,6 +77,13 @@ Pre-reqs on every Raspberry Pi:
   and `mouazkass/om2m-mn-cse-configured` Docker images).
 - Mosquitto MQTT broker reachable at `tcp://10.25.96.200:1883`.
 
+> **Since v9 (2026-11-10) these steps are historical.** The live testbed is
+> governed by a 3-of-5 council and the publisher's caps no longer work, so
+> `deploy_sui_package.sh` and `bootstrap_testbed.sh` refuse to run (exit 3).
+> To operate the live system, use `ROLLOUT_V9.md` and
+> `scripts/v9/council.sh propose|approve|execute|status`. A deliberate, separate
+> deployment is `scripts/v8/01_publish.sh --execute --fresh-publish`.
+
 Step 1 — Publish the package on one node (typically the IN-CSE at
 10.25.96.200):
 

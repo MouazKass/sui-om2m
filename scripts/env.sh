@@ -1,3 +1,10 @@
+# >>> PRE-v9 IDS (v1..v7). Not the live deployment since 2026-11-10. <<<
+# Live ids: deploy/v9/deployment.env (package, council) and deploy/v8/deployment.env
+# (registries, cluster; v9 types keep the v8 id). The publisher caps listed below are
+# superseded: the council holds the admin caps and the genesis trust cap is revoked.
+# Admin actions: scripts/v9/council.sh. Set SUI_OM2M_ALLOW_LEGACY=1 to silence this.
+[ "${SUI_OM2M_ALLOW_LEGACY:-0}" = 1 ] || echo "WARNING: scripts/env.sh holds pre-v9 ids; live ids are in deploy/v9/deployment.env and deploy/v8/deployment.env" >&2
+
 # === Sui testnet object IDs — Mouaz's deployment, 2026-05-23 ===
 # RETIRED: type-root of the old v1..v6 package line. NOT the type root of the
 # package in use (see PKG_V7 and its comment block below). Kept only to resolve

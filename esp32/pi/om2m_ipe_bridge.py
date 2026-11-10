@@ -577,6 +577,15 @@ class OneM2MClient:
     def delete(self, ri):
         return self._request("DELETE", self.url_for_ri(ri)).status_code
 
+    def delete_ae(self, ri):
+        """Delete an AE that may carry daci. OM2M 1.x (EclipseLink) keeps a
+        deleted AE in the cached <dynamicAuthorizationConsultation>'s AE list,
+        so the NEXT AE created with that daci fails with HTTP 500 (FK
+        AE_DAC_JOIN_AE_ID, seen live 2026-11-10) until om2m-active restarts.
+        Unlinking daci first (UPDATE daci=[]) keeps the cache consistent."""
+        self._request("PUT", self.url_for_ri(ri), body={"m2m:ae": {"daci": []}})
+        return self.delete(ri)
+
     def latest_content(self, container_ri):
         r = self._request("GET", self.url_for_ri(container_ri) + "/la")
         if r.status_code != 200:
@@ -1037,7 +1046,7 @@ class Bridge:
                   "exactly-once then relies on the bridge cache alone")
         except Duplicate:
             print("duplicate contentInstance name rejected (409): exactly-once storage holds")
-        code = cse.delete(pl.ae_ri)
+        code = cse.delete_ae(pl.ae_ri)
         if code not in (200, 202, 204):
             print(f"DELETE probe -> {code}: resource is locked (created without a usable ACP?)")
             return 3

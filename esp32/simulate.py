@@ -44,7 +44,7 @@ from flask import Flask, jsonify, request, Response
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIM = os.path.join(HERE, "sim")
-RUN = os.path.join(HERE, "sim_runtime")
+RUN = os.environ.get("SIM_RUNTIME") or os.path.join(HERE, "sim_runtime")   # override when HERE is read-only
 PY = sys.executable
 HDR = {"X-M2M-Origin": "admin:admin", "Accept": "application/json"}
 CHAIN_PORT, GQL_PORT, UI_PORT = 19000, 19001, 8000

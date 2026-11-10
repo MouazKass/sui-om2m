@@ -23,7 +23,7 @@ run env E2E_LOGDIR="$LOGDIR/e2e" FW_PUB="$LOGDIR/fw_pub.txt" python3 sim/run_e2e
 step "6. 5-node cluster end-to-end"
 run env E2E_LOGDIR="$LOGDIR/cluster" python3 sim/run_cluster_e2e.py
 step "7. dashboard simulator self-test"
-run python3 simulate.py --selftest
+run env SIM_RUNTIME="$LOGDIR/dashboard" python3 simulate.py --selftest
 echo
 [[ $FAIL -eq 0 ]] && echo "ALL TEST GROUPS PASSED" || echo "$FAIL TEST GROUP(S) FAILED"
 exit $FAIL

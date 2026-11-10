@@ -13,7 +13,7 @@ esp32/
   firmware/esp32_sensor_node/   esp32_sensor_node.ino, config.h, cluster.h (broker selection)
   pi/                           om2m_ipe_bridge.py (runs on every Pi), bridge.conf.example,
                                 members.conf.example, install.sh, systemd/, smoke_test.sh
-  das/                          protect_sensor.sh (publisher, WSL), protected_read.sh (on the parent)
+  das/                          protect_sensor.sh (council votes), protected_read.sh (on the parent)
   sim/                          esp32_sim.py, mock_cse.py, chain_sim.py, mock_sui_gql.py,
                                 tcp_proxy.py, run_e2e.py, run_cluster_e2e.py, firmware_hostcheck/
   tests/                        test_selector.py, test_bridge_unit.py
@@ -35,6 +35,18 @@ python3-requests python3-flask g++`). Then:
                                 # dashboard self-test  -> "ALL TEST GROUPS PASSED"
 python3 simulate.py             # dashboard at http://127.0.0.1:8000
 ```
+
+Without installing anything on a host, run the same suite in a throwaway
+container (default: on rpi1 over ssh; `E2E_HOST=local` for this machine's docker):
+
+```
+esp32/sim/run_e2e_in_docker.sh  # debian + g++ + mosquitto + pinned paho/requests/flask,
+                                # --network none, sources mounted read-only;
+                                # container, image and temp dir removed afterwards
+```
+
+The sims bind only 127.0.0.1 ports inside the container, so they cannot touch the
+live brokers. Last run: `evidence/e2e_in_docker_2026-11-11.txt`.
 
 From the dashboard you can:
 - power a sensor off;
@@ -99,17 +111,29 @@ and republishes it, so sensors learn the new node without a reflash.
 
 ## 4. Putting a sensor behind the chain
 
-1. On the publisher (WSL, repo root):
+1. From Git Bash on the laptop (VPN up), repo root:
    ```
-   esp32/das/protect_sensor.sh esp32-dht-01 Cesp32-reader-01     # every active node
+   esp32/das/protect_sensor.sh esp32-dht-01 Cesp32-reader-01 rpi2   # token for rpi2 only
+   esp32/das/protect_sensor.sh esp32-dht-01 Cesp32-reader-01        # a token for every active node
    ```
-   This sets a READ policy on `/in-cse/C<device>` and mints one READ token per node,
-   because the DAS signs as whichever node is parent. It then prints each node's two
-   mapping lines.
-2. Add each node's lines to its `~/sui-runtime-config/sui.mappings.properties` and
-   `/tmp/sui.mappings.properties`. Keep the `\:\:`. Then recreate `om2m-active`
-   through `scripts/v8/04_cutover.sh`: mappings are read only at plugin start, and the
-   bridge re-provisions the AE after the wipe.
+   Since v9 the 3-of-5 council holds PolicyAdminCap and IssuerCap, so the script
+   does not use any publisher cap. Each write is a council vote through
+   `scripts/v9/council.sh`: proposed by the first of `SIGNERS` (default `rpi1 rpi3 rpi4`),
+   approved by the other two, then executed. Each step is signed on that Pi with its own key.
+   Votes: one `policy-set` (READ on `/in-cse/C<device>`), then one `token-mint` per
+   token owner. The DAS signs as its own node, so only a node that holds a token can
+   serve a protected read. The two mapping lines per owner are written to
+   `deploy/v9/mappings/<node>.properties`, which is committed.
+2. `scripts/v8/03_gen_config.sh` appends that file to the node's generated
+   `sui.mappings.properties`. Its self-check verifies the `\:\:` escaping and that
+   the `addr.` line is the node's own address. Then run
+   `ONLY=rpi2 scripts/v8/04_cutover.sh config` and `... redeploy`. Mappings are read
+   only at plugin start, and the bridge re-provisions the AE after the wipe.
+   Today every active node (rpi1–rpi5) holds its own READ token for `esp32-dht-01`
+   (council proposals 6–10), so a protected read keeps working whichever node is
+   parent; verified live across an rpi2 → rpi3 → rpi2 handover on 2026-11-11
+   (`evidence/protected_read_failover_2026-11-11.txt`). A node added later needs one
+   more `token-mint` vote (`SKIP_POLICY=1 … protect_sensor.sh <device> <reader> <node>`).
 3. On the parent: `esp32/das/protected_read.sh esp32-dht-01 Cesp32-reader-01`. Expect:
    - RETRIEVE → HTTP 200, the `latest=` reading and a `Sui GRANT` log line;
    - DELETE → 403, with a `Sui DENY` found by simulation and no transaction (F3);
@@ -131,6 +155,13 @@ payloads (`"v":1`, boot id, no epoch) are still accepted.
 
 ## 6. Notes for the infrastructure owner
 
+- **Never DELETE a DAS-wired AE directly.** OM2M 1.x (EclipseLink) leaves a deleted
+  AE in the cached `sui-dac` list. After that, every NEW AE created with that `daci`
+  fails with HTTP 500 (`FK_AE_DAC_JOIN_AE_ID`) until `om2m-active` restarts. This was
+  seen live on 2026-11-10: the first `install all` probes poisoned the parent, and the
+  smoke tests on rpi1/3/4/5 failed. Unlink first, then delete:
+  `PUT {"m2m:ae":{"daci":[]}}`, then `DELETE`. The bridge's `--check` now does this
+  (`CSE.delete_ae`).
 - The bridge needs `provision-das.sh` Part B (`acp_sui_dac`, `sui-dac`) on **every**
   node. It fails closed and buffers without it.
 - The bridge writes to the parent's PoA, so every node must reach every other node's

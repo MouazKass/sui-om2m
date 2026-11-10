@@ -118,7 +118,7 @@ was checked valid and owned by its node before arming.
 | deposit ClusterAdminCap | `HJx9ZgzFVLQsAHs6gQyfFwPk1y1v2SobrYwpmC5qYAJi` |
 
 `scripts/v9/05_verify.sh`: **23 pass, 0 fail, 2 waiting** (the multisig, postponed; the
-publisher's genesis trust cap, still valid, see §6). The attack checks, simulated so
+publisher's genesis trust cap, since revoked by the council, see §6 item 2). The attack checks, simulated so
 nobody signs:
 
 - rpi1 revoking rpi2's cap through v9 → `abort trust::assert_not_governed:8` (`E_GOVERNED`);
@@ -201,15 +201,114 @@ each step on the member's own Pi, with its own key and cap:
    - Evidence: `evidence/v9-rollout/address_balance_gas_deploy.log`.
    - The container's 1.73 CLI is still coin-only; it is only used by legacy paths
      (`ptb/PtbBuilder`), not by the native transaction builder.
-2. **The publisher's genesis trust cap is still valid** (bounded score writes, A12). The
-   intended first governed action is revoking it:
-   `scripts/v9/council.sh propose rpi1 trust-revoke-admin <TRUST_ADMIN_CAP>` then two
-   approvals and `execute`. Left for the owner to decide: the publisher-signed proofs
-   (02, 09) use that cap.
-3. **Publisher-cap scripts now need the council.** Token minting, policy writes and node
-   admission are council proposals (`token-mint` 40, `policy-set` 30, `id-register` 20,
-   `trust-add-node` 12, `trust-grant-admin` 10, `add-member` 1). This affects
-   `esp32/das/protect_sensor.sh` and proofs 02/07/09, which still call the publisher's caps
-   directly. `scripts/onboard_onchain.sh` already detects the council and prints the
-   proposals instead.
+2. **The publisher's genesis trust cap: REVOKED by the council (2026-11-10).**
+   `TR_ADMIN_CAP` `0x33e6daad…8cf0` (owner: the publisher). Before, a free simulation of
+   `trust::decrease_guarded` with it succeeded and `is_cap_valid` was `true`
+   (`evidence/v9-rollout/genesis_cap_before.txt`). The vote
+   (`evidence/v9-rollout/genesis_cap_revocation.log`):
+
+   | Step | Signer | Digest |
+   |---|---|---|
+   | propose `trust-revoke-admin` (proposal **5**, counts as approval 1) | rpi1 | `HVjxQ5XMsZnjU91Pq8MsZcSqFy3MKt6QNWAYuzVpVPvc` |
+   | approve (2) | rpi4 | `5TZXqNjA9QdViM2BDH2VcZZMYehsKoLbBiB27u4ULDpa` |
+   | approve (3) | rpi5 | `7uztXhd1kiXShCKoeXvBAXhWJkXAZrpUVgSxe7Up7m15` |
+   | `execute_trust` | rpi1 | `CHDdqJhsuabCV44onWAN82tpmWAeBmCthbSUKtyyxjG2` |
+
+   After: `is_cap_valid` = `false`, and the same simulation aborts in
+   `trust::assert_cap_valid` with code **5** (`E_CAP_REVOKED`)
+   (`evidence/v9-rollout/genesis_cap_after.txt`). All five node caps stay valid
+   (`council.sh status`). Every trust AdminCap still valid is now held by a node.
+3. **Publisher-cap scripts moved to the council. DONE for the proofs (2026-11-10).**
+   `proofs/lib_v8.sh` no longer has a publisher signer: `pub_call` is replaced by
+   `council_do`, which proposes on one member, approves on the next ones and executes
+   through `scripts/v9/council.sh` (each signs with its own key on its own Pi).
+   - Proof 09 (revocation): the throwaway cap is granted (proposal 1) and revoked
+     (proposal 2) by the council; it adds the check that one node alone cannot revoke
+     another's cap (abort 8, `E_GOVERNED`). Under governance the single-cap grant and
+     `add_node` paths abort with 8 before the validity check, so consequences 2 and 3 now
+     expect 8 (the A1/A2 validity checks behind them stay covered by the Move tests).
+     **8/8 pass** (`evidence/v9-rollout/proof_09_council.log`).
+   - Proof 07 (evolving tokens): the proof token is minted by the council (proposal 3,
+     `ACVTBU3xW5TjpMsE7UHp2uUxAv3ibUXMoDrppwWndKRm`; new token `0xfeb40a1f…e601` in
+     `evidence/v8-measurements/proof_token.env`). **9/9 pass** (`proof_07_v9.log`).
+   - Proof 02 (trust engine) never used a publisher cap (rpi1's own cap does the peer
+     writes). **5/5 pass** (`proof_02_v9.log`).
+   - `scripts/onboard_onchain.sh` refuses under governance and now prints the exact
+     `council.sh` commands.
+   - The historical publisher-cap scripts now refuse to run (exit 3, pointing at
+     `council.sh`) via `scripts/lib/legacy_guard.sh`: `scripts/bootstrap_testbed.sh`,
+     `scripts/deploy_sui_package.sh`, `scripts/evolution_lifecycle_evidence.sh`,
+     `scripts/evolution_demote_evidence.sh`, and `scripts/v8/02_bootstrap.sh` in
+     `--simulate`/`--execute` mode against `deploy/v8` (plan mode still works).
+     `scripts/v8/01_publish.sh --execute` refuses while `deploy/v8/deployment.env`
+     exists; `--execute --fresh-publish` makes a separate deployment under
+     `deploy/fresh-<UTC>/` and never touches `deploy/v8`. `scripts/env.sh` signs
+     nothing (old ids only) and now warns when sourced. Override for a deliberate
+     run against an old deployment: `SUI_OM2M_ALLOW_LEGACY=1`.
+     `esp32/das/protect_sensor.sh` goes through the council (ESP section below).
 4. **The UpgradeCap multisig** (V9_DESIGN.md §5) when the three signers' keys exist.
+
+## ESP32 layer live (2026-11-10)
+
+Evidence: `esp32/evidence/live_install_2026-11-10.txt`, `live_failover_2026-11-10.txt`
+(+ `_sim.log`), `protected_read_2026-11-10.txt`.
+
+- **Bridge on all five Pis.** Installed with `esp32/deploy_to_pis.sh install all`; rpi3's v1
+  bridge was upgraded in place (backup under `/etc/om2m-ipe-bridge/v1-backup-*`). Every
+  bridge writes to the current parent's CSE. Two bugs were found and fixed on the way:
+  - the installer never filled in the chain ids (a `sed` pattern bug);
+  - OM2M's DAC cache gets poisoned when a DAS-wired AE is deleted directly. The
+    bridge now unlinks `daci` first; see `esp32/README.md` §6.
+- **Broker failover, real cluster.** `esp32/sim/live_failover.sh` ran on rpi1 with a
+  temporary DROP rule that matched only the simulator's uid. The device moved
+  rpi2 → rpi3, then returned to rpi2 after rpi2 had been reachable for 30 s. Of
+  75 readings, 75 were stored on the parent, seqs 0–74, with 0 missing and 0
+  duplicates. The rule was removed afterwards.
+- **Sensor protected by council vote, with no publisher cap.** Each vote was proposed
+  by rpi1, approved by rpi3 and rpi4, and executed by rpi1:
+  - proposal 4, `policy-set` READ on `/in-cse/Cesp32-dht-01`: executed in tx
+    `4j54c6bLBiLCynDgvdNXmFk7YLHA1Po9d2Xji1i1VzoS`;
+  - proposal 6, `token-mint` READ owned by rpi2: executed in tx
+    `2rjiekYEJXSRs2HTwaUQP7vCB3jCsUTQ9DW81NEUqA38`, CapToken `0x6b0b4226…7d54`.
+
+  The two mapping lines are in `deploy/v9/mappings/rpi2.properties`, which
+  `03_gen_config.sh` now appends and self-checks. rpi2 was redeployed with
+  `ONLY=rpi2 … config` and `redeploy`, and it kept the parent role.
+- **Ordinary oneM2M requests as `Cesp32-reader-01` on rpi2:**
+  - RETRIEVE: HTTP 200 with the latest reading; Sui GRANT in tx
+    `FgHYC184RbzD3HZWQWzvFRdW1dygewxw13M7bryYdCQu` (SUCCESS, sender rpi2);
+  - DELETE: HTTP 403; Sui DENY `cap_token::E_OP_NOT_ALLOWED`, source SIMULATED, so
+    nothing was submitted and no gas was spent;
+  - the `data` container: 403 with no DAS call, as expected.
+- ~~Limit: only rpi2 holds a token.~~ Closed 2026-11-11, see below.
+
+### Every node can serve a protected read (2026-11-11)
+
+Four more council votes (`SKIP_POLICY=1 SIGNERS="rpi1 rpi3 rpi4"
+esp32/das/protect_sensor.sh esp32-dht-01 Cesp32-reader-01 rpi1 rpi3 rpi4 rpi5`),
+each proposed by rpi1, approved by rpi3 and rpi4, executed by rpi1:
+
+| Owner | Proposal | Execute tx | READ token |
+|---|---|---|---|
+| rpi1 | 7 | `25fqBp1BykYYJ9SQsvfdyFg797kHnHDAmWwXiykR19q5` | `0xe5934c1456bf231ef7562adcb4bfc844c2b4f8b102f3ef2fe8e34838f440ea7c` |
+| rpi3 | 8 | `EsSjreVrgaBGmxW8Jfjq1AYnrh3wY9GCYbXDLPi4YXCP` | `0xea7fc17c39e410ff822c9aad8ac638b1fb9f1f433de0e01946cd1c7ab0d9c0b0` |
+| rpi4 | 9 | `13xyisTDPkH9dxkeP6eZB5a2ti5vFxkRdRQZu2XAqGdM` | `0xac92b92e63ef9434d90c898474a5c9d38c2ee68d137e3c3e711f1cd3cd38d8f6` |
+| rpi5 | 10 | `B4Xm6XFjeYEFbMjDaR3irTHoy1E89LnVuMwHUDkoHa2F` | `0xe3a3751738d388a04c0743c184cdc8c7f6e9ff5cfc49dec0ce370e4f6ee6c199` |
+
+(rpi2's token from proposal 6 is unchanged.) Mapping lines are in
+`deploy/v9/mappings/rpi{1,3,4,5}.properties`; `ONLY="rpi1 rpi3 rpi4 rpi5"
+04_cutover.sh config`, then `redeploy` one node at a time. rpi2 was not touched.
+
+- **Free dry-run, every new owner** (`esp32/evidence/token_sim_4nodes_2026-11-11.txt`):
+  the full access PTB signed as the owner with its own token: READ succeeds, DELETE
+  aborts `cap_token::validate_for_use` code 4 (`E_OP_NOT_ALLOWED`) on rpi1, rpi3,
+  rpi4 and rpi5.
+- **Live, across a parent change** (`esp32/evidence/protected_read_failover_2026-11-11.txt`):
+  rpi2 let its lease lapse (`Co3rJ3ZG…`), rpi3 claimed (`9XwVk5zR…`, epoch 6→7) and its
+  plugin anchored a 20 min lease by itself. Six simulated readings landed on rpi3. An
+  ordinary RETRIEVE on rpi3 as `Cesp32-reader-01`: HTTP 200, Sui GRANT
+  `9sZoJZQzW4oJr7Qd6Ba8jjJDFwQJfsFFbDdXwXu3Xa4g` (SUCCESS, sender rpi3); DELETE: 403,
+  DENY by simulation, nothing submitted. Then handed back (rpi3 lapse `9tdYiBE6…`,
+  rpi2 claim `6doE2kSv…`, epoch 8), readings again, and the same read on rpi2 GRANTed
+  (`CM6jb7Cf…`). `04_cutover.sh verify` afterwards: all five healthy, v2 gossip from
+  all five, C2 GRANT; parent rpi2, epoch 8.

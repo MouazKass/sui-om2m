@@ -1,0 +1,14 @@
+# esp32/das/protected_read.sh esp32-dht-01 Cesp32-reader-01, run on rpi2 (parent) 2026-11-10 after the council votes
+# GRANT tx FgHYC184RbzD3HZWQWzvFRdW1dygewxw13M7bryYdCQu: SUCCESS, sender 0x4be6060a... (rpi2), checkpoint 404992705
+# DENY source=SIMULATED: found by the free precheck, never submitted (F3)
+== 1. RETRIEVE esp32-dht-01 as Cesp32-reader-01 -> expect GRANT
+   latest reading: {"epoch":1,"humidity":56.8,"light_pct":63,"light_raw":2590,"node":"rpi2","rx_ts":1794334914551,"seq":74,"temperature":26.0,"ts":1794334914}
+   HTTP 200
+
+   Sui GRANT originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=1 digest=FgHYC184RbzD3HZWQWzvFRdW1dygewxw13M7bryYdCQu (3416 ms)
+== 2. DELETE esp32-dht-01 as Cesp32-reader-01 -> expect 403 / DENY, no transaction
+   HTTP 403
+   Sui DENY originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=4 source=SIMULATED err=cap_token::E_OP_NOT_ALLOWED (abort 4) [raw: precheck: MoveAbort(MoveLocation { module: ModuleId { address: 0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("cap_token") }, function_name: Some("validate_for_use"), instruction: 55 }, 4) -- Error in 3rd command, from '0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a::cap_token::validate_for_use' (instruction 55), abort code: 4]
+== 3. control: RETRIEVE esp32-dht-01/data/la as Cesp32-reader-01 -> expect 403, no Sui line
+   HTTP 403
+   (nothing above = the DAS was not consulted, as expected)
