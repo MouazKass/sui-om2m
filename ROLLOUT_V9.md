@@ -11,7 +11,7 @@ The design and its tests are in [V9_DESIGN.md](V9_DESIGN.md).
 | Package v9 (version 2) | `0x5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a`, upgrade tx `AQSn69Wq3VYfaiCkTVVBMgsXidbTY912LtFKu5GY9CXX` (≈ 0.207 SUI) |
 | Type origin (unchanged) | `0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1` (`sui.package.original.id`) |
 | Council | `0xd98ce1133d02066b0158d03e3dc928061a33c67170a12d73053f3c140c1924e0`, tx `9GcWp8CNNvmRVmjPgMmdQRtZj3uL27xVJYqfbHPRwqN6`; members rpi1–rpi5, threshold 3 |
-| UpgradeCap | still with the publisher `0xb87f…6a1e` (option A). The 3-of-5 multisig `0x05550e81…5e27` (publisher + upgrade keys on rpi1/3/4/5) exists, is funded and passed a live rehearsal on 2026-11-10 (section "UpgradeCap multisig"); **the transfer of the real cap waits for Mouaz's go** |
+| UpgradeCap | owned by the 3-of-5 multisig `0x05550e81…5e27` (publisher + upgrade keys on rpi1/3/4/5) since 2026-11-11, tx `AA88mpRyb2obsERSapysUV9DBuS2AzJT5ukJyePydChW`. Upgrades: `scripts/v9/upgrade_multisig.sh <3 signers>` |
 | Bundle | `fd87d2e01ad6e6b6…` on all five nodes (157 JUnit tests pass) |
 
 ## 1. The two new nodes
@@ -246,7 +246,7 @@ each step on the member's own Pi, with its own key and cap:
      nothing (old ids only) and now warns when sourced. Override for a deliberate
      run against an old deployment: `SUI_OM2M_ALLOW_LEGACY=1`.
      `esp32/das/protect_sensor.sh` goes through the council (ESP section below).
-4. **The UpgradeCap multisig**: built and rehearsed live (section "UpgradeCap multisig"); only the irreversible transfer of the real cap is left, for Mouaz to confirm.
+4. **The UpgradeCap multisig**: DONE 2026-11-11. The real v9 UpgradeCap was transferred to `0x05550e81…5e27`, tx `AA88mpRyb2obsERSapysUV9DBuS2AzJT5ukJyePydChW`; verified owner `AddressOwner(0x05550e81…5e27)`. No single key can upgrade the package any more.
 
 ## UpgradeCap multisig (2026-11-10)
 

@@ -12,7 +12,7 @@ The TrustRegistry is governed by the 3-of-5 council `0xd98ce113...24e0`
 | trust AdminCap genesis `0x33e6daad...8cf0` (`TR_ADMIN_CAP`) | publisher | **REVOKED** by council proposal 5, execute tx `CHDdqJhsuabCV44onWAN82tpmWAeBmCthbSUKtyyxjG2`; any guarded use aborts 5 |
 | identity AdminCap | consumed by `create_council` | gone; registration is council action 20/21 |
 | PolicyAdminCap, IssuerCap, ClusterAdminCap | inside the council | council actions 30-33, 40, 50 |
-| UpgradeCap | publisher | option A; multisig pending (V9_DESIGN.md section 5) |
+| UpgradeCap | 3-of-5 multisig `0x05550e81…5e27` | transferred 2026-11-11, tx `AA88mpRyb2obsERSapysUV9DBuS2AzJT5ukJyePydChW` |
 
 Grants and revocations of other nodes' caps are council-only (`E_GOVERNED` = 8 for any
 single cap); a cap may still revoke itself. Proof 09's throwaway caps are granted,

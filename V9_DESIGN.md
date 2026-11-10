@@ -376,8 +376,7 @@ built in a WSL copy.
 > (build, sign on each machine, combine, execute). Rehearsal on a throwaway
 > package: 2 signatures rejected, 3 accepted (`ROLLOUT_V9.md`, "UpgradeCap
 > multisig"; `evidence/v9-rollout/multisig_rehearsal_2026-11-10.log`). The real
-> v9 UpgradeCap transfer (`scripts/v9/01_transfer_upgradecap.sh --execute`) is
-> run by Mouaz. The 2-of-3 person-signer plan below is the original design,
+> v9 UpgradeCap was transferred to it on 2026-11-11 (tx `AA88mpRyb2obsERSapysUV9DBuS2AzJT5ukJyePydChW`). The 2-of-3 person-signer plan below is the original design,
 > still valid if human signers replace the Pi keys (`V9_SIGNERS.md`).
 
 ### Original design: 2-of-3 person signers
