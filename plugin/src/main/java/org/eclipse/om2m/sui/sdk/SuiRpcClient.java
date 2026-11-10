@@ -60,6 +60,16 @@ public final class SuiRpcClient {
         + " effects { digest status " + EXEC_ERROR_FIELDS + " }"
         + " outputs { returnValues { value { type { repr } bcs } } } } }";
 
+    /**
+     * F3 pre-check: simulate the EXACT TransactionData that will be signed and
+     * submitted (same sender, gas coin, gas price/budget, object versions and
+     * commands), with every input/gas check enabled. Free: no signature, no gas,
+     * nothing is committed.
+     */
+    static final String Q_PRECHECK =
+        "query($tx:JSON!){ simulateTransaction(transaction:$tx, checksEnabled:true){"
+        + " effects { status " + EXEC_ERROR_FIELDS + " } } }";
+
     private final SuiGraphQlClient gql;
     private final SuiObjectFetcher fetcher;   // for the reference gas price only
     private volatile long cachedRgp = -1L;
@@ -110,6 +120,34 @@ public final class SuiRpcClient {
         ObjectNode eff = out.putObject("effects");
         if (!digest.isEmpty()) eff.put("transactionDigest", digest);
         eff.set("status", statusNode(effects));
+        return out;
+    }
+
+    /**
+     * Free pre-check of a full, unsigned TransactionData (see {@link #Q_PRECHECK}).
+     *
+     * @return {@code {"effects":{"status":{"status":"success"|"failure"|"unknown","error":E}}}}
+     * @throws IOException transport/GraphQL errors (including a refused input
+     *         such as a stale object version); callers fail closed on these
+     */
+    public JsonNode precheckTransaction(String txBytesB64) throws IOException {
+        ObjectNode v = SuiGraphQlClient.vars();
+        v.putObject("tx").putObject("bcs").put("value", txBytesB64);
+        return reshapePrecheck(gql.execute(Q_PRECHECK, v));
+    }
+
+    /** Pure reshaper for {@link #Q_PRECHECK}'s data. */
+    static JsonNode reshapePrecheck(JsonNode data) throws IOException {
+        JsonNode sim = data.path("simulateTransaction");
+        if (sim.isMissingNode() || sim.isNull()) {
+            throw new IOException("Sui GraphQL: simulateTransaction returned no result");
+        }
+        JsonNode effects = sim.path("effects");
+        if (effects.isMissingNode() || effects.isNull()) {
+            throw new IOException("Sui GraphQL: simulateTransaction returned no effects");
+        }
+        ObjectNode out = MAPPER.createObjectNode();
+        out.putObject("effects").set("status", statusNode(effects));
         return out;
     }
 

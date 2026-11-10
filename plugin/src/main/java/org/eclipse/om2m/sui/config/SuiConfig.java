@@ -52,6 +52,17 @@ public final class SuiConfig {
     public final String  parentPoa;        // this node's HTTP PoA when acting as parent
     public final String  poaFilePath;      // where to persist the current parent PoA for followers
     public final boolean roleSwitchEnabled; // whether to invoke role-switch.sh on parent changes
+    // F3: DENY handling (see das.DenyGuard / das.DenyLog / NativePtbBuilder.precheckThenSubmit)
+    public final boolean precheckEnabled;      // simulate before paying; DENYs cost no gas
+    public final long    denyCacheTtlMs;       // repeat DENY served locally within this TTL; 0 = off
+    public final int     denyCacheMax;         // LRU bound on cached DENY keys
+    public final int     denyRateMax;          // verdict DENYs per originator per window before throttling; 0 = off
+    public final long    denyRateWindowMs;
+    public final String  denyLogPath;          // JSON-lines DENY log; empty = no file
+    public final long    denyLogMaxBytes;
+    public final int     denyLogKeep;
+    public final boolean denyAuditFlushEnabled; // v9 only: anchor DENY batches on-chain
+    public final long    denyAuditFlushIntervalMs;
     // Provisioning maps: populated by the IN-CSE when tokens are minted.
     private final java.util.Map<String,String> addrIndex =
         new java.util.concurrent.ConcurrentHashMap<>();
@@ -93,6 +104,18 @@ public final class SuiConfig {
         this.parentPoa           = p.getProperty("sui.parent.poa", "");
         this.poaFilePath         = p.getProperty("sui.poa.file.path", "/etc/sui-cluster/current-parent-poa");
         this.roleSwitchEnabled   = Boolean.parseBoolean(p.getProperty("sui.role.switch.enabled", "false"));
+        this.precheckEnabled     = Boolean.parseBoolean(p.getProperty("sui.das.precheck.enabled", "true").trim());
+        this.denyCacheTtlMs      = Long.parseLong(p.getProperty("sui.das.deny.cache.ttl.ms", "10000").trim());
+        this.denyCacheMax        = Integer.parseInt(p.getProperty("sui.das.deny.cache.max", "1024").trim());
+        this.denyRateMax         = Integer.parseInt(p.getProperty("sui.das.deny.rate.max", "30").trim());
+        this.denyRateWindowMs    = Long.parseLong(p.getProperty("sui.das.deny.rate.window.ms", "60000").trim());
+        this.denyLogPath         = p.getProperty("sui.das.deny.log.path", "/var/lib/sui-om2m/deny-log.jsonl").trim();
+        this.denyLogMaxBytes     = Long.parseLong(p.getProperty("sui.das.deny.log.max.bytes", "5242880").trim());
+        this.denyLogKeep         = Integer.parseInt(p.getProperty("sui.das.deny.log.keep", "3").trim());
+        this.denyAuditFlushEnabled = Boolean.parseBoolean(p.getProperty("sui.das.deny.audit.flush.enabled", "false").trim());
+        // Floor at the contract's minimum batch interval (5 min): a faster flush would only abort.
+        this.denyAuditFlushIntervalMs = Math.max(300_000L,
+            60_000L * Long.parseLong(p.getProperty("sui.das.deny.audit.flush.interval.min", "15").trim()));
     }
 
     private static String req(Properties p, String key) {

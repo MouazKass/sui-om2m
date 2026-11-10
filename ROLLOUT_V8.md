@@ -139,7 +139,7 @@ Plugin tests: **101/101** (from 33 at the start of the session). Every fix above
 - v9 compatible upgrade: quorum (limitation 2) plus the UpgradeCap moved to a multisig. **Also a v9 candidate:** bind the advertised PoA to the parent that set it, or clear it in `claim_parent` (finding F2 below)
 - ~~Re-measure latency, gas and failover for the paper, on the real DAC path~~ done, see `evidence/V8_MEASUREMENTS.md`
 - Per-originator on-chain identity (design decision for the paper)
-- **Decide how DENYs are handled** (F3 below): today each one is a paid, aborted transaction that never reaches the audit trail
+- ~~**Decide how DENYs are handled** (F3 below)~~ done: DENYs cost no gas since 2026-11-10 (free pre-check, deployed); on-chain DENY batches are staged for v9. See "F3" at the end
 
 ---
 
@@ -171,7 +171,7 @@ Deployed with `prepare` → `redeploy` (twice, `set -o pipefail`, exit 0); the r
 - **Failover** (parent CSE stopped; no human action). Takeover **5.0 s after the lease expired**; total time = remaining lease (642 s in this run) + 5 s. 2 claims (1 winner, 1 abort 3) and ~4 mSUI for the whole failover. The new parent anchored and published its PoA within 5.3 s of winning; followers corrected their PoA; the old parent rejoined as a follower 34 s after restart. `04_cutover.sh verify` was clean afterwards.
 
 ### Open items from this run
-- **F3, needs a decision.** DENYs are paid aborted transactions (~1 mSUI each, so a mapped originator can drain rpi3's gas), and they never reach the AuditTrail (`log_denied_authorized` needs the `AuditAdminCap`, which the publisher holds). Options are in `V8_MEASUREMENTS.md` §5.
+- **F3: fixed, see the F3 section below.** (Was: DENYs are paid aborted transactions (~1 mSUI each, so a mapped originator can drain rpi3's gas), and they never reach the AuditTrail (`log_denied_authorized` needs the `AuditAdminCap`, which the publisher holds). Options are in `V8_MEASUREMENTS.md` §5.)
 - **F4, for the paper.** "Every decision is audited" holds only for GRANTs. Every GRANT rewrites one shared ~9.7 KB trail object.
 - **F7.** The image-based rollback after `cleanup` is written but not exercised.
 
@@ -182,3 +182,90 @@ After a compatible upgrade, call targets move to the new package id but Move typ
 - `03_gen_config.sh` emits `sui.package.original.id=$PKG_V8`. When `sui.package.id` moves to v9, this key must stay at the v8 id. The generated files under `deploy/v8/` were regenerated (new key and stamp only). **The live nodes' config was not changed;** they rely on the default, which is the same value.
 - Tests: `ParentPoaTypeOriginTest` (10, end-to-end against a local stub GraphQL endpoint that answers by exact type tag) and `PackageOriginalIdTest` (3). Six mutants were all killed. The full suite passes, **120/120**.
 - Deployed with `prepare` → `redeploy` → `verify` (all exit 0); jar sha256 `3aec03c3…` confirmed inside all three containers. Behaviour on v8 is identical: rpi1 is parent and anchors its lease; all three nodes log `[fetchParentPoa] found under 0x88f0…` and hold the PoA `http://10.25.96.200:8282/`; the C2 GRANT went through on-chain (`9QKP2sX8…`).
+
+### F3: DENYs cost no gas (2026-11-10, deployed, bundle `7e767ac5`)
+**Problem (live).** Every DENY was a submitted PTB that aborted on-chain and still
+paid about 1 mSUI. A sensor mapped to rpi3 could drain rpi3's gas by repeating a
+forbidden request. The abort also rolled back any audit write.
+
+**Fix in the plugin (v8, no contract change).**
+- **Free pre-check.** `NativePtbBuilder.precheckThenSubmit` simulates the exact
+  TransactionData that would be signed (GraphQL `simulateTransaction`,
+  `checksEnabled:true`, same gas coin and object versions). Only a simulated
+  success is signed and submitted.
+  - A simulated abort returns DENY with nothing submitted.
+  - No simulation result (transport, GraphQL or unknown status) fails closed:
+    DENY, nothing submitted.
+  - A stale-version refusal at the pre-check is still rebuilt by `withStaleRetry`.
+  - A state change between simulation and execution can still yield a paid
+    DENY, labelled `DENY_EXECUTED`.
+- **`das/DenyGuard`.**
+  - A 10 s LRU cache (1,024 keys) of verdict DENYs per originator, resource
+    and op. A repeat inside the TTL is answered locally, with no network call.
+  - A per-originator throttle: 30 verdict DENYs per 60 s window, then local
+    DENYs until the window ends.
+  - Only verdicts (`SIMULATED`, `CHAIN`) are cached or charged; transport
+    errors never are.
+  - Both maps are size-bounded.
+- **`das/DenyLog`.**
+  - Each DENY is one JSON line: ts, originator, address, resource, op, source,
+    reason. It goes to `/var/lib/sui-om2m/deny-log.jsonl` (host
+    `~/sui-runtime-config/state/`, durable), rotated at 5 MB with 3 kept.
+  - A running SHA-256 per window, closed with a `{"batch":...}` marker. That
+    digest is what v9 anchors on-chain (`V9_DESIGN.md` §2.9).
+- **`das/DenyBatchFlusher`.** The v9 on-chain flush. It ships in this bundle
+  but stays off (`sui.das.deny.audit.flush.enabled=false`) because the Move
+  function exists only in v9.
+- **Config keys** (`SuiConfig`, emitted by `03_gen_config.sh` and checked by
+  its self-check):
+  - `sui.das.precheck.enabled` (true)
+  - `sui.das.deny.cache.ttl.ms` / `.max` (10000 / 1024)
+  - `sui.das.deny.rate.max` / `.window.ms` (30 / 60000)
+  - `sui.das.deny.log.path` / `.max.bytes` / `.keep`
+  - `sui.das.deny.audit.flush.enabled` (false) / `.interval.min` (15, floored at 5)
+
+**Tests: 153/153** (was 120), animal-sniffer clean. The 33 new tests:
+`PrecheckGateTest` (10), `DenyGuardTest` (8), `DenyLogTest` (6),
+`DenyBatchFlusherTest` (6), `DenyConfigDefaultsTest` (3). Eleven mutants were
+all killed:
+- a simulated DENY falling through to submit;
+- a pre-check error treated as success;
+- an unknown status accepted;
+- `checksEnabled:false`;
+- errors cached or charged;
+- throttle removed;
+- TTL ignored;
+- digest without the newline;
+- the flusher dropping on a transport error;
+- the flusher never giving up;
+- pre-check default off.
+
+**Deployed.** `prepare` → `config` → `redeploy` → `verify`, all exit 0 with
+`set -o pipefail`. The jar sha256 `7e767ac56a9665ed…` was confirmed inside all
+three containers, and each logs `Sui DAS DENY handling: precheck=true …`.
+`verify` was clean:
+- rpi1 anchored its lease;
+- gossip is v2 from all three nodes;
+- the C2 RETRIEVE was granted on-chain (`GwMB3nFd…`).
+
+**Live checks on rpi3** (`evidence/v8-measurements/f3-precheck/`):
+
+| Check | Before (old bundle) | After |
+|---|---|---|
+| Forbidden DELETE by `Csensor-001` on `/in-cse/Csui-dac-ae` | HTTP 403; FAILURE tx `V77YmQFAqU7E…` (`evaluator::decide_and_log` aborted in `cap_token`, abort 4); rpi3 balance −1,013,441 MIST | HTTP 403; log `source=SIMULATED err=cap_token::E_OP_NOT_ALLOWED (abort 4)`; **no DAS transaction from rpi3**. Its only new transactions in the window were two `trust::increase_guarded` start-up re-attestations, and the balance fell by exactly their 2 × 1,000,600 MIST |
+| Two immediate repeats | (each would have been another paid FAILURE) | HTTP 403 in 17 ms and 15 ms, `source=CACHED` |
+| `deny-log.jsonl` | n/a | three lines (SIMULATED, CACHED, CACHED) with originator, address, resource, op 4 and reason |
+| Ordinary RETRIEVE | GRANT on-chain | GRANT on-chain (`GwMB3nFd…`) |
+| GRANT latency, n = 50 each (all HTTP 200; 101 distinct on-chain GRANT digests) | p50 1,320.7 / 1,339.3 ms (read / write, n = 100, measured earlier the same day) | p50 **1,550.8 / 1,553.8 ms**, p95 1,943.5 / 2,305.4 ms. The pre-check adds about **+230 / +214 ms** at the median, one simulation round trip. The baseline was also slightly slower in this run (5.7 vs 4.1 ms p50), so part of the gap is the network |
+
+**v9 half (staged, not deployed): on-chain DENY batches.**
+- `evaluator::log_deny_batch`, receipt-gated: IN/MN-CSE only, valid trust
+  AdminCap, at most one batch per node per 5 min, no overlapping windows,
+  32-byte digest.
+- Implemented in `audit.move` as dynamic fields on the AuditTrail. It is a
+  compatible upgrade, re-checked against b08b3e3.
+- 17 new Move tests, **137/137**, and six guard mutants all killed. Details in
+  `V9_DESIGN.md` §2.9, with the enablement step in its runbook, phase F.
+
+**What stays true.** A DENY is still not on the per-decision audit ring. Until
+v9 it is recorded only in the node's local log.

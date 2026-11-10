@@ -123,6 +123,25 @@ trust.admin.cap.id=${CAP[$n]}
 sui.use.native.rpc=true
 sui.das.cache.ttl.ms=5000
 
+# --- F3 (2026-11-10): DENYs cost no gas ---
+# Every decision is simulated (free) first; only a simulated GRANT is signed
+# and submitted. A DENY is never a paid transaction any more.
+sui.das.precheck.enabled=true
+# Repeat of a recent DENY (same originator/resource/op) is answered locally.
+sui.das.deny.cache.ttl.ms=10000
+sui.das.deny.cache.max=1024
+# An originator with this many DENY verdicts in one window is throttled for the rest of it.
+sui.das.deny.rate.max=30
+sui.das.deny.rate.window.ms=60000
+# Structured JSON-lines record of every DENY (bind-mounted, survives restarts).
+sui.das.deny.log.path=/var/lib/sui-om2m/deny-log.jsonl
+sui.das.deny.log.max.bytes=5242880
+sui.das.deny.log.keep=3
+# v9 only: anchor DENY windows on-chain (evaluator::log_deny_batch). The
+# function does not exist in v8, so this stays false until the v9 upgrade.
+sui.das.deny.audit.flush.enabled=false
+sui.das.deny.audit.flush.interval.min=15
+
 # --- added for v8 ---
 # Public fullnodes no longer serve JSON-RPC; every read/simulate/execute goes here.
 sui.graphql.url=$GRAPHQL_URL
@@ -360,7 +379,9 @@ print(json.dumps({
  "shared": {"sui.package.id": "$PKG_V8", "sui.package.original.id": "$PKG_V8", "sui.identity.registry.id": "$ID_REG",
             "sui.trust.registry.id": "$TRUST_REG", "sui.policy.registry.id": "$POLICY_REG",
             "sui.audit.trail.id": "$AUDIT_TRAIL", "sui.failover.cluster.id": "$CLUSTER",
-            "sui.clock.id": "0x6", "sui.graphql.url": "$GRAPHQL_URL", "sui.use.native.rpc": "true"},
+            "sui.clock.id": "0x6", "sui.graphql.url": "$GRAPHQL_URL", "sui.use.native.rpc": "true",
+            "sui.das.precheck.enabled": "true", "sui.das.deny.audit.flush.enabled": "false",
+            "sui.das.deny.log.path": "/var/lib/sui-om2m/deny-log.jsonl"},
 }))
 PY
 )

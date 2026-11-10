@@ -72,17 +72,108 @@ public final class NativePtbBuilder {
         }
     }
 
+    /** How a decision was reached; drives the DAS's DENY bookkeeping (F3). */
+    public enum Decision {
+        /** Executed on-chain and succeeded. */
+        GRANT,
+        /** The free pre-check executed the exact transaction and it failed (a Move verdict). Nothing paid. */
+        DENY_SIMULATED,
+        /** Submitted and failed on-chain (paid). Should be rare once the pre-check is on. */
+        DENY_EXECUTED,
+        /** No verdict: transport/GraphQL/build error, pre-check unavailable. Fail closed, nothing paid. */
+        ERROR
+    }
+
     public static final class Result {
         public final boolean granted;
         public final String digest;
         public final long elapsedMs;
         public final String error;
+        public final Decision decision;
 
         Result(boolean granted, String digest, long ms, String err) {
+            this(granted, digest, ms, err,
+                 granted ? Decision.GRANT : (digest != null && !digest.isEmpty() ? Decision.DENY_EXECUTED : Decision.ERROR));
+        }
+
+        public Result(boolean granted, String digest, long ms, String err, Decision decision) {
             this.granted = granted;
             this.digest = digest;
             this.elapsedMs = ms;
             this.error = err;
+            this.decision = decision;
+        }
+
+        /** True iff a transaction was actually submitted (and therefore paid for). */
+        public boolean submitted() {
+            return decision == Decision.GRANT || decision == Decision.DENY_EXECUTED;
+        }
+    }
+
+    /** F3: simulate the access transaction before paying for it. Default on. */
+    private volatile boolean precheckEnabled = true;
+
+    public void setPrecheckEnabled(boolean on) { this.precheckEnabled = on; }
+
+    /** The two network operations of a decision, split out so the gating logic is unit-testable. */
+    interface TxPath {
+        /** Free simulation of the exact unsigned TransactionData; JSON-RPC-shaped status. */
+        JsonNode precheck(String txB64) throws IOException;
+        /** Sign-and-submit of those same bytes. */
+        JsonNode execute(String txB64) throws IOException;
+    }
+
+    /**
+     * F3: pay only for transactions that the network has just executed, for
+     * free, to success.
+     *
+     * <p>Without this, every DENY was a submitted transaction that aborted
+     * on-chain and still paid ~1 mSUI of computation, so a sensor repeating a
+     * forbidden request could drain the node's gas. The pre-check executes the
+     * very same bytes that would be signed, with every input check enabled.
+     * The only differences between the two runs are shared-object state that
+     * changed in between, which no originator controls from the DAS side.
+     *
+     * <ul>
+     * <li>pre-check FAILURE (a Move abort: denied) returns DENY_SIMULATED, nothing submitted;</li>
+     * <li>pre-check transport/GraphQL error or unknown status returns ERROR, nothing submitted
+     *     (fail closed). The message is kept verbatim so a stale-version refusal is still
+     *     recognised by {@link #withStaleRetry};</li>
+     * <li>pre-check SUCCESS signs and submits the same bytes.</li>
+     * </ul>
+     */
+    static Result precheckThenSubmit(boolean precheck, String txB64, TxPath path, long t0) {
+        if (precheck) {
+            JsonNode sim;
+            try {
+                sim = path.precheck(txB64);
+            } catch (Exception e) {
+                return new Result(false, null, ms(t0),
+                        "precheck unavailable (fail closed): " + e.getMessage(), Decision.ERROR);
+            }
+            JsonNode st = sim.path("effects").path("status");
+            String s = st.path("status").asText("");
+            if ("failure".equals(s)) {
+                return new Result(false, null, ms(t0),
+                        "precheck: " + st.path("error").asText("denied"), Decision.DENY_SIMULATED);
+            }
+            if (!"success".equals(s)) {
+                return new Result(false, null, ms(t0),
+                        "precheck: unrecognised status (fail closed): " + st.path("error").asText(s), Decision.ERROR);
+            }
+        }
+        try {
+            JsonNode result = path.execute(txB64);
+            String digest = result.path("digest").asText();
+            String status = result.path("effects").path("status").path("status").asText();
+            if ("success".equals(status)) {
+                return new Result(true, digest, ms(t0), null, Decision.GRANT);
+            }
+            String err = result.path("effects").path("status").path("error").asText();
+            return new Result(false, digest, ms(t0), err,
+                    digest == null || digest.isEmpty() ? Decision.ERROR : Decision.DENY_EXECUTED);
+        } catch (Exception e) {
+            return new Result(false, null, ms(t0), e.getMessage(), Decision.ERROR);
         }
     }
 
@@ -253,18 +344,16 @@ public final class NativePtbBuilder {
             LOG.info("PTB tx_bytes hex (" + txBytes.length + " bytes): " + hex.toString());
             String txB64 = java.util.Base64.getEncoder().encodeToString(txBytes);
             LOG.info("PTB tx_bytes b64: " + txB64);
-            String sigB64 = Ed25519Signer.signTransaction(txBytes, kp);
-
-            JsonNode result = rpc.executeTransactionBlock(txB64, Collections.singletonList(sigB64));
-            String digest = result.path("digest").asText();
-            String status = result.path("effects").path("status").path("status").asText();
-            long elapsed = ms(t0);
-
-            if ("success".equals(status)) {
-                return new Result(true, digest, elapsed, null);
-            }
-            String err = result.path("effects").path("status").path("error").asText();
-            return new Result(false, digest, elapsed, err);
+            final Ed25519Signer.Keypair signer = kp;
+            return precheckThenSubmit(precheckEnabled, txB64, new TxPath() {
+                @Override public JsonNode precheck(String b64) throws IOException {
+                    return rpc.precheckTransaction(b64);
+                }
+                @Override public JsonNode execute(String b64) throws IOException {
+                    String sigB64 = Ed25519Signer.signTransaction(txBytes, signer);
+                    return rpc.executeTransactionBlock(b64, Collections.singletonList(sigB64));
+                }
+            }, t0);
 
         } catch (Exception e) {
             return new Result(false, null, ms(t0), e.getMessage());
@@ -765,6 +854,101 @@ public final class NativePtbBuilder {
         } catch (Exception e) {
             return new Result(false, null, ms(t0), e.getMessage());
         }
+    }
+
+    /**
+     * v9 (F3): anchor one window of the local DENY log on-chain.
+     *
+     * <pre>
+     *   cmd 0  identity::verify(id_reg)                                 -> IdentityReceipt
+     *   cmd 1  evaluator::log_deny_batch(R0, id_reg, node_cap, trust_reg, audit_trail,
+     *                                    window_start_ms, window_end_ms, deny_count,
+     *                                    distinct_keys, digest, clock)
+     * </pre>
+     *
+     * The function exists only in the v9 package; on v8 the call aborts at the
+     * pre-check (free), which is why the flusher stays behind a config flag that
+     * is off on v8. Pre-checked like every decision, so a batch the contract
+     * would refuse (too soon, overlapping window) is never paid for.
+     */
+    public Result logDenyBatch(String nodeAddr, String adminCapId, long windowStartMs, long windowEndMs,
+                               long denyCount, long distinctKeys, byte[] sha256) {
+        return withStaleRetry(() -> logDenyBatchOnce(nodeAddr, adminCapId, windowStartMs, windowEndMs,
+                                                     denyCount, distinctKeys, sha256));
+    }
+
+    private Result logDenyBatchOnce(String nodeAddr, String adminCapId, long windowStartMs, long windowEndMs,
+                                    long denyCount, long distinctKeys, byte[] sha256) {
+        long t0 = System.nanoTime();
+        try {
+            Ed25519Signer.Keypair kp = keystore.get(nodeAddr.toLowerCase());
+            if (kp == null) kp = keystore.get(nodeAddr);
+            if (kp == null) return new Result(false, null, ms(t0), "no keypair for " + nodeAddr);
+
+            SuiObjectFetcher.ObjectInfo idReg    = fetcher.getObject(cfg.identityRegistryId);
+            SuiObjectFetcher.ObjectInfo cap      = fetcher.getObject(adminCapId);
+            SuiObjectFetcher.ObjectInfo trustReg = fetcher.getObject(cfg.trustRegistryId);
+            SuiObjectFetcher.ObjectInfo auditTr  = fetcher.getObject(cfg.auditTrailId);
+            SuiObjectFetcher.ObjectInfo clock    = fetcher.getObject(cfg.suiClockId);
+            long gasPrice = fetcher.getReferenceGasPrice();
+            SuiPtbEncoder.ObjectRef gasCoin = fetcher.pickGasCoin(nodeAddr, cfg.gasBudget);
+
+            SuiPtbEncoder enc = new SuiPtbEncoder();
+            int iIdReg = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.identityRegistryId), idReg.version, false)));
+            int iCap   = enc.addInput(SuiPtbEncoder.CallArg.ownedObject(
+                    new SuiPtbEncoder.ObjectRef(BcsEncoder.hexTo32(adminCapId), cap.version, cap.digestRaw32)));
+            int iTrust = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.trustRegistryId), trustReg.version, false)));
+            int iAudit = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.auditTrailId), auditTr.version, true)));
+            int iStart = enc.addInput(SuiPtbEncoder.CallArg.pure(encU64(windowStartMs)));
+            int iEnd   = enc.addInput(SuiPtbEncoder.CallArg.pure(encU64(windowEndMs)));
+            int iCount = enc.addInput(SuiPtbEncoder.CallArg.pure(encU64(denyCount)));
+            int iDist  = enc.addInput(SuiPtbEncoder.CallArg.pure(encU64(distinctKeys)));
+            int iDig   = enc.addInput(SuiPtbEncoder.CallArg.pure(encBytes(sha256)));
+            int iClock = enc.addInput(SuiPtbEncoder.CallArg.sharedObject(
+                    new SuiPtbEncoder.SharedRef(BcsEncoder.hexTo32(cfg.suiClockId), clock.version, false)));
+
+            enc.addMoveCall(new SuiPtbEncoder.MoveCall(cfg.packageId, "identity", "verify",
+                    Arrays.asList(SuiPtbEncoder.Arg.input(iIdReg))));
+            enc.addMoveCall(new SuiPtbEncoder.MoveCall(cfg.packageId, "evaluator", "log_deny_batch",
+                    Arrays.asList(SuiPtbEncoder.Arg.result(0),
+                                  SuiPtbEncoder.Arg.input(iIdReg),
+                                  SuiPtbEncoder.Arg.input(iCap),
+                                  SuiPtbEncoder.Arg.input(iTrust),
+                                  SuiPtbEncoder.Arg.input(iAudit),
+                                  SuiPtbEncoder.Arg.input(iStart),
+                                  SuiPtbEncoder.Arg.input(iEnd),
+                                  SuiPtbEncoder.Arg.input(iCount),
+                                  SuiPtbEncoder.Arg.input(iDist),
+                                  SuiPtbEncoder.Arg.input(iDig),
+                                  SuiPtbEncoder.Arg.input(iClock))));
+
+            final byte[] txBytes = enc.encodeTransactionData(BcsEncoder.hexTo32(nodeAddr),
+                    Collections.singletonList(gasCoin), gasPrice, cfg.gasBudget);
+            String txB64 = java.util.Base64.getEncoder().encodeToString(txBytes);
+            final Ed25519Signer.Keypair signer = kp;
+            return precheckThenSubmit(true, txB64, new TxPath() {
+                @Override public JsonNode precheck(String b64) throws IOException {
+                    return rpc.precheckTransaction(b64);
+                }
+                @Override public JsonNode execute(String b64) throws IOException {
+                    return rpc.executeTransactionBlock(b64,
+                            Collections.singletonList(Ed25519Signer.signTransaction(txBytes, signer)));
+                }
+            }, t0);
+        } catch (Exception e) {
+            return new Result(false, null, ms(t0), e.getMessage());
+        }
+    }
+
+    /** BCS vector&lt;u8&gt;: ULEB128 length then the raw bytes. */
+    static byte[] encBytes(byte[] b) {
+        BcsEncoder e = new BcsEncoder();
+        e.writeUleb128(b.length);
+        e.writeRawBytes(b);
+        return e.toBytes();
     }
 
 }

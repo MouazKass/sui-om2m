@@ -85,7 +85,37 @@ How to read these numbers:
   p50/p95/p99, not mean ± sd.
 - **The 5 s GRANT cache brings a repeat decision back to baseline (3.6 ms p50).** That is a
   freshness trade-off: a revocation takes up to 5 s to bite on a cached key. DENYs are never
-  cached.
+  cached by the GRANT cache (since F3 they have their own 10 s cache, §2b).
+
+## 2b. After F3: GRANT latency with the free pre-check, and DENY cost
+
+Same bench (`bench/bench_v8_dac.sh 50 evidence/v8-measurements/f3-precheck`), run after the
+F3 bundle (`7e767ac5`) was deployed. Raw data:
+[`f3-precheck/latency_requests.csv`](v8-measurements/f3-precheck/latency_requests.csv) and
+[`f3-precheck/das_decisions.csv`](v8-measurements/f3-precheck/das_decisions.csv); statistics in
+[`f3-precheck/latency_summary.csv`](v8-measurements/f3-precheck/latency_summary.csv).
+250/250 requests returned HTTP 200, and the DAS logged 101 uncached on-chain GRANTs, each with
+a distinct digest, plus 50 cache hits.
+
+| Series (n = 50 each, all HTTP 200) | p50 ms | p95 ms | p99 ms | mean ± sd ms | min–max ms |
+|---|---|---|---|---|---|
+| Baseline RETRIEVE (no Sui) | 5.7 | 10.3 | 10.9 | 5.9 ± 1.6 | 3.4–10.9 |
+| Baseline UPDATE (no Sui) | 8.4 | 11.6 | 13.6 | 8.6 ± 1.4 | 6.5–13.6 |
+| **DAC RETRIEVE → pre-check → Sui GRANT** | **1550.8** | **1943.5** | 3312.8 | 1667.6 ± 319.8 | 1480.3–3312.8 |
+| **DAC UPDATE → pre-check → Sui GRANT** | **1553.8** | **2305.4** | 2754.2 | 1691.1 ± 291.8 | 1482.9–2754.2 |
+| DAC RETRIEVE, GRANT cache hit | 4.5 | 6.5 | 9.5 | 4.8 ± 1.1 | 3.5–9.5 |
+
+- **The pre-check costs one simulation round trip per GRANT:** about +230 ms (read) and
+  +214 ms (write) at the median against §2 (n = 100, measured earlier the same day without it).
+  The baseline was also slower in this run (5.7 vs 4.1 ms), so part of the gap is the network.
+  With n = 50, p99 is the single largest sample; report p50/p95.
+- **A DENY now costs nothing.** On rpi3, a forbidden DELETE by `Csensor-001`:
+  - **before** F3: HTTP 403 plus FAILURE tx `V77YmQFAqU7EVkWocSfswaURspg1S8VRBLx5MSSyrXB`,
+    which cost rpi3 1,013,441 MIST;
+  - **after** F3: HTTP 403 with no DAS transaction from rpi3. Its only transactions in that
+    window were two trust re-attestations, `AUhmnoJR…` and `2cobXBGj…`, at exactly
+    2 × 1,000,600 MIST.
+  - Two immediate repeats were answered from the DENY cache in 17 ms and 15 ms.
 
 ## 3. Gas per operation (from real transaction effects)
 
@@ -97,7 +127,7 @@ MIST/unit, so every transaction pays the 1,000,000 MIST computation floor.
 | Operation | n | net MIST (median) | SUI | notes |
 |---|---|---|---|---|
 | **DAS decision, GRANT (read or write)** | 201 | **1,600,134** | 0.0016 | storage 73.9 M / rebate 73.3 M: each GRANT rewrites the 512-slot `AuditTrail` ring (~9.7 KB) |
-| DAS decision, DENY (PTB executes and aborts) | 1 | **1,000,872** | 0.0010 | `E44Q4j6a…`: the full 5-command PTB, aborted in `validate_for_use`. **Denials are paid** (§5, F3) |
+| DAS decision, DENY (PTB executes and aborts) | 1 | **1,000,872** | 0.0010 | `E44Q4j6a…`: the full 5-command PTB, aborted in `validate_for_use`. **Denials were paid** before F3; since F3 a DENY is simulated for free and never submitted: 0 MIST (§2b) |
 | Trust write (`increase/decrease_guarded`) | 4 CLI + 2 plugin | **1,000,600** | 0.0010 | |
 | `claim_parent` (accepted) | 3 CLI + 1 plugin | **1,000,276** | 0.0010 | |
 | `renew_lease` (lease anchor) | 3 CLI + 6 plugin | **1,000,276** | 0.0010 | |
@@ -155,7 +185,7 @@ within one 15 s chain-sync period (runs 2 and 3). Before the F1 fix it never did
 |---|---|---|
 | **F1** | **A node named parent on-chain other than through its own successful claim never took up parent duties.** For example, a claim that landed although the client saw an error or timeout, or one signed outside the plugin. Its 60 s claim lease lapsed and was never anchored, and nobody noticed, because the deposed parent's presence beats kept every watchdog quiet. Seen live in proof 06 run 1 ([`proof_06_run1.log`](v8-measurements/proof_06_run1.log): `cluster did not converge`, lease −77 s). | **Fixed and deployed (bundle `7fa41e66`).** Every node re-reads the cluster each `failover.parent.selfcheck.period.ms` (15 s, a free GraphQL read) and starts parent duties when the chain names it (`FailoverManager.shouldTakeUpParentDuties`; `ParentReconcileTest`, mutation-checked). Verified live in proof 06 runs 2 and 3 (`Chain names this node parent … taking them up now`). |
 | **F2** | **Followers kept the deposed parent's PoA.** The on-chain PoA is not bound to the parent that set it, so right after a takeover it still holds the old parent's URL until the new parent publishes. `onParentChanged` read it in that window and kept it. Seen live after the first redeploy: rpi1 and rpi3 wrote `…203` while rpi2 was parent. | **Fixed and deployed** (`followParentPoa` on every sync; `poaNeedsUpdate` tests, mutation-checked). Verified live in the failover run (t = 657 s above). **The contract-level fix is a v9 candidate, handed to the v9 work:** `claim_parent` should clear the PoA field, or the PoA should be stored together with the address that set it. |
-| **F3** | **DENYs are executed on-chain and paid**, about 1.0 mSUI each (`E44Q4j6a…`, FAILURE). A mapped originator repeating a disallowed op drains the DAS node's gas at that rate. The abort also rolls back, so **denials never reach the AuditTrail.** `log_denied_authorized` needs the `AuditAdminCap`, which the publisher holds, not rpi3. | **Open, needs a decision.** Options: simulate first (free) and submit only GRANTs, which adds one round trip per GRANT; and/or a per-originator DENY cache or rate limit; and/or transfer the `AuditAdminCap` to rpi3 so denials are logged. |
+| **F3** | **DENYs are executed on-chain and paid**, about 1.0 mSUI each (`E44Q4j6a…`, FAILURE). A mapped originator repeating a disallowed op drains the DAS node's gas at that rate. The abort also rolls back, so **denials never reach the AuditTrail.** `log_denied_authorized` needs the `AuditAdminCap`, which the publisher holds, not rpi3. | **Fixed and deployed 2026-11-10** (bundle `7e767ac5`): free pre-check, so only simulated GRANTs are submitted; a 10 s DENY cache plus a per-originator throttle; a structured local DENY log. On-chain DENY batches (hash plus count per window) are staged for v9. See §2b and ROLLOUT_V8.md "F3". |
 | **F4** | **Paper wording:** "every decision is recorded on the audit trail" holds only for GRANTs (F3). The trail is a single shared object holding a 512-slot ring (~9.7 KB) that every GRANT rewrites. That puts 73.9 M MIST of storage through the gas budget each time (mostly rebated), and serializes all GRANTs on one shared object. | For the paper. |
 | **F5** | The node's CLI and its running plugin spend the same address's gas coins, so a CLI transaction can be built on a coin version the plugin just consumed (proof 06 run 2, one `[FAIL]`). | **Fixed in the harness:** `proofs/lib_v8.sh` rebuilds on a stale version, like the plugin's `withStaleRetry`. |
 | **F6** | `bench/provision_das.sh` (legacy) re-adds `Csensor-001` with acop 63 to `acp_admin`, which is the static bypass the v8 rollout removed. | **Fixed:** it refuses to run unless `LEGACY_V7_PROVISION=1`. |

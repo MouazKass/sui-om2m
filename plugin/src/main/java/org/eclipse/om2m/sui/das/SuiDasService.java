@@ -81,6 +81,10 @@ public final class SuiDasService implements InterworkingService {
     private final java.util.concurrent.ConcurrentHashMap<String,Long> grantCache =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    // F3: DENY cache, per-originator throttle and the structured DENY log.
+    private final DenyLog denyLog;
+    private final DenyGuard denyGuard;
+
     private NativePtbBuilder ensureNative() throws java.io.IOException {
         NativePtbBuilder n = nativePtb;
         if (n == null) {
@@ -98,6 +102,7 @@ public final class SuiDasService implements InterworkingService {
                             cfg.gasBudget,
                             cfg.minTrust);
                     n = new NativePtbBuilder(nc, java.nio.file.Paths.get(cfg.keystorePath));
+                    n.setPrecheckEnabled(cfg.precheckEnabled);
                     nativePtb = n;
                 }
             }
@@ -110,7 +115,51 @@ public final class SuiDasService implements InterworkingService {
         this.ptb = ptb;
         // Application point-of-contact path the CSE dispatches NOTIFYs to.
         this.apocPath = cfg.dasApocPath; // e.g. "sui-das"
+        this.denyLog = new DenyLog(cfg.denyLogPath, cfg.denyLogMaxBytes, cfg.denyLogKeep);
+        this.denyGuard = new DenyGuard(cfg.denyCacheMax, cfg.denyCacheTtlMs,
+                cfg.denyRateMax, cfg.denyRateWindowMs, denyLog, System::currentTimeMillis);
+        LOG.info("Sui DAS DENY handling: precheck=" + cfg.precheckEnabled
+                 + " denyCacheTtlMs=" + cfg.denyCacheTtlMs + " denyRateMax=" + cfg.denyRateMax
+                 + "/" + cfg.denyRateWindowMs + "ms log=" + (cfg.denyLogPath.isEmpty() ? "(none)" : cfg.denyLogPath));
+        startDenyAuditFlusher();
     }
+
+    /**
+     * v9 only (sui.das.deny.audit.flush.enabled, default false): anchor the
+     * DENY log's windows on-chain every sui.das.deny.audit.flush.interval.min.
+     * Needs the native path and this node's trust AdminCap.
+     */
+    private void startDenyAuditFlusher() {
+        if (!cfg.denyAuditFlushEnabled) return;
+        if (!cfg.useNativeRpc || cfg.trustAdminCapId.isEmpty()) {
+            LOG.warn("sui.das.deny.audit.flush.enabled=true but the native path or trust.admin.cap.id"
+                     + " is missing; DENY batches stay local only");
+            return;
+        }
+        final DenyBatchFlusher flusher = new DenyBatchFlusher(denyLog, b -> {
+            try {
+                return ensureNative().logDenyBatch(cfg.nodeAddress, cfg.trustAdminCapId,
+                        b.windowStartMs, b.windowEndMs, b.count, b.distinct, b.sha256);
+            } catch (java.io.IOException e) {
+                return new NativePtbBuilder.Result(false, null, 0L, "native: " + e.getMessage(),
+                        NativePtbBuilder.Decision.ERROR);
+            }
+        }, System::currentTimeMillis);
+        java.util.concurrent.ScheduledExecutorService ses =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "sui-deny-audit-flush");
+                t.setDaemon(true);
+                return t;
+            });
+        ses.scheduleWithFixedDelay(() -> {
+            try { flusher.tick(); } catch (Throwable t) { LOG.warn("DENY batch flush failed: " + t); }
+        }, cfg.denyAuditFlushIntervalMs, cfg.denyAuditFlushIntervalMs,
+           java.util.concurrent.TimeUnit.MILLISECONDS);
+        LOG.info("DENY audit flusher on: every " + (cfg.denyAuditFlushIntervalMs / 60_000) + " min");
+    }
+
+    /** The DENY log, for the v9 on-chain batch flusher. */
+    public DenyLog denyLog() { return denyLog; }
 
     @Override
     public String getAPOCPath() {
@@ -228,13 +277,14 @@ public final class SuiDasService implements InterworkingService {
         //    IN-CSE when tokens are minted (see SuiConfig / token index).
         String requesterAddress = cfg.resolveAddress(originator);
         String tokenObjectId = cfg.resolveToken(originator, resourceId);
+        byte op = mapOperation(operation);
         if (requesterAddress == null || tokenObjectId == null) {
             LOG.warn("No Sui mapping for originator=" + originator + " resource=" + resourceId);
+            denyGuard.recordDeny(originator, requesterAddress, resourceId, op,
+                    DenyGuard.Source.UNMAPPED, "no Sui mapping");
             response.setResponseStatusCode(ResponseStatusCode.ACCESS_DENIED);
             return response;
         }
-
-        byte op = mapOperation(operation);
 
         // 4b. Decision-cache check (opt-in). A recent GRANT is reusable within the
         //      TTL window; the chain call is skipped entirely on a hit. DENYs are
@@ -250,10 +300,21 @@ public final class SuiDasService implements InterworkingService {
             }
         }
 
+        // 4c. F3: local DENY (repeat of a recent verdict, or originator over its
+        //     DENY budget). No simulation, no transaction, no gas.
+        DenyGuard.Source localDeny = cacheHit ? null : denyGuard.preDecision(originator, cacheKey);
+
         // 5. Execute the atomic 6-step PTB on Sui (skipped on a cache hit).
+        //    F3: the native path simulates it first and submits only a GRANT.
         AccessResult result;
+        DenyGuard.Source denySource = DenyGuard.Source.CHAIN;
         if (cacheHit) {
             result = AccessResult.granted(0L, "cached");
+        } else if (localDeny != null) {
+            denySource = localDeny;
+            result = AccessResult.denied(0L, localDeny == DenyGuard.Source.CACHED
+                    ? "recent DENY for this originator/resource/op (cached)"
+                    : "originator over its DENY budget (throttled)");
         } else if (cfg.useNativeRpc) {
             try {
                 NativePtbBuilder.Result nr = ensureNative().evaluate(
@@ -261,8 +322,10 @@ public final class SuiDasService implements InterworkingService {
                 result = nr.granted
                         ? AccessResult.granted(nr.elapsedMs, nr.digest)
                         : AccessResult.denied(nr.elapsedMs, nr.error == null ? "denied" : nr.error);
+                denySource = denySourceOf(nr.decision);
             } catch (Exception e) {
                 result = AccessResult.denied(0L, "native: " + e.getMessage());
+                denySource = DenyGuard.Source.ERROR;
             }
         } else {
             result = ptb.evaluate(
@@ -274,7 +337,11 @@ public final class SuiDasService implements InterworkingService {
         }
 
         if (!result.granted) {
-            LOG.info("Sui DENY originator=" + originator + " resource=" + resourceId + " op=" + op + " err=" + AbortDecoder.decode(result.digestOrError) + " [raw: " + result.digestOrError + "]");
+            String decoded = AbortDecoder.decode(result.digestOrError);
+            LOG.info("Sui DENY originator=" + originator + " resource=" + resourceId + " op=" + op
+                     + " source=" + denySource + " err=" + decoded + " [raw: " + result.digestOrError + "]");
+            denyGuard.recordDeny(originator, requesterAddress, resourceId, op, denySource,
+                    decoded == null || decoded.isEmpty() ? String.valueOf(result.digestOrError) : decoded);
         // Trust observer hook: record this access decision against the requester.
         try {
             BehaviourObserver obs = TrustScoringEngine.activeObserver();
@@ -352,6 +419,13 @@ public final class SuiDasService implements InterworkingService {
         }
         response.setResponseStatusCode(ResponseStatusCode.OK);
         return response;
+    }
+
+    /** Map a native decision onto the DENY source used for caching/throttling. */
+    static DenyGuard.Source denySourceOf(NativePtbBuilder.Decision d) {
+        if (d == NativePtbBuilder.Decision.DENY_SIMULATED) return DenyGuard.Source.SIMULATED;
+        if (d == NativePtbBuilder.Decision.DENY_EXECUTED)  return DenyGuard.Source.CHAIN;
+        return DenyGuard.Source.ERROR;
     }
 
     /** Map oneM2M operation BigInteger constants to the cap_token op bitmask. */
