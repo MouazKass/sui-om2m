@@ -67,7 +67,19 @@ From the dashboard you can:
 
 1. In the Arduino IDE, install the `esp32` board package and these libraries:
    **PubSubClient**, **DHT sensor library** and Adafruit Unified Sensor. Choose the
-   board "ESP32 Dev Module".
+   board "ESP32 Dev Module". Use esp32 core **3.2.0** (tested). Core 3.0.7 does
+   not link: its bundled libsodium is missing the AEGIS symbols that
+   `sodium_init` needs.
+
+   Without the IDE: `esp32/firmware/build_in_docker.sh` compiles the sketch in a
+   throwaway container on rpi1 with pinned versions (arduino-cli 1.1.1, core
+   3.2.0, PubSubClient 2.8, DHT sensor library 1.4.6, Adafruit Unified Sensor
+   1.1.14). The `.bin` files land in `esp32/firmware/build/` (not committed;
+   `SHA256SUMS` and `build.log` are). Edit `config.h` (step 2) first, because
+   the Wi-Fi settings are compiled in. Flash with
+   `esptool.py write_flash 0x0 build/esp32_sensor_node.ino.merged.bin`.
+   The verified build of 11 Nov 2026 (default `config.h`): 1,062,826 bytes
+   (81% of flash), 0 warnings, all five pinned ack keys present.
 2. Edit `firmware/esp32_sensor_node/config.h`:
    - `WIFI_SSID` and `WIFI_PASS`. The network must be 2.4 GHz, without
      WPA2-Enterprise or a captive portal.

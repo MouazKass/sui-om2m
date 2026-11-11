@@ -1,0 +1,31 @@
+debconf: delaying package configuration, since apt-utils is not installed
+arduino-cli  Version: 1.1.1 Commit: fa6eafcb Date: 2024-11-22T09:31:36Z
+ID          Installed Latest Name
+esp32:esp32 3.2.0     3.3.12 esp32
+
+Name                    Installed   Available   Location Description
+Adafruit Unified Sensor 1.1.14      1.1.15      user     Required for all Adafruit Unified Sen...
+DHT sensor library      1.4.6       1.4.7       user     Arduino library for DHT11, DHT22, etc...
+PubSubClient            2.8         -           user     -
+
+Sketch uses 1062826 bytes (81%) of program storage space. Maximum is 1310720 bytes.
+Global variables use 93628 bytes (28%) of dynamic memory, leaving 234052 bytes for local variables. Maximum is 327680 bytes.
+
+Used library            Version Path
+WiFi                    3.2.0   /root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/WiFi
+Networking              3.2.0   /root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/Network
+PubSubClient            2.8     /root/Arduino/libraries/PubSubClient
+Preferences             3.2.0   /root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/Preferences
+DHT sensor library      1.4.6   /root/Arduino/libraries/DHT_sensor_library
+Adafruit Unified Sensor 1.1.14  /root/Arduino/libraries/Adafruit_Unified_Sensor
+
+Used platform Version Path
+esp32:esp32   3.2.0   /root/.arduino15/packages/esp32/hardware/esp32/3.2.0
+total 32160
+-rw-r--r-- 1 root root      397 Nov 11 12:03 SHA256SUMS
+-rw-r--r-- 1 root root  1062976 Nov 11 12:03 esp32_sensor_node.ino.bin
+-rw-r--r-- 1 root root    24976 Nov 11 12:03 esp32_sensor_node.ino.bootloader.bin
+-rwxr-xr-x 1 root root 12677976 Nov 11 12:03 esp32_sensor_node.ino.elf
+-rw-r--r-- 1 root root 14922124 Nov 11 12:03 esp32_sensor_node.ino.map
+-rw-r--r-- 1 root root  4194304 Nov 11 12:03 esp32_sensor_node.ino.merged.bin
+-rw-r--r-- 1 root root     3072 Nov 11 12:03 esp32_sensor_node.ino.partitions.bin
