@@ -1,1 +1,3 @@
-build/*.bin
+build/*
+!build/SHA256SUMS
+!build/build.log
