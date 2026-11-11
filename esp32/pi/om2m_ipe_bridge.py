@@ -53,6 +53,23 @@ Per-device identity (identity.mode = require)
   already authenticated, or older than replay_window_s, is rejected.
   identity.mode = off keeps the v2 behaviour (no checks).
 
+Signed acknowledgements ([ack] sign = true)
+  Each ack names (device, epoch, seq) and is signed with this bridge's own
+  Ed25519 ack key (state_dir/ack.key, generated here, never copied). The board
+  accepts only acks signed by a pinned bridge key (esp_identity.py), so nobody
+  on the broker can make it drop an unstored reading or hide a dead bridge.
+
+Durable replay floor (identity.mode = require)
+  Per device the bridge keeps (newest authenticated epoch, highest seq in it)
+  in state_dir/replay.json (atomic write + fsync), so a restart does not reset
+  it. On first contact, and every floor_refresh_s, the floor is also raised
+  from the newest reading stored on the target (parent) CSE, so a device that
+  failed over from another bridge - or a replay sent to a different bridge -
+  meets the same floor. Rejected: an older epoch; in the current epoch, a seq
+  more than seq_window below the highest (the board can only resend from its
+  RESEND_SLOTS buffer). Within the window the CSE's e<epoch>-s<seq> name
+  rejects a second copy (409), so nothing is stored twice.
+
 Session-aware presence
   Status messages carry the sensor's connection session "<epoch>.<n>". A status
   older than the newest one stored is ignored, so the Last Will a broker fires
@@ -148,10 +165,20 @@ DEFAULTS = {
         "mode": "off", "registry_id": "", "graphql_url": "",
         "cache_ttl_s": "60", "negative_ttl_s": "15", "max_stale_s": "300",
         "replay_window_s": "3600",
+        # durable replay floor: seq_window must exceed the board's RESEND_SLOTS
+        # (64) and stay below om2m.mni (1000), so the CSE 409 covers the window
+        "seq_window": "256", "floor_refresh_s": "60",
+    },
+    "ack": {
+        # sign = true: every ack is signed with the bridge's ack key
+        # (key_file, default <state_dir>/ack.key, created 0600 on first start)
+        "sign": "false", "key_file": "",
     },
     "bridge": {
         "queue_max": "2000", "retry_interval_s": "3", "stats_interval_s": "60",
         "log_level": "INFO", "dedupe_window": "4096",
+        # durable state (replay floor, ack key). Empty = in memory only.
+        "state_dir": "",
     },
 }
 
@@ -606,7 +633,10 @@ class OneM2MClient:
         return self.delete(ri)
 
     def latest_content(self, container_ri):
-        r = self._request("GET", self.url_for_ri(container_ri) + "/la")
+        return self.latest_at(self.url_for_ri(container_ri))
+
+    def latest_at(self, container_url):
+        r = self._request("GET", container_url + "/la")
         if r.status_code != 200:
             return None
         con = self._resource(r).get("con")
@@ -657,6 +687,71 @@ class Device:
         return self.places.setdefault(base, Placement())
 
 
+class ReplayState:
+    """Per-device replay floor {device: {"epoch": E, "high": S}}, kept durably.
+
+    save() writes a temp file, fsyncs it, renames it over replay.json and
+    fsyncs the directory, so a crash leaves either the old or the new file.
+    An epoch increase is saved at once; seq progress at most once a second.
+    """
+
+    def __init__(self, path):
+        self.path = path
+        self.data = {}
+        self.dirty = False
+        self.checked = {}                           # device -> time of the last CSE floor read
+        if path and os.path.exists(path):
+            try:
+                with open(path) as f:
+                    d = json.load(f)
+                self.data = {k: {"epoch": int(v["epoch"]), "high": int(v["high"])}
+                             for k, v in d.get("devices", {}).items()}
+                log.info("replay floor loaded for %d device(s) from %s", len(self.data), path)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+                # kept for inspection; the floor then comes from the CSE
+                log.error("cannot read %s (%s); moved aside, floors come from the CSE", path, e)
+                os.replace(path, path + ".corrupt")
+                self.data = {}
+
+    def get(self, device):
+        return self.data.get(device)
+
+    def raise_to(self, device, epoch, seq):
+        """Raise the floor; -> True if the epoch went up (saved immediately)."""
+        cur = self.data.get(device)
+        if cur is None or epoch > cur["epoch"]:
+            self.data[device] = {"epoch": epoch, "high": seq}
+            self.dirty = True
+            self.save()
+            return True
+        if epoch == cur["epoch"] and seq > cur["high"]:
+            cur["high"] = seq
+            self.dirty = True
+        return False
+
+    def save(self):
+        if not self.path:
+            self.dirty = False
+            return
+        if not self.dirty:
+            return
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"v": 1, "ts": int(time.time()), "devices": self.data}, f, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.path)
+        try:
+            fd = os.open(os.path.dirname(self.path) or ".", os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError:
+            pass                                    # directory fsync unsupported (non-POSIX)
+        self.dirty = False
+
+
 class Bridge:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -693,7 +788,27 @@ class Bridge:
         self.mqtt = None
         self.mqtt_ok = False
         self._last_announce = ("", 0.0)
+        self.state_dir = b["state_dir"].strip()
+        if self.state_dir:
+            os.makedirs(self.state_dir, mode=0o700, exist_ok=True)
+        self._init_ack(cfg)
         self._init_identity(cfg)
+
+    def _init_ack(self, cfg):
+        a = cfg["ack"]
+        self.ack_key = None
+        self.ack_pk = ""
+        if not truthy(a["sign"]):
+            log.warning("ack.sign = false: acks are unsigned (any broker client can forge them)")
+            return
+        path = a["key_file"].strip() or (os.path.join(self.state_dir, "ack.key") if self.state_dir else "")
+        if not path:
+            raise SystemExit("ack.sign = true needs ack.key_file or bridge.state_dir")
+        import esp_identity
+        self.ack_key = esp_identity.load_or_create_key(path)
+        self.ack_pk = esp_identity.public_bytes(self.ack_key).hex()
+        self._sign_ack = esp_identity.sign_ack
+        log.info("acks signed with this bridge's key %s (%s)", self.ack_pk, path)
 
     def _init_identity(self, cfg):
         i = cfg["identity"]
@@ -702,6 +817,9 @@ class Bridge:
             raise SystemExit("identity.mode must be 'off' or 'require'")
         self.registry = None
         self.replay_window_s = float(i["replay_window_s"])
+        self.seq_window = int(i["seq_window"])
+        self.floor_refresh_s = float(i["floor_refresh_s"])
+        self.replay = ReplayState(os.path.join(self.state_dir, "replay.json") if self.state_dir else "")
         if self.id_mode == "off":
             log.warning("identity.mode = off: device messages are NOT authenticated")
             return
@@ -739,18 +857,46 @@ class Bridge:
             raise Rejected(f"auth:{e}")
         dev = self.device(device)
         if kind == "telemetry" and msg.get("v") == 2:
-            if msg["epoch"] < dev.max_epoch:
+            fl = self.floor(device, rx_time)
+            e, sq = msg["epoch"], msg["seq"]
+            if fl and e < fl["epoch"]:
                 raise Rejected("auth:stale_epoch")
+            if fl and e == fl["epoch"] and sq + self.seq_window < fl["high"]:
+                raise Rejected("auth:stale_seq")
             ts = msg.get("ts", 0)
             if ts and ts < rx_time - self.replay_window_s:
                 raise Rejected("auth:stale_reading")
-            dev.max_epoch = max(dev.max_epoch, msg["epoch"])
+            if self.replay.raise_to(device, e, sq):
+                log.info("%s: replay floor now epoch %d", device, e)
+            dev.max_epoch = max(dev.max_epoch, e)
         if dev.signer != addr:
             if dev.signer:
                 log.warning("%s: signing key changed %s -> %s", device, dev.signer, addr)
             dev.signer = addr
             dev.places.clear()                   # re-provision: AE label carries the signer
         return addr
+
+    def floor(self, device, now):
+        """Replay floor for a device: the durable local one, raised from the
+        newest reading on the target CSE on first contact / every floor_refresh_s."""
+        last = self.replay.checked.get(device, 0.0)
+        if now - last >= self.floor_refresh_s:
+            base = self.resolver.target()
+            if base is not None:
+                cse = self.cse(base)
+                try:
+                    la = cse.latest_at(cse.hier(device, self.cnt_data))
+                    self.replay.checked[device] = now
+                    self.stats["floor_cse_reads"] += 1
+                    if la and _uint(la.get("epoch")) and _uint(la.get("seq")):
+                        if self.replay.raise_to(device, la["epoch"], la["seq"]):
+                            log.info("%s: replay floor raised from %s to epoch %d seq %d",
+                                     device, base, la["epoch"], la["seq"])
+                except CseUnavailable as e:
+                    # keep the local floor; try again in 5 s
+                    self.replay.checked[device] = now - self.floor_refresh_s + 5
+                    log.warning("%s: CSE floor unavailable (%s); using the local floor", device, e)
+        return self.replay.get(device)
 
     def cse(self, base):
         if base not in self.clients:
@@ -864,12 +1010,17 @@ class Bridge:
             self._enqueue(("status", device, record, None, None))
 
     def _ack(self, device, msg):
-        a = {"seq": msg["seq"], "node": self.node_label}
+        a = {"id": device, "seq": msg["seq"], "node": self.node_label}
         if msg.get("v") == 2:
             a["epoch"] = msg["epoch"]
         else:
             a["boot"] = msg["boot"]
-        self._publish(f"{self.prefix}/{device}/ack", json.dumps(a, separators=(",", ":")))
+        if self.ack_key is not None:
+            a["ts"] = int(time.time())
+            payload = self._sign_ack(a, self.ack_key)
+        else:
+            payload = json.dumps(a, separators=(",", ":"))
+        self._publish(f"{self.prefix}/{device}/ack", payload)
         self.stats["acks"] += 1
 
     def _reject(self, device, reason):
@@ -1046,7 +1197,7 @@ class Bridge:
                             "addr": m.addr, "alive": m.alive} for m in members],
                "parent": {"label": p["label"], "addr": p["addr"], "epoch": p["epoch"],
                           "cse": p["base"]} if p else None,
-               "target": self.resolver.mode}
+               "target": self.resolver.mode, "ack_pk": self.ack_pk or None}
         self._publish(MEMBERS_TOPIC, json.dumps(doc, separators=(",", ":")), retain=True)
         if self.mqtt_ok:
             self._last_announce = (compact, now)
@@ -1081,7 +1232,7 @@ class Bridge:
             t.start()
         log.info("bridge started: MQTT %s:%s, target=%s (local CSE %s), node %s",
                  m["host"], m["port"], self.resolver.mode, self.resolver.local, self.node_label or "-")
-        last_retry = last_stats = last_ann = time.time()
+        last_retry = last_stats = last_ann = last_save = time.time()
         try:
             while not self.stop_evt.is_set():
                 try:
@@ -1101,6 +1252,9 @@ class Bridge:
                 if now - last_stats >= self.stats_s:
                     last_stats = now
                     self.log_stats()
+                if self.id_mode == "require" and self.replay.dirty and now - last_save >= 1.0:
+                    last_save = now
+                    self._save_replay()
         finally:
             client.loop_stop()
             client.disconnect()
@@ -1108,8 +1262,17 @@ class Bridge:
             while self.pending and time.time() < deadline and self.flush() is not False:
                 pass
             self.log_stats()
+            self._save_replay()
             if self.pending:
                 log.warning("exiting with %d undelivered records", len(self.pending))
+
+    def _save_replay(self):
+        if self.id_mode != "require":
+            return
+        try:
+            self.replay.save()
+        except OSError as e:
+            log.error("cannot save the replay floor: %s", e)
 
     def log_stats(self):
         s = dict(self.stats)
@@ -1154,11 +1317,28 @@ def main():
     ap = argparse.ArgumentParser(description="ESP32 MQTT -> OM2M (oneM2M) bridge, cluster edition")
     ap.add_argument("-c", "--config", help="path to bridge.conf")
     ap.add_argument("--check", action="store_true", help="test the target CSE and exit")
+    ap.add_argument("--print-ack-key", action="store_true",
+                    help="create (if needed) this bridge's ack key and print its PUBLIC key, then exit")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    if args.print_ack_key:
+        cfg["ack"]["sign"] = "true"
+        logging.basicConfig(level="WARNING")
+        br = Bridge.__new__(Bridge)
+        br.state_dir = cfg["bridge"]["state_dir"].strip()
+        if br.state_dir:
+            os.makedirs(br.state_dir, mode=0o700, exist_ok=True)
+        br._init_ack(cfg)
+        print(json.dumps({"node": cfg["cluster"]["self"] or cfg["om2m"]["node_label"], "apk": br.ack_pk}))
+        return
     logging.basicConfig(level=cfg["bridge"]["log_level"].upper(),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.check:
+        # one-shot probe, often run as another user (smoke_test.sh): it acks
+        # nothing and must not touch the service's ack key or replay floor
+        cfg["ack"]["sign"] = "false"
+        cfg["bridge"]["state_dir"] = ""
     bridge = Bridge(cfg)
     if args.check:
         try:

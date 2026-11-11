@@ -8,8 +8,12 @@ Type=simple
 ExecStart=/usr/bin/python3 /opt/om2m-ipe-bridge/om2m_ipe_bridge.py -c /etc/om2m-ipe-bridge/bridge.conf
 Restart=always
 RestartSec=5
-User=nobody
-Group=nogroup
+User=om2m-ipe
+Group=om2m-ipe
+# replay floor + ack key, /var/lib/om2m-ipe-bridge (0700, owned by om2m-ipe)
+StateDirectory=om2m-ipe-bridge
+StateDirectoryMode=0700
+UMask=0077
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

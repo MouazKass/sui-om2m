@@ -46,6 +46,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (Ed25519PrivateKey
                                                                Ed25519PublicKey)
 
 DOMAIN = b"om2m-esp32-sig-v1\x00"
+ACK_DOMAIN = b"om2m-esp32-ack-v1\x00"     # bridge -> sensor acks (never a device message)
 SIG_FIELD = b',"sig":"'
 ROLE_AE = 3
 
@@ -86,11 +87,11 @@ def load_or_create_key(path: str) -> Ed25519PrivateKey:
 # ---------------------------------------------------------------------------
 # signing / verification
 # ---------------------------------------------------------------------------
-def sign_body(body: str, sk: Ed25519PrivateKey) -> str:
+def sign_body(body: str, sk: Ed25519PrivateKey, domain: bytes = DOMAIN) -> str:
     """body: a compact JSON object (already containing "pk") -> signed message."""
     if not body.endswith("}") or '"sig"' in body:
         raise ValueError("body must be a JSON object without a sig field")
-    sig = sk.sign(DOMAIN + body.encode("utf-8"))
+    sig = sk.sign(domain + body.encode("utf-8"))
     return body[:-1] + ',"sig":"' + sig.hex() + '"}'
 
 
@@ -115,10 +116,10 @@ def split_signed(raw: bytes):
     return raw[:i] + b"}", sig
 
 
-def verify_message(raw: bytes, msg: dict) -> bytes:
-    """Check msg (the parsed raw) is signed by the key in msg["pk"]. Returns the pk."""
+def verify_message(raw: bytes, msg: dict, domain: bytes = DOMAIN, pk_field: str = "pk") -> bytes:
+    """Check msg (the parsed raw) is signed by the key in msg[pk_field]. Returns the pk."""
     body, sig = split_signed(raw)
-    pk_hex = msg.get("pk")
+    pk_hex = msg.get(pk_field)
     if not (isinstance(pk_hex, str) and len(pk_hex) == 64):
         raise IdentityError("bad_pk")
     try:
@@ -126,7 +127,7 @@ def verify_message(raw: bytes, msg: dict) -> bytes:
     except ValueError:
         raise IdentityError("bad_pk")
     try:
-        Ed25519PublicKey.from_public_bytes(pk).verify(sig, DOMAIN + body)
+        Ed25519PublicKey.from_public_bytes(pk).verify(sig, domain + body)
     except (InvalidSignature, ValueError):
         raise IdentityError("bad_signature")
     try:
@@ -137,6 +138,71 @@ def verify_message(raw: bytes, msg: dict) -> bytes:
     if signed != rest:
         raise IdentityError("body_mismatch")
     return pk
+
+
+# ---------------------------------------------------------------------------
+# signed acknowledgements (bridge -> sensor)
+# ---------------------------------------------------------------------------
+# A bridge acknowledges each stored reading on sensors/<device>/ack. An unsigned
+# ack let anyone on the broker make a board drop an unstored reading from its
+# resend buffer (and hide a dead bridge from its no-ack failover). Each bridge
+# therefore signs its acks with its own Ed25519 "ack key", generated on its Pi
+# (/var/lib/om2m-ipe-bridge/ack.key, 0600, owned by the bridge's user) and
+# never copied. The board accepts an ack only if
+#   * "apk" is one of the ack keys pinned on it (firmware ACK_TRUSTED_KEYS /
+#     simulator --ack-keys; the public keys are kept in deploy/v9/ack_keys/),
+#   * sig = Ed25519(ack key, ACK_DOMAIN || <ack without the sig field>) verifies,
+#   * "id" is the board's own device id and "epoch" its current epoch.
+# The ack names (device, epoch, seq), so replaying an old valid ack only
+# re-confirms a reading that bridge did store. Distinct domain tags keep a
+# device signature from ever being accepted as an ack and vice versa.
+#
+#   {"id":"esp32-dht-01","epoch":7,"seq":42,"node":"rpi2","ts":1762800000,
+#    "apk":"<64 hex>","sig":"<128 hex>"}
+
+
+def sign_ack(fields: dict, sk: Ed25519PrivateKey) -> str:
+    obj = dict(fields)
+    obj["apk"] = public_bytes(sk).hex()
+    return sign_body(json.dumps(obj, separators=(",", ":")), sk, ACK_DOMAIN)
+
+
+def load_trusted_ack_keys(path: str) -> dict:
+    """Lines '<label> <64-hex pk>' (# comments) -> {pk_hex: label}."""
+    out = {}
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].split()
+            if not line:
+                continue
+            pk = line[-1].lower()
+            if len(pk) != 64:
+                raise ValueError(f"{path}: bad ack key line {line}")
+            bytes.fromhex(pk)
+            out[pk] = line[0] if len(line) > 1 else pk[:8]
+    return out
+
+
+def verify_ack(raw: bytes, device: str, epoch, trusted: dict) -> dict:
+    """-> the verified ack dict. IdentityError(reason) unless it is a genuine ack
+    for this device and epoch, signed by a pinned bridge key."""
+    try:
+        msg = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise IdentityError("ack_malformed")
+    if not isinstance(msg, dict):
+        raise IdentityError("ack_malformed")
+    apk = msg.get("apk")
+    if not (isinstance(apk, str) and apk.lower() in trusted):
+        raise IdentityError("ack_untrusted_key" if apk else "ack_unsigned")
+    verify_message(raw, msg, domain=ACK_DOMAIN, pk_field="apk")
+    if msg.get("id") != device:
+        raise IdentityError("ack_wrong_device")
+    if msg.get("epoch") != epoch:
+        raise IdentityError("ack_wrong_epoch")
+    if not (isinstance(msg.get("seq"), int) and not isinstance(msg.get("seq"), bool)):
+        raise IdentityError("ack_malformed")
+    return msg
 
 
 # ---------------------------------------------------------------------------

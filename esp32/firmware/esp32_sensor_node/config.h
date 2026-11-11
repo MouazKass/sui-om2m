@@ -51,7 +51,25 @@
 #ifndef DEVICE_ID
 #define DEVICE_ID        "esp32-dht-01"
 #endif
-#define FW_VERSION       "2.1.0"
+#define FW_VERSION       "2.2.0"
+
+// ---- Signed acknowledgements (v2.2) -------------------------------------------
+// A reading leaves the resend buffer only on an ack signed by one of the
+// bridges' own ack keys (each generated on its Pi, never copied). Their PUBLIC
+// keys are pinned here: ack_keys.h is generated from deploy/v9/ack_keys/ by
+// firmware/gen_ack_keys.sh. Unsigned or foreign acks are ignored, so nobody on
+// the broker can make the board drop an unstored reading or mask a dead bridge.
+#if !defined(ACK_TRUSTED_KEYS) && defined(__has_include)
+#if __has_include("ack_keys.h")
+#include "ack_keys.h"
+#endif
+#endif
+#ifndef ACK_TRUSTED_KEYS
+#define ACK_TRUSTED_KEYS ""            // "hex64,hex64,..." (at most 16)
+#endif
+#ifndef REQUIRE_SIGNED_ACKS
+#define REQUIRE_SIGNED_ACKS 1          // 0 only for bridges older than v2.2
+#endif
 
 // ---- Sensors (set to 0 to disable one) ----------------------------------------
 #ifndef ENABLE_DHT

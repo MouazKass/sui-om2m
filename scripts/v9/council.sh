@@ -13,6 +13,7 @@
 #                               trust-grant-admin trust-revoke-admin trust-add-node
 #                               id-register id-deregister
 #                               policy-set policy-remove policy-add-blackout policy-clear-blackouts
+#                               policy-bind-device policy-unbind-device policy-add-reader policy-remove-reader  (v10)
 #                               token-mint cluster-set-gate   (or the numeric ACT_* id)
 #   council.sh approve  <node> <proposal-id>
 #   council.sh execute  <node> <proposal-id>             picks execute_<kind> from the proposal's action
@@ -21,7 +22,8 @@
 # Argument meaning per action (quorum.move): token-mint target=owner text=resource
 # value=expiry_ms value2=max_uses value3=ops; policy-set text=resource value=min_trust
 # value2=ops mask; id-register target text=cse_id value=role; cluster-set-gate
-# target=cluster value=gate; trust-revoke-admin target=cap id.
+# target=cluster value=gate; trust-revoke-admin target=cap id; policy-bind-device
+# text=resource target=device; policy-add-reader/remove-reader text=resource target=reader.
 #
 # Defaults: target 0x0 (the zero address), text "", values 0, ttl 24 h (quorum.move caps it at 7 days).
 # Every call is simulated first (dev-inspect, free) and only submitted if it
@@ -30,6 +32,11 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 [ -n "${COUNCIL:-}" ] || die "no COUNCIL in $V9_ENV: run scripts/v9/04_council.sh --execute first"
 [ -n "${PKG_V9:-}" ] || die "no PKG_V9 in $V9_ENV"
+# Always call the NEWEST package. Old package versions stay callable on Sui,
+# and their bodies do not know later rules: e.g. v9's policy::set_policy would
+# put a v10 device-bound resource's policy back into the plain table, where
+# the v8/v9 `evaluate` can grant it without the device check.
+CALL_PKG="${PKG_V10:-$PKG_V9}"
 CMD="${1:-status}"; shift || true
 GAS=30000000
 CLOCK=0x6
@@ -43,12 +50,14 @@ act_id() {
     trust-grant-admin) echo 10;; trust-revoke-admin) echo 11;; trust-add-node) echo 12;;
     id-register) echo 20;; id-deregister) echo 21;;
     policy-set) echo 30;; policy-remove) echo 31;; policy-add-blackout) echo 32;; policy-clear-blackouts) echo 33;;
+    policy-bind-device) echo 34;; policy-unbind-device) echo 35;; policy-add-reader) echo 36;; policy-remove-reader) echo 37;;
     token-mint) echo 40;; cluster-set-gate) echo 50;;
     [0-9]*) echo "$1";;
     *) die "unknown action '$1'";;
   esac
 }
 grep -q "const ACT_CLUSTER_SET_GATE: u8 = 50;" "$REPO/move/sources/quorum.move" || die "quorum.move action ids changed; update act_id()"
+grep -q "const ACT_POLICY_REMOVE_READER: u8 = 37;" "$REPO/move/sources/quorum.move" || die "quorum.move v10 action ids changed; update act_id()"
 
 # member <name>: check the node is active, a council member and holds a recorded cap.
 member() {
@@ -62,7 +71,7 @@ member() {
 node_call() {
   local n=$1 fn=$2; shift 2
   local args="$*" i out
-  local base="sui client call --package $PKG_V9 --module quorum --function $fn --args $args --gas-budget $GAS"
+  local base="sui client call --package $CALL_PKG --module quorum --function $fn --args $args --gas-budget $GAS"
   out=$(node_ssh "$n" "docker exec om2m-active $base --dev-inspect" 2>&1) || true
   if ! grep -q "execution status: success\|\"status\": \"success\"" <<<"$out"; then
     echo "$out" | grep -E "MoveAbort|Error|error" | head -3 >&2
@@ -132,12 +141,12 @@ case "$CMD" in
       exec wsl.exe -d Ubuntu -- bash -lc "cd '$rw' && bash scripts/v9/council.sh status ${1:-}"
     fi
     echo "council   $COUNCIL"
-    echo "threshold $(inspect_value "$PKG_V9" quorum threshold "$COUNCIL")  members $(inspect_value "$PKG_V9" quorum member_count "$COUNCIL")"
+    echo "threshold $(inspect_value "$CALL_PKG" quorum threshold "$COUNCIL")  members $(inspect_value "$CALL_PKG" quorum member_count "$COUNCIL")"
     for n in "${V9_NODES[@]}"; do
-      echo "  $n ${INV_ADDR[$n]:0:10}… member=$(inspect_value "$PKG_V9" quorum is_member "$COUNCIL" "${INV_ADDR[$n]}") cap_valid=$(inspect_value "$PKG_V9" trust is_cap_valid "$TRUST_REG" "$(node_cap "$n")")"
+      echo "  $n ${INV_ADDR[$n]:0:10}… member=$(inspect_value "$CALL_PKG" quorum is_member "$COUNCIL" "${INV_ADDR[$n]}") cap_valid=$(inspect_value "$CALL_PKG" trust is_cap_valid "$TRUST_REG" "$(node_cap "$n")")"
     done
     if [ -n "${1:-}" ]; then
-      echo "proposal $1: exists=$(inspect_value "$PKG_V9" quorum has_proposal "$COUNCIL" "$1") approvals=$(inspect_value "$PKG_V9" quorum approval_count "$COUNCIL" "$1")"
+      echo "proposal $1: exists=$(inspect_value "$CALL_PKG" quorum has_proposal "$COUNCIL" "$1") approvals=$(inspect_value "$CALL_PKG" quorum approval_count "$COUNCIL" "$1")"
     fi
     ;;
 
@@ -162,7 +171,7 @@ case "$CMD" in
       1|2|3)   submit "$n" execute_membership "$COUNCIL" "$pid" "$ID_REG" "$TRUST_REG" "$CLOCK";;
       10|11|12) submit "$n" execute_trust   "$COUNCIL" "$pid" "$TRUST_REG" "$CLOCK";;
       20|21)   submit "$n" execute_identity "$COUNCIL" "$pid" "$ID_REG" "$TRUST_REG" "$CLOCK";;
-      30|31|32|33) submit "$n" execute_policy "$COUNCIL" "$pid" "${POLICY_REG:?POLICY_REG missing from deployment.env}" "$TRUST_REG" "$CLOCK";;
+      30|31|32|33|34|35|36|37) submit "$n" execute_policy "$COUNCIL" "$pid" "${POLICY_REG:?POLICY_REG missing from deployment.env}" "$TRUST_REG" "$CLOCK";;
       40)      submit "$n" execute_mint     "$COUNCIL" "$pid" "$TRUST_REG" "$CLOCK";;
       50)      submit "$n" execute_cluster  "$COUNCIL" "$pid" "$CLUSTER" "$TRUST_REG" "$CLOCK";;
       *) die "unknown action $act in proposal $pid";;

@@ -1,6 +1,6 @@
 # AdminCap Inventory (trust module, package original-id 0xcba39e8b...)
 
-## CURRENT (v9, 2026-11-10) - read this first; everything below is history
+## CURRENT (v10, 2026-11-11; caps unchanged since v9) - read this first; everything below is history
 
 Package original-id `0x88f0b0f7...` (v8 fresh publish), upgraded to v9 `0x5121fa28...`.
 The TrustRegistry is governed by the 3-of-5 council `0xd98ce113...24e0`
@@ -11,8 +11,8 @@ The TrustRegistry is governed by the 3-of-5 council `0xd98ce113...24e0`
 | trust AdminCap rpi1-rpi5 (`ADMINCAP_RPI1..5` / `TRUST_ADMIN_CAP_<NAME>`) | each node, own key | valid; also each node's council credential |
 | trust AdminCap genesis `0x33e6daad...8cf0` (`TR_ADMIN_CAP`) | publisher | **REVOKED** by council proposal 5, execute tx `CHDdqJhsuabCV44onWAN82tpmWAeBmCthbSUKtyyxjG2`; any guarded use aborts 5 |
 | identity AdminCap | consumed by `create_council` | gone; registration is council action 20/21 |
-| PolicyAdminCap, IssuerCap, ClusterAdminCap | inside the council | council actions 30-33, 40, 50 |
-| UpgradeCap | 3-of-5 multisig `0x05550e81…5e27` | transferred 2026-11-11, tx `AA88mpRyb2obsERSapysUV9DBuS2AzJT5ukJyePydChW` |
+| PolicyAdminCap, IssuerCap, ClusterAdminCap | inside the council | council actions 30-37 (34-37 v10 device binding), 40, 50 |
+| UpgradeCap | 3-of-5 multisig `0x05550e81…5e27` | transferred 2026-11-11, tx `AA88mpRyb2obsERSapysUV9DBuS2AzJT5ukJyePydChW`; first used for v10 (tx `2YQLXcXmLBdV97wzybWpP66jUkoLLd29EDoSZw3eS6m3`) |
 
 Grants and revocations of other nodes' caps are council-only (`E_GOVERNED` = 8 for any
 single cap); a cap may still revoke itself. Proof 09's throwaway caps are granted,

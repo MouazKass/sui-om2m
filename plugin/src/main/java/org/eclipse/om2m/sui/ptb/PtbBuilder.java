@@ -147,12 +147,23 @@ public final class PtbBuilder {
         // A5: the old numeric `trust_score` argument is replaced by the
         // TrustRegistry object — the score is read on-chain. trust_reg is
         // therefore referenced a second time here.
+        // v10: evaluate_with_device also takes the identity registry (device-bound
+        // resources); kept in lock-step with NativePtbBuilder.policyStep.
         argv.add("--move-call");
-        argv.add(pkg + "::policy::evaluate");
-        argv.add("r3");
-        argv.add("@" + cfg.policyRegistryId);
-        argv.add("@" + cfg.trustRegistryId);
-        argv.add("@" + cfg.suiClockId);
+        if (cfg.policyDeviceBinding) {
+            argv.add(pkg + "::policy::evaluate_with_device");
+            argv.add("r3");
+            argv.add("@" + cfg.policyRegistryId);
+            argv.add("@" + cfg.trustRegistryId);
+            argv.add("@" + cfg.identityRegistryId);
+            argv.add("@" + cfg.suiClockId);
+        } else {
+            argv.add(pkg + "::policy::evaluate");
+            argv.add("r3");
+            argv.add("@" + cfg.policyRegistryId);
+            argv.add("@" + cfg.trustRegistryId);
+            argv.add("@" + cfg.suiClockId);
+        }
         argv.add("--assign");
         argv.add("r4");
 

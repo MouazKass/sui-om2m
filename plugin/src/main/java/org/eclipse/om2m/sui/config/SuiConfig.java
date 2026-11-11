@@ -65,6 +65,7 @@ public final class SuiConfig {
     public final int     denyLogKeep;
     public final boolean denyAuditFlushEnabled; // v9 only: anchor DENY batches on-chain
     public final long    denyAuditFlushIntervalMs;
+    public final boolean policyDeviceBinding;   // v10: step 4 = policy::evaluate_with_device
     // Provisioning maps: populated by the IN-CSE when tokens are minted.
     private final java.util.Map<String,String> addrIndex =
         new java.util.concurrent.ConcurrentHashMap<>();
@@ -119,6 +120,9 @@ public final class SuiConfig {
         // Floor at the contract's minimum batch interval (5 min): a faster flush would only abort.
         this.denyAuditFlushIntervalMs = Math.max(300_000L,
             60_000L * Long.parseLong(p.getProperty("sui.das.deny.audit.flush.interval.min", "15").trim()));
+        // v10 only: the function does not exist in v8/v9 packages. Off by default;
+        // a bound resource then fails closed (E_DEVICE_BOUND), never open.
+        this.policyDeviceBinding = Boolean.parseBoolean(p.getProperty("sui.policy.device.binding", "false").trim());
     }
 
     private static String req(Properties p, String key) {

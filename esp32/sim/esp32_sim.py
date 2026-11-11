@@ -261,6 +261,14 @@ class Sensor:
             self.idm = esp_identity
             self.key = esp_identity.load_or_create_key(a.key)
             self.rogue = esp_identity.Ed25519PrivateKey.generate()   # for --forge-every
+        # v2.2: trust only acks signed by a pinned bridge ack key (firmware ACK_TRUSTED_KEYS)
+        self.ack_keys = None
+        self.acks_rejected = 0
+        if a.ack_keys:
+            import esp_identity
+            self.idm = esp_identity
+            self.ack_keys = esp_identity.load_trusted_ack_keys(a.ack_keys)
+            self.event(f"{len(self.ack_keys)} pinned bridge ack key(s): signed acks required")
 
     def enc(self, obj, key=None):
         """Compact JSON; signed with the device key when --key is given."""
@@ -313,10 +321,19 @@ class Sensor:
                 self.event(f"learned {','.join(new)} from {BROKERS_TOPIC} ({k} entries)")
             return
         if m.topic == self.t_ack:
-            try:
-                d = json.loads(text)
-            except ValueError:
-                return
+            if self.ack_keys is not None:
+                try:
+                    d = self.idm.verify_ack(m.payload, self.dev, self.epoch, self.ack_keys)
+                except self.idm.IdentityError as e:
+                    self.acks_rejected += 1
+                    if self.acks_rejected % 20 == 1:
+                        self.event(f"ignored an ack: {e} ({self.acks_rejected} so far)")
+                    return
+            else:
+                try:
+                    d = json.loads(text)
+                except ValueError:
+                    return
             if d.get("epoch") != self.epoch:
                 return
             with self.lock:
@@ -571,7 +588,8 @@ class Sensor:
             time.sleep(0.05)
         with self.lock:
             left = sorted(s for s, v in self.slots.items() if not v[1])
-        self.event(f"finished: {self.seq} readings taken, {len(left)} unacknowledged {left[:10]}")
+        self.event(f"finished: {self.seq} readings taken, {len(left)} unacknowledged {left[:10]}, "
+                   f"{self.acks_rejected} forged/unsigned acks ignored")
         self.bye()
 
 
@@ -613,6 +631,9 @@ def main():
     ap.add_argument("--forge-every", type=int, default=0, help="every Nth reading signed by a rogue key")
     ap.add_argument("--tamper-every", type=int, default=0, help="every Nth reading altered after signing")
     ap.add_argument("--unsigned-every", type=int, default=0, help="every Nth reading sent unsigned")
+    ap.add_argument("--ack-keys", default="",
+                    help="file of pinned bridge ack public keys ('<label> <hex>' lines): "
+                         "accept only acks signed by one of them (firmware REQUIRE_SIGNED_ACKS)")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
     if a.print_identity:

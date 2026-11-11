@@ -1,0 +1,106 @@
+# Live run 2026-11-11: signed acks + durable replay floor (bridge/firmware v2.2) on the 5-node testbed
+# simulated esp32-dht-01 on rpi1 (its device key generated there); bridges v2.2 on all five nodes;
+# ack public keys in deploy/v9/ack_keys/. Off-chain only: no transaction was sent.
+
+## 2026-11-11T09:36:40Z step 1: start the signing sensor on rpi1 (pins the 5 bridge ack keys)
+started pid 2958751 (log /tmp/espid-esp32-dht-01/sim.log)
+[esp32-dht-01] event        5 pinned bridge ack key(s): signed acks required
+[esp32-dht-01] event        power-up epoch 2 boot 1398d02a, 5 brokers, home rpi2
+[esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 2.1
+ignored-ack lines: 0
+-- rpi2 bridge:
+{"devices": {"esp32-dht-01": {"epoch": 2, "high": 16}}, "ts": 1794389881, "v": 1}
+2026-11-11 13:36:42,424 INFO ipe-bridge: esp32-dht-01: replay floor raised from http://10.25.96.201:8282 to epoch 1 seq 83
+2026-11-11 13:36:42,436 INFO ipe-bridge: esp32-dht-01: replay floor now epoch 2
+2026-11-11 13:37:20,514 INFO ipe-bridge: stats {"acks": 8, "announcements": 2, "authenticated": 10, "cse_errors": 1, "devices": 1, "floor_cse_reads": 1, "latest_label": 8, "no_target": 1, "parent": "rpi2", "parent_changes": 1, "pending": 0, "provisioned": 1, "rejected": 1, "rejected:auth:unsigned": 1, "rx": 11, "stored": 8, "stored_status": 2}
+
+## 2026-11-11T09:38:14Z step 2: capture one genuine signed reading (for the replay tests later)
+captured genuine reading epoch 2 seq 19 on rpi2 -> /tmp/espid-esp32-dht-01/old.json
+
+## 2026-11-11T09:38:26Z step 3: attacker on rpi2's broker forges acks (unsigned / rogue key / wrong device) for every reading, while rpi2's BRIDGE is stopped for 45 s
+forging acks on rpi2 (10.25.96.201:1883) for 75 s
+last seq before stop: "seq":36
+rpi2 bridge: inactive at 09:39:43
+[esp32-dht-01] event        ignored an ack: ack_untrusted_key (21 so far)
+[esp32-dht-01] event        ignored an ack: ack_untrusted_key (41 so far)
+[esp32-dht-01] event        no acks via rpi2 for 20s: its bridge is down, failing over
+[esp32-dht-01] event        connected rpi3 (10.25.96.203:1883) session 2.2
+forged so far: 16 readings
+rpi2 bridge restarted: active at 09:40:09
+[esp32-dht-01] event        connected rpi3 (10.25.96.203:1883) session 2.5
+[esp32-dht-01] event        home rpi2 stable for 30s: moving back
+[esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 2.6
+45 forged acks published
+
+## 2026-11-11T09:41:56Z step 4: stop the sensor (drain: wait until every reading is acked by a GENUINE signed ack)
+[esp32-dht-01] event        finished: 63 readings taken, 0 unacknowledged [], 45 forged/unsigned acks ignored
+[esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 2.1
+[esp32-dht-01] event        no acks via rpi2 for 20s: its bridge is down, failing over
+[esp32-dht-01] event        connected rpi3 (10.25.96.203:1883) session 2.2
+[esp32-dht-01] event        lost rpi3, failing over
+[esp32-dht-01] event        connected rpi4 (10.25.96.204:1883) session 2.3
+[esp32-dht-01] event        lost rpi4, failing over
+[esp32-dht-01] event        connected rpi5 (10.25.96.205:1883) session 2.4
+[esp32-dht-01] event        no acks via rpi5 for 20s: its bridge is down, failing over
+[esp32-dht-01] event        connected rpi3 (10.25.96.203:1883) session 2.5
+[esp32-dht-01] event        home rpi2 stable for 30s: moving back
+[esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 2.6
+
+## NOTE: between 09:40:25 and 09:41:03 UTC all five om2m-active containers were restarted by a concurrent plugin redeploy (not this change). OM2M keeps its resource tree in memory, so the parent's stored readings e2-s0..s44 were wiped (each had been stored and genuinely acked first; e2-s45..s62 are on the parent). Step 3 is therefore repeated below on the stable cluster (epoch 3).
+
+## 2026-11-11T09:42:54Z step 3b: clean repeat. Start the sensor (epoch 3)
+2026-11-11 13:42:10,569 INFO ipe-bridge: stats {"acks": 3, "announcements": 4, "authenticated": 7, "cse_errors": 1, "devices": 1, "floor_cse_reads": 1, "latest_label": 3, "no_target": 1, "parent": "rpi2", "parent_changes": 1, "pending": 0, "provisioned": 2, "reprovision": 1, "rx": 7, "status_restored": 1, "status_stale_ignored": 1, "stored": 3, "stored_status": 3}
+started pid 2960709 (log /tmp/espid-esp32-dht-01/sim.log)
+[esp32-dht-01] event        5 pinned bridge ack key(s): signed acks required
+[esp32-dht-01] event        power-up epoch 3 boot de68612c, 5 brokers, home rpi2
+[esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 3.1
+forging acks on rpi2 (10.25.96.201:1883) for 80 s
+rpi2 bridge: inactive at 09:45:01
+[esp32-dht-01] event        ignored an ack: ack_untrusted_key (21 so far)
+[esp32-dht-01] event        ignored an ack: ack_untrusted_key (41 so far)
+[esp32-dht-01] event        no acks via rpi2 for 20s: its bridge is down, failing over
+[esp32-dht-01] event        connected rpi3 (10.25.96.203:1883) session 3.2
+rpi2 bridge restarted: active at 09:45:29
+48 forged acks published
+[esp32-dht-01] event        finished: 52 readings taken, 0 unacknowledged [], 48 forged/unsigned acks ignored
+[esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 3.1
+[esp32-dht-01] event        no acks via rpi2 for 20s: its bridge is down, failing over
+[esp32-dht-01] event        connected rpi3 (10.25.96.203:1883) session 3.2
+[esp32-dht-01] event        home rpi2 stable for 30s: moving back
+[esp32-dht-01] event        connected rpi2 (10.25.96.201:1883) session 3.3
+rpi1 om2m started: 2026-11-11T09:40:25.506420442Z
+rpi2 om2m started: 2026-11-11T09:40:27.536958117Z
+rpi3 om2m started: 2026-11-11T09:40:29.813708864Z
+rpi4 om2m started: 2026-11-11T09:40:33.137580926Z
+rpi5 om2m started: 2026-11-11T09:41:03.099666221Z
+-- every epoch-3 reading on the parent (rpi2 CSE), and who stored it:
+52 readings checked, missing: none
+  stored via rpi2: 33
+  stored via rpi3: 19
+
+## 2026-11-11T09:47:57Z step 5: restart rpi2's bridge (keeps /var/lib/om2m-ipe-bridge/replay.json), then replay the captured genuine epoch-2 reading to rpi2
+{"devices": {"esp32-dht-01": {"epoch": 3, "high": 51}}, "ts": 1794390430, "v": 1}
+2026-11-11 13:47:58,291 INFO ipe-bridge: replay floor loaded for 1 device(s) from /var/lib/om2m-ipe-bridge/replay.json
+2026-11-11 13:47:58,294 INFO ipe-bridge: MQTT connected; subscribed to sensors/+/telemetry and sensors/+/status
+replayed genuine reading epoch 2 seq 19 to rpi2 (10.25.96.201:1883)
+2026-11-11 13:47:29,712 INFO ipe-bridge: stats {"acks": 7, "announcements": 2, "authenticated": 10, "cse_errors": 1, "devices": 1, "floor_cse_reads": 1, "latest_label": 7, "no_target": 1, "parent": "rpi2", "parent_changes": 1, "pending": 0, "provisioned": 1, "rx": 10, "stored": 7, "stored_status": 3}
+2026-11-11 13:47:57,987 INFO ipe-bridge: stats {"acks": 7, "announcements": 2, "authenticated": 10, "cse_errors": 1, "devices": 1, "floor_cse_reads": 1, "latest_label": 7, "no_target": 1, "parent": "rpi2", "parent_changes": 1, "pending": 0, "provisioned": 1, "rx": 10, "stored": 7, "stored_status": 3}
+2026-11-11 13:47:58,291 INFO ipe-bridge: replay floor loaded for 1 device(s) from /var/lib/om2m-ipe-bridge/replay.json
+2026-11-11 13:48:02,582 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:stale_epoch
+e2-s19 on parent after replay: HTTP 404 (wiped by the 09:40 OM2M restart; a replay must NOT re-create it)
+
+## 2026-11-11T09:48:20Z step 6: replay the same epoch-2 reading to a DIFFERENT bridge (rpi4). rpi4's own floor is still from epoch 2 (the sensor never came back through it):
+{"devices": {"esp32-dht-01": {"epoch": 2, "high": 45}}, "ts": 1794390030, "v": 1}
+replayed genuine reading epoch 2 seq 19 to rpi4 (10.25.96.204:1883)
+2026-11-11 13:48:21,543 INFO ipe-bridge: esp32-dht-01: replay floor raised from http://10.25.96.201:8282 to epoch 3 seq 51
+2026-11-11 13:48:21,544 WARNING ipe-bridge: rejected message from esp32-dht-01: auth:stale_epoch
+{"devices": {"esp32-dht-01": {"epoch": 3, "high": 51}}, "ts": 1794390501, "v": 1}
+e2-s19 on parent: HTTP 404
+
+## 2026-11-11T09:48:34Z step 7: afterwards
+rpi1: bridge active om2m-ipe 700 ack.key om2m-ipe 600 
+rpi2: bridge active om2m-ipe 700 ack.key om2m-ipe 600 
+rpi3: bridge active om2m-ipe 700 ack.key om2m-ipe 600 
+rpi4: bridge active om2m-ipe 700 ack.key om2m-ipe 600 
+rpi5: bridge active om2m-ipe 700 ack.key om2m-ipe 600 
+2961795 bash -c pgrep -af "esp32_sim|live_identity" || echo "sensor sim stopped"

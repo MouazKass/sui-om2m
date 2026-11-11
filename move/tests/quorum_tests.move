@@ -316,6 +316,71 @@ module om2m_access::quorum_tests {
         finish(sc, clk);
     }
 
+    fun exec_policy_as(sc: &mut Scenario, who: address, pid: u64, clk: &Clock) {
+        ts::next_tx(sc, who);
+        let mut council = ts::take_shared<Council>(sc);
+        let mut preg = ts::take_shared<PolicyRegistry>(sc);
+        let treg = ts::take_shared<TrustRegistry>(sc);
+        quorum::execute_policy(&mut council, pid, &mut preg, &treg, clk, ts::ctx(sc));
+        ts::return_shared(treg);
+        ts::return_shared(preg);
+        ts::return_shared(council);
+    }
+
+    // v10: bind a sensor resource to a device, scope readers, unbind - all by
+    // council vote with the wrapped PolicyAdminCap.
+    #[test]
+    fun device_binding_via_council() {
+        let (mut sc, clk) = setup();
+        let res = b"/in-cse/Cesp32-dht-01";
+        let pid = propose_as(&mut sc, N2, quorum::act_policy_set(), @0x0, res, 50, 0x1, 0, TTL, &clk);
+        approve_as(&mut sc, N1, pid, &clk);
+        exec_policy_as(&mut sc, N1, pid, &clk);
+
+        let pid = propose_as(&mut sc, N2, quorum::act_policy_bind_device(), SENSOR, res, 0, 0, 0, TTL, &clk);
+        approve_as(&mut sc, N3, pid, &clk);
+        exec_policy_as(&mut sc, N3, pid, &clk);
+
+        let pid = propose_as(&mut sc, N1, quorum::act_policy_add_reader(), N2, res, 0, 0, 0, TTL, &clk);
+        approve_as(&mut sc, N2, pid, &clk);
+        exec_policy_as(&mut sc, N1, pid, &clk);
+
+        ts::next_tx(&mut sc, N1);
+        {
+            let preg = ts::take_shared<PolicyRegistry>(&sc);
+            let r = string::utf8(res);
+            assert!(policy::is_device_bound(&preg, &r), 0);
+            assert!(policy::bound_device(&preg, &r) == SENSOR, 1);
+            assert!(policy::readers_of(&preg, &r) == vector[N2], 2);
+            ts::return_shared(preg);
+        };
+
+        let pid = propose_as(&mut sc, N1, quorum::act_policy_remove_reader(), N2, res, 0, 0, 0, TTL, &clk);
+        approve_as(&mut sc, N3, pid, &clk);
+        exec_policy_as(&mut sc, N1, pid, &clk);
+        let pid = propose_as(&mut sc, N1, quorum::act_policy_unbind_device(), @0x0, res, 0, 0, 0, TTL, &clk);
+        approve_as(&mut sc, N3, pid, &clk);
+        exec_policy_as(&mut sc, N1, pid, &clk);
+        ts::next_tx(&mut sc, N1);
+        {
+            let preg = ts::take_shared<PolicyRegistry>(&sc);
+            let r = string::utf8(res);
+            assert!(!policy::is_device_bound(&preg, &r) && policy::has_policy(&preg, &r), 3);
+            ts::return_shared(preg);
+        };
+        finish(sc, clk);
+    }
+
+    // One member alone cannot bind (or re-bind) a resource to a device.
+    #[test]
+    #[expected_failure(abort_code = 4, location = om2m_access::quorum)]
+    fun device_binding_needs_quorum() {
+        let (mut sc, clk) = setup();
+        let pid = propose_as(&mut sc, N2, quorum::act_policy_bind_device(), SENSOR, b"/in-cse/Cesp32-dht-01", 0, 0, 0, TTL, &clk);
+        exec_policy_as(&mut sc, N2, pid, &clk);
+        finish(sc, clk);
+    }
+
     #[test]
     fun token_mint_via_council() {
         let (mut sc, clk) = setup();

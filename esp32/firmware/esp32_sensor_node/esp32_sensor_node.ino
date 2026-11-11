@@ -27,6 +27,11 @@
 //       HOME_STABLE_MS (hysteresis), leaving the other broker cleanly (no
 //       Last Will) and clearing its retained presence there.
 //
+//    8. (v2.2) Trusts only SIGNED acks: a reading leaves the resend buffer
+//       only on an ack for (DEVICE_ID, epoch, seq) signed by a pinned bridge
+//       ack key (config.h ACK_TRUSTED_KEYS). Forged acks are ignored and do
+//       not hold off the no-ack failover.
+//
 //    7. (v2.1) Has its OWN on-chain identity: an Ed25519 key generated on the
 //       device (device_key.h). Every telemetry/status message, including the
 //       Last Will, carries "pk" and is signed ("sig"); the bridges accept it
@@ -141,8 +146,22 @@ static void onMessage(char* topic, byte* payload, unsigned int len) {
   }
   if (strcmp(topic, topicAck) == 0) {
     unsigned long e = 0, s = 0;
-    const char* pe = strstr(buf, "\"epoch\":");
-    const char* ps = strstr(buf, "\"seq\":");
+#if REQUIRE_SIGNED_ACKS
+    static char body[512];
+    char idField[80];
+    snprintf(idField, sizeof(idField), "\"id\":\"%s\"", DEVICE_ID);
+    if (!devkey::verifyAck(buf, len, body, sizeof(body)) || !strstr(body, idField)) {
+      if (devkey::acksRejected++ % 20 == 0)
+        Serial.printf("[ack] ignored an unsigned/forged ack (%lu so far)\n",
+                      (unsigned long)devkey::acksRejected);
+      return;
+    }
+    const char* src = body;
+#else
+    const char* src = buf;
+#endif
+    const char* pe = strstr(src, "\"epoch\":");
+    const char* ps = strstr(src, "\"seq\":");
     if (!pe || !ps) return;
     e = strtoul(pe + 8, nullptr, 10);
     s = strtoul(ps + 6, nullptr, 10);
@@ -329,6 +348,13 @@ void setup() {
   Serial.printf("[id] device key pk=%s sui_address=%s\n"
                 "[id] register: scripts/v9/council.sh propose <member> id-register %s %s 3\n",
                 devkey::pkHex, devkey::addrHex, devkey::addrHex, DEVICE_ID);
+  {
+    int k = devkey::loadAckKeys(ACK_TRUSTED_KEYS);
+    Serial.printf("[ack] %d pinned bridge ack key(s); signed acks %s\n", k,
+                  REQUIRE_SIGNED_ACKS ? "required" : "NOT required");
+    if (REQUIRE_SIGNED_ACKS && k == 0)
+      Serial.println("[ack] WARNING: no ACK_TRUSTED_KEYS: no ack will be accepted (run gen_ack_keys.sh)");
+  }
   startNtpOnce();
   mqtt.setBufferSize(1024);
   mqtt.setKeepAlive(MQTT_KEEPALIVE_S);

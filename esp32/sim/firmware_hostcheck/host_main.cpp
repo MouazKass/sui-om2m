@@ -7,7 +7,14 @@
 //   40 s  home broker back          -> returns only after HOME_STABLE_MS (hysteresis)
 //   58 s  home broker up but its BRIDGE stops acking (until 80 s)
 //                                   -> fails over after NO_ACK_FAILOVER_MS, nothing lost
+//  58-80 s an attacker on the home broker publishes FORGED acks for every
+//          reading (unsigned, rogue key, wrong device, tampered)
+//                                   -> all ignored: the failover still happens
+//                                      and no reading is dropped unstored
 //  100 s  power cycle               -> epoch +1 from NVS
+//
+// The simulated bridges sign their acks with the RFC 8032 test-vector-1 key,
+// pinned below as ACK_TRUSTED_KEYS (exactly as gen_ack_keys.sh pins real ones).
 //
 // Exit code 0 only if every check passes. stdout keeps the PUB lines that
 // sim/run_e2e.py scenario 5 replays into a real broker.
@@ -18,6 +25,7 @@
 #define HOME_STABLE_MS 10000UL
 #define ACK_WAIT_MS 1500UL
 #define NO_ACK_FAILOVER_MS 5000UL
+#define ACK_TRUSTED_KEYS "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
 #include <map>
 #include <set>
 #include <string>
@@ -34,6 +42,30 @@ std::map<std::string, std::string> g_nvs_bytes;
 std::string g_brokers_retained;
 std::vector<HostBridgeEvent> g_events;
 #include "../../firmware/esp32_sensor_node/esp32_sensor_node.ino"
+
+// ---- the bridges' ack signer (and an attacker's) ------------------------------
+static unsigned char bridgePk[32], bridgeSk[64], roguePk[32], rogueSk[64];
+static void initSigners() {
+  unsigned char seed[32];
+  devkey::fromHex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60", 32, seed);
+  crypto_sign_seed_keypair(bridgePk, bridgeSk, seed);
+  memset(seed, 0x42, sizeof(seed));
+  crypto_sign_seed_keypair(roguePk, rogueSk, seed);
+}
+// {"id":..,"seq":..,"node":..,"epoch":..,"ts":0,"apk":..} + sig, like esp_identity.sign_ack
+static std::string signedAck(const char* id, unsigned long epoch, long seq,
+                             const unsigned char* pk, const unsigned char* sk) {
+  char apk[65], body[400], sigHex[129];
+  devkey::toHex(pk, 32, apk);
+  snprintf(body, sizeof(body), "{\"id\":\"%s\",\"seq\":%ld,\"node\":\"host\",\"epoch\":%lu,\"ts\":0,\"apk\":\"%s\"}",
+           id, seq, epoch, apk);
+  std::string m = std::string(devkey::ACK_DOMAIN, sizeof(devkey::ACK_DOMAIN)) + body;
+  unsigned char sig[64];
+  crypto_sign_detached(sig, nullptr, (const unsigned char*)m.data(), m.size(), sk);
+  devkey::toHex(sig, 64, sigHex);
+  std::string b(body);
+  return b.substr(0, b.size() - 1) + ",\"sig\":\"" + sigHex + "\"}";
+}
 
 static int failures = 0;
 static void check(const char* name, bool ok, const std::string& detail = "") {
@@ -53,8 +85,11 @@ int main() {
   unsigned long failoverAt = 0, homeAgainAt = 0, silentFailoverAt = 0;
   bool clearedRetained = false;
 
+  initSigners();
   setup();
   uint32_t epoch1 = epoch;
+  long forgedSent = 0;
+  uint32_t rejectedBefore = 0;
   while (g_virtual_ms < 100000) {
     bool silent = g_virtual_ms >= 58000 && g_virtual_ms < 80000;
     if (g_virtual_ms >= 5000 && g_brokers_retained.empty())
@@ -79,13 +114,29 @@ int main() {
         if (e.broker == HOME && failoverAt && !homeAgainAt) homeAgainAt = e.t;
         if (e.broker != HOME && e.t >= 58000 && !silentFailoverAt) silentFailoverAt = e.t;
       }
-      // per-reading ack, exactly like the bridge (stored or duplicate)
+      // per-reading ack, exactly like the bridge (stored or duplicate): signed
       if (tele && !(silent && e.broker == HOME) && mqtt.connected() &&
           hp(mqtt.host.c_str(), mqtt.port) == e.broker) {
-        char ack[96];
-        snprintf(ack, sizeof(ack), "{\"epoch\":%lu,\"seq\":%ld}", (unsigned long)epoch,
-                 field(e.payload, "\"seq\":"));
-        mqtt.deliver(topicAck, ack);
+        std::string ack = signedAck(DEVICE_ID, epoch, field(e.payload, "\"seq\":"), bridgePk, bridgeSk);
+        mqtt.deliver(topicAck, ack.c_str());
+      }
+      // the attacker on the silent home broker: forged acks for this very reading
+      if (tele && silent && e.broker == HOME && mqtt.connected() &&
+          hp(mqtt.host.c_str(), mqtt.port) == e.broker) {
+        long sq = field(e.payload, "\"seq\":");
+        if (!forgedSent) rejectedBefore = devkey::acksRejected;
+        char plain[96];
+        snprintf(plain, sizeof(plain), "{\"id\":\"%s\",\"epoch\":%lu,\"seq\":%ld}", DEVICE_ID,
+                 (unsigned long)epoch, sq);
+        std::string rogue = signedAck(DEVICE_ID, epoch, sq, roguePk, rogueSk);
+        std::string other = signedAck("esp32-other-99", epoch, sq, bridgePk, bridgeSk);
+        std::string tampered = signedAck(DEVICE_ID, epoch, sq + 1000, bridgePk, bridgeSk);
+        size_t at = tampered.find("\"seq\":");
+        tampered.replace(at, tampered.find(',', at) - at, "\"seq\":" + std::to_string(sq));
+        for (const std::string& f : {std::string(plain), rogue, other, tampered}) {
+          mqtt.deliver(topicAck, f.c_str());
+          forgedSent++;
+        }
       }
     }
   }
@@ -120,6 +171,12 @@ int main() {
                  e.payload.find(",\"sig\":\"") == std::string::npos)) { allSigned = false; break; }
   }
   check("every telemetry message carries pk and sig", allSigned);
+  check("every forged ack was ignored (unsigned, rogue key, other device, tampered)",
+        forgedSent > 0 && (long)(devkey::acksRejected - rejectedBefore) == forgedSent,
+        std::to_string(forgedSent) + " forged, " + std::to_string(devkey::acksRejected - rejectedBefore) +
+        " ignored");
+  check("genuine signed acks were accepted (the board pinned the bridge key)", devkey::nAckKeys == 1,
+        std::to_string(devkey::nAckKeys) + " pinned");
   check("Last Will is signed too", mqtt.willMsg.find(",\"sig\":\"") != std::string::npos, mqtt.willMsg);
   std::string pk1 = devkey::pkHex;
   setup();                                    // power cycle

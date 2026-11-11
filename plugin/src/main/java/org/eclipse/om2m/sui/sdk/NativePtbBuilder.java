@@ -46,6 +46,14 @@ public final class NativePtbBuilder {
         public final long minTrustRequired;
         /** Where gas comes from (sui.gas.source); AUTO unless set. */
         public final GasPlan.Mode gasSource;
+        /** v10: step 4 is policy::evaluate_with_device (sui.policy.device.binding). */
+        public volatile boolean policyDeviceBinding;
+
+        /** Fluent setter, so the existing constructors stay as they are. */
+        public Config withPolicyDeviceBinding(boolean on) {
+            this.policyDeviceBinding = on;
+            return this;
+        }
 
         public Config(String rpcUrl, String packageHex,
                       String identityReg, String trustReg, String policyReg,
@@ -216,6 +224,7 @@ public final class NativePtbBuilder {
      *   cmd 1  trust::require_min(R0, trust_reg, res_id, min, clock) -> TrustReceipt
      *   cmd 2  cap_token::validate_for_use(R1, token, op, clock)     -> TokenReceipt
      *   cmd 3  policy::evaluate(R2, pol_reg, trust_reg, clock)       -> PolicyReceipt
+     *          (v10: policy::evaluate_with_device(R2, pol_reg, trust_reg, id_reg, clock))
      *   cmd 4  evaluator::decide_and_log(R3, audit_trail, clock)
      * </pre>
      *
@@ -313,17 +322,12 @@ public final class NativePtbBuilder {
                                   SuiPtbEncoder.Arg.input(iToken),
                                   SuiPtbEncoder.Arg.input(iOp),
                                   SuiPtbEncoder.Arg.input(iClock))));
-            //  cmd 3: policy::evaluate(TokenReceipt=Result(2), pol_reg, trust_reg, clock)
-            //         -> PolicyReceipt
-            //         A5: the bare `requester_trust: u64` argument is replaced by the
-            //         TrustRegistry object — the score is read on-chain via
-            //         trust::score_of. resource_id / requested_op args deleted.
-            enc.addMoveCall(new SuiPtbEncoder.MoveCall(
-                    cfg.packageId, "policy", "evaluate",
-                    Arrays.asList(SuiPtbEncoder.Arg.result(2),
-                                  SuiPtbEncoder.Arg.input(iPolReg),
-                                  SuiPtbEncoder.Arg.input(iTrustReg),
-                                  SuiPtbEncoder.Arg.input(iClock))));
+            //  cmd 3: policy step, -> PolicyReceipt. A5: the score is read on-chain.
+            //         v10 (sui.policy.device.binding=true): evaluate_with_device also
+            //         takes the identity registry, so a device-bound resource is
+            //         granted only while its device is registered (see policyStep).
+            enc.addMoveCall(policyStep(cfg.packageId, cfg.policyDeviceBinding,
+                    iPolReg, iTrustReg, iIdReg, iClock));
             //  cmd 4 (steps 5+6): evaluator::decide_and_log(PolicyReceipt=Result(3),
             //                                               audit_trail, clock)
             //         The token object argument is gone (token_uses rides the receipt).
@@ -370,6 +374,35 @@ public final class NativePtbBuilder {
         } catch (Exception e) {
             return new Result(false, null, ms(t0), e.getMessage());
         }
+    }
+
+    /**
+     * Step 4 of the access PTB.
+     * <pre>
+     *   v8/v9: policy::evaluate(R2, pol_reg, trust_reg, clock)
+     *   v10:   policy::evaluate_with_device(R2, pol_reg, trust_reg, id_reg, clock)
+     * </pre>
+     * {@code evaluate_with_device} behaves exactly like {@code evaluate} for an
+     * unbound resource; for a device-bound one it also requires the bound
+     * device to be registered (role 3) and the requester to be on the reader
+     * list if there is one. The plain {@code evaluate} refuses a bound resource
+     * (E_DEVICE_BOUND), so a node left on the old setting fails closed.
+     */
+    static SuiPtbEncoder.MoveCall policyStep(byte[] pkg, boolean deviceBinding,
+                                             int iPolReg, int iTrustReg, int iIdReg, int iClock) {
+        if (deviceBinding) {
+            return new SuiPtbEncoder.MoveCall(pkg, "policy", "evaluate_with_device",
+                    Arrays.asList(SuiPtbEncoder.Arg.result(2),
+                                  SuiPtbEncoder.Arg.input(iPolReg),
+                                  SuiPtbEncoder.Arg.input(iTrustReg),
+                                  SuiPtbEncoder.Arg.input(iIdReg),
+                                  SuiPtbEncoder.Arg.input(iClock)));
+        }
+        return new SuiPtbEncoder.MoveCall(pkg, "policy", "evaluate",
+                Arrays.asList(SuiPtbEncoder.Arg.result(2),
+                              SuiPtbEncoder.Arg.input(iPolReg),
+                              SuiPtbEncoder.Arg.input(iTrustReg),
+                              SuiPtbEncoder.Arg.input(iClock)));
     }
 
     // ---------------------------------------------------------------

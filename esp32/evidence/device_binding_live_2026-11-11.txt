@@ -1,0 +1,94 @@
+# v10 live: protected read tied to the device's on-chain identity (V10_DESIGN.md)
+# package v10 0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21, parent rpi2, run 2026-11-11T09:43:45Z
+
+=== council: bind /in-cse/Cesp32-dht-01 to device 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b (2026-11-11T09:43:45Z) ===
+=== propose action 34 by rpi1 (target 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b, text '/in-cse/Cesp32-dht-01', values 0/0/0, ttl 86400000 ms) ===
+GsczhkevxvShbFaEY4RTFxbWpE8M1Xq3yXxcTh5c9a58 success 
+proposal_id 14
+9WVi1RsPSUMHbbMw7N7wvwna2SbPvnUXi1Nnv7aQUkka success 
+approvals 2
+2Fr3q8qJAapPBcQrXBBMgSTD7F6UhCpPdxtSorPgmzZZ success 
+approvals 3
+=== execute proposal 14 (action 34) by rpi1 ===
+Bow9zHV8WGtsxHfAHqpLLM6FQ7Z7Qm3aUwtXTwkCCWrB success 
+executed action 34.0
+proposal 14 executed
+
+=== protected read on rpi2 (2026-11-11T09:44:39Z) ===
+== 1. RETRIEVE esp32-dht-01 as Cesp32-reader-01 -> expect GRANT
+   latest reading: {"epoch":3,"humidity":58.7,"light_pct":22,"light_raw":934,"node":"rpi2","rx_ts":1794390275103,"seq":20,"temperature":26.4,"ts":1794390275}
+   HTTP 200
+
+   Sui GRANT originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=1 digest=G8vRDZtkC6zcVoieghWoat4YyMDUkNRCs1ucxjtYNSp6 (3812 ms)
+== 2. DELETE esp32-dht-01 as Cesp32-reader-01 -> expect 403 / DENY, no transaction
+   HTTP 403
+   Sui DENY originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=4 source=SIMULATED err=cap_token::E_OP_NOT_ALLOWED (abort 4) [raw: precheck: MoveAbort(MoveLocation { module: ModuleId { address: 0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21, name: Identifier("cap_token") }, function_name: Some("validate_for_use"), instruction: 55 }, 4) -- Error in 3rd command, from '0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21::cap_token::validate_for_use' (instruction 55), abort code: 4]
+== 3. control: RETRIEVE esp32-dht-01/data/la as Cesp32-reader-01 -> expect 403, no Sui line
+   HTTP 403
+   (nothing above = the DAS was not consulted, as expected)
+
+=== old v9 bytecode on the bound resource (free dry run) (2026-11-11T09:44:48Z) ===
+$ [rpi2] sui client ptb ... $PKG_V9::policy::evaluate ... --dry-run   (token 0x6b0b4226dc234a43c86edd8f43f388d204dfca8f3fa5fad780ca5dc352907d54)
+status: failure due to MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("policy") }, function: 6, instruction: 20, function_name: Some("evaluate") }, 1) in command 3
+MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier(\"policy\") }, function: 6, instruction: 20, function_name: Some(\"evaluate\") }, 1) in command 3" } │
+status: failure due to MoveAbort(MoveLocation { module: ModuleId { address: 5121fa28dd10f346b6c2c13e7f4dbea86d72281d999b10d32a1817fbb668dc6a, name: Identifier("policy") }, function: 6, instruction: 20, function_name: Some("evaluate") }, 1) in command 3
+
+=== council: deregister device 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b (2026-11-11T09:44:54Z) ===
+=== propose action 21 by rpi1 (target 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b, text '', values 0/0/0, ttl 86400000 ms) ===
+2ezsej9b28nodyFSLnFK9aQif8z3ghH9cs54V7cZ1wQ6 success 
+proposal_id 15
+56M1agDQdqbSJUDAxTRUMahCgebGLDaJ8Tnbs5Du5oN2 success 
+approvals 2
+3gxBymmP12q35P9ix8uuik9BmkL7oXqrYNLeVkZHe46c success 
+approvals 3
+=== execute proposal 15 (action 21) by rpi1 ===
+24n2Dw9n8KD7SwjNNMZjo3P5pr4GbJjqCgC1kFzTUs6E success 
+executed action 21.0
+proposal 15 executed
+
+=== protected read on rpi2 (2026-11-11T09:45:48Z) ===
+== 1. RETRIEVE esp32-dht-01 as Cesp32-reader-01 -> expect GRANT
+    {
+   "m2m:tqf" : {
+      "dasi" : [ {
+         "uri" : "/in-cse/CAE12830081",
+         "daq" : {
+            "og" : "Cesp32-reader-01",
+            "tirt" : 2,
+            "op" : 2,
+            "trid"
+   HTTP 403
+
+   Sui DENY originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=1 source=SIMULATED err=policy::E_DEVICE_NOT_REGISTERED (abort 7) [raw: precheck: MoveAbort(MoveLocation { module: ModuleId { address: 0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21, name: Identifier("policy") }, function_name: Some("evaluate_with_device"), instruction: 62 }, 7) -- Error in 4th command, from '0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21::policy::evaluate_with_device' (instruction 62), abort code: 7]
+== 2. DELETE esp32-dht-01 as Cesp32-reader-01 -> expect 403 / DENY, no transaction
+   HTTP 403
+   Sui DENY originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=4 source=SIMULATED err=cap_token::E_OP_NOT_ALLOWED (abort 4) [raw: precheck: MoveAbort(MoveLocation { module: ModuleId { address: 0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21, name: Identifier("cap_token") }, function_name: Some("validate_for_use"), instruction: 55 }, 4) -- Error in 3rd command, from '0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21::cap_token::validate_for_use' (instruction 55), abort code: 4]
+== 3. control: RETRIEVE esp32-dht-01/data/la as Cesp32-reader-01 -> expect 403, no Sui line
+   HTTP 403
+   (nothing above = the DAS was not consulted, as expected)
+
+=== council: re-register device 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b as esp32-dht-01 (role 3) (2026-11-11T09:45:54Z) ===
+=== propose action 20 by rpi1 (target 0x450ff708a3e0a8b01c20e4c0667d1627386d4710666f9db165d36c3c09208a6b, text 'esp32-dht-01', values 3/0/0, ttl 86400000 ms) ===
+75oCEDhd1mmFVVs8N7PKoCDUB7eN5WGUAyQLkFqm9BcS success 
+proposal_id 16
+5HxjThroq7E3uUiBQjqkjQjptr5kHCHVGGXNkcB4LhKf success 
+approvals 2
+FzvoE2qaLxtUbCME3PoYicuSRqs6m9WQThoZz954cCna success 
+approvals 3
+=== execute proposal 16 (action 20) by rpi1 ===
+DyobS1dRWoesNnGWcmo4ZeD83twNNRAWZNtHEt8B1jW4 success 
+executed action 20.0
+proposal 16 executed
+
+=== protected read on rpi2 (2026-11-11T09:46:45Z) ===
+== 1. RETRIEVE esp32-dht-01 as Cesp32-reader-01 -> expect GRANT
+   latest reading: {"epoch":3,"humidity":54.6,"light_pct":26,"light_raw":1081,"node":"rpi3","rx_ts":1794390405489,"seq":46,"temperature":24.0,"ts":1794390405}
+   HTTP 200
+
+   Sui GRANT originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=1 digest=DLXtJTdWxHM14jLAsnnkVYfQcP8SjC1AgHKsWoCT5Xzk (2705 ms)
+== 2. DELETE esp32-dht-01 as Cesp32-reader-01 -> expect 403 / DENY, no transaction
+   HTTP 403
+   Sui DENY originator=Cesp32-reader-01 resource=/in-cse/Cesp32-dht-01 op=4 source=SIMULATED err=cap_token::E_OP_NOT_ALLOWED (abort 4) [raw: precheck: MoveAbort(MoveLocation { module: ModuleId { address: 0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21, name: Identifier("cap_token") }, function_name: Some("validate_for_use"), instruction: 55 }, 4) -- Error in 3rd command, from '0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21::cap_token::validate_for_use' (instruction 55), abort code: 4]
+== 3. control: RETRIEVE esp32-dht-01/data/la as Cesp32-reader-01 -> expect 403, no Sui line
+   HTTP 403
+   (nothing above = the DAS was not consulted, as expected)

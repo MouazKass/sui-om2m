@@ -21,6 +21,8 @@ step "4. bridge unit tests"
 run python3 tests/test_bridge_unit.py
 step "4b. device identity: signing format, Sui address, registry, bridge decisions"
 run python3 tests/test_identity.py
+step "4b2. signed acks + durable replay floor (bridge v2.2)"
+run python3 tests/test_ack_replay.py
 step "4c. firmware signatures (C++/libsodium) verify with the bridge (Python)"
 run python3 tests/test_fw_signatures.py "$LOGDIR/fw_pub.txt" "$LOGDIR/fw_host.err"
 step "5. single-node end-to-end (Hamza's original scenarios, v2 layout)"

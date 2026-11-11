@@ -75,6 +75,11 @@ From the dashboard you can:
    - `HOME_NODE`: the preferred Pi, e.g. `rpi2`.
 
    Leave `CLUSTER_SEEDS` listing all five Pis. Later nodes are learned at run time.
+
+   The bridges' ack public keys are pinned in `ack_keys.h` (generated, committed).
+   If a node was added or reinstalled with a new key, run `firmware/gen_ack_keys.sh`
+   first. On boot the board prints `[ack] 5 pinned bridge ack key(s)`; with none it
+   accepts no ack and says so.
 3. Wiring: DHT11 VCC→3.3 V, DATA→GPIO4, GND→GND. The LDR divider goes into GPIO34
    (LDR to 3.3 V, 10 kΩ to GND).
 4. Upload. Hold BOOT if it hangs on "Connecting…". In the Serial Monitor at 115200
@@ -213,9 +218,14 @@ membership (B10) only checked `is_registered`; it now also requires an IN/MN rol
 1. Verify the signature with the `pk` in the message, and derive its address.
 2. Look the address up in the registry over GraphQL (read-only). It must be role 3
    with `cse_id` = the device id in the topic.
-3. Reject replays: an epoch older than one already authenticated for this device,
-   or a device timestamp older than `replay_window_s` (1 h). Exact duplicates are
-   still dropped by (epoch, seq), and the CSE refuses a second `e<epoch>-s<seq>`.
+3. Reject replays against the device's **durable replay floor** (v2.2): an epoch
+   older than the floor, or in the floor's epoch a seq more than `seq_window` (256)
+   below the highest, or a device timestamp older than `replay_window_s` (1 h). The
+   floor is kept in `/var/lib/om2m-ipe-bridge/replay.json` (atomic write + fsync), so
+   it survives a bridge restart, and it is raised from the newest reading on the
+   parent CSE on first contact and every 60 s, so every bridge meets the same floor.
+   Exact duplicates are still dropped by (epoch, seq), and the CSE refuses a second
+   `e<epoch>-s<seq>`.
 4. Store the reading with `pk`, `sig` and `signer`, so anyone can re-verify a stored
    record later. Label the AE `signer/<address>`.
 
@@ -255,18 +265,33 @@ The simulated `esp32-dht-01` ran on rpi1 with its key generated there.
   while revoked had been kept unacked by the sensor; they were re-sent and stored.
   In total, 106 were taken and 106 stored, all with one signer.
 
+**Signed acks (v2.2).** Each bridge signs every ack with its own Ed25519 ack key,
+generated on its Pi by `install.sh` as the service user `om2m-ipe`
+(`/var/lib/om2m-ipe-bridge/ack.key`, 0600) and never copied. The board pins the
+bridges' public ack keys (`firmware/gen_ack_keys.sh` builds `ack_keys.h` from
+`deploy/v9/ack_keys/*.pub`) and accepts an ack only if it is signed by one of them,
+for its own device id and current epoch. A forged ack is ignored: the reading stays
+in the resend buffer and the no-ack failover still fires. Adding a node means adding
+its ack key to the boards and reflashing; until then, readings sent through that node
+are re-sent elsewhere, never lost. Design: `DESIGN.md` §10.
+
+**Live run (2026-11-11), evidence in `evidence/ack_replay_live_2026-11-11.txt`:**
+see `ROLLOUT_V9.md`, "Signed acks and the durable replay floor".
+
 **Limits, stated plainly.**
-- The bridge's acks (`sensors/<id>/ack`) are not signed. Someone on the broker could
-  ack a reading and make the board drop it from its resend buffer. Broker ACLs would
-  close this; it is not done.
-- Replay protection by epoch lives in each bridge's memory. A bridge that restarted
-  accepts an old epoch once, but only within the 1 h timestamp window and never twice
-  (the CSE name collision).
-- A board without NTP sends `ts = 0`, so only the epoch rule protects it.
+- Anyone on an anonymous broker can still *publish*: a flood is an availability
+  problem, not an integrity one. Broker ACLs would bound it.
+- A board without NTP sends `ts = 0`, so only the epoch and seq rules protect it.
+- The ack keys are pinned at flash time; the board does not learn them at run time,
+  on purpose (a key learned from the broker is what an attacker would supply).
 - Registration is checked when a reading is **received**, not when it was produced. A
   board's unacked backlog from a revocation window is therefore accepted if the board
   is registered again. If a revocation means "distrust what it said meanwhile", do not
   re-register that key: a new key (wipe NVS) gets a new address.
-- The DAS still decides reads per **reader** (originator → node token). The device
-  identity attributes and authenticates the **data**. It does not give the device a
-  token of its own.
+- The DAS decides reads per **reader** (originator → node token) and, since v10
+  (2026-11-11, `V10_DESIGN.md`), also per **device**: `/in-cse/Cesp32-dht-01` is bound to
+  the device's address, so a protected read is granted only while the device is
+  registered (`policy::E_DEVICE_NOT_REGISTERED` after a council `id-deregister`; live
+  record `esp32/evidence/device_binding_live_2026-11-11.txt`). The device still has no
+  token or gas of its own. Bind further sensors with the council action
+  `policy-bind-device` (`esp32/sim/live_device_binding.sh bind`, with `DEV`/`DEV_ADDR`).

@@ -74,7 +74,9 @@ say "2. collect signatures, each on its signer's own machine"
 SIGS=(); : > "$V9_DIR/upgrade.sigs"
 for s in "$@"; do
   if [ "$s" = publisher ]; then
-    sig=$(in_wsl "\"\${SUI:-\$HOME/sui-cli/1.83.1/sui}\" keytool --json sign --address 0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e --data $TX" \
+    # The tx goes in on stdin: a real package upgrade is ~35 KB of Base64,
+    # over the Windows command-line limit for wsl.exe.
+    sig=$(printf '%s\n' "$TX" | in_wsl 'read -r TX; "${SUI:-$HOME/sui-cli/1.83.1/sui}" keytool --json sign --address 0xb87fb2af21e29dd292d5b557b92d95a544794a589620f4b437f2247f075d6a1e --data "$TX"' \
           | python3 -c 'import json,sys; print(json.load(sys.stdin)["suiSignature"])')
   elif [ -n "${INV_IP[$s]:-}" ]; then
     sig=$(bash "$REPO/scripts/v9/upgrade_signer.sh" sign "$s" "$TX_FILE")

@@ -32,7 +32,7 @@ source deploy/v8/env.v8.sh
 # v8 cap paths abort by design, so a proof must not call them by accident.
 # shellcheck disable=SC1091
 [ -f deploy/v9/deployment.env ] && source deploy/v9/deployment.env
-PKG=${PKG_V9:-$PKG_V8}
+PKG=${PKG_V10:-${PKG_V9:-$PKG_V8}}   # newest package (v10: device-bound resources)
 
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_suiom2m}"
 GAS_BUDGET="${GAS_BUDGET:-20000000}"

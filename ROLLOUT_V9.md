@@ -12,7 +12,8 @@ The design and its tests are in [V9_DESIGN.md](V9_DESIGN.md).
 | Type origin (unchanged) | `0x88f0b0f7f3f4feb9a01e166567ca36a49ee149b9d260a0ac5cede95d89e962f1` (`sui.package.original.id`) |
 | Council | `0xd98ce1133d02066b0158d03e3dc928061a33c67170a12d73053f3c140c1924e0`, tx `9GcWp8CNNvmRVmjPgMmdQRtZj3uL27xVJYqfbHPRwqN6`; members rpi1–rpi5, threshold 3 |
 | UpgradeCap | owned by the 3-of-5 multisig `0x05550e81…5e27` (publisher + upgrade keys on rpi1/3/4/5) since 2026-11-11, tx `AA88mpRyb2obsERSapysUV9DBuS2AzJT5ukJyePydChW`. Upgrades: `scripts/v9/upgrade_multisig.sh <3 signers>` |
-| Bundle | `fd87d2e01ad6e6b6…` on all five nodes (157 JUnit tests pass) |
+| Package v10 (version 3) | `0xd3bd5f62731a1483c0dc48cebc50163ff56f692f026a3c911e4c53b50ef65e21`, upgrade tx `2YQLXcXmLBdV97wzybWpP66jUkoLLd29EDoSZw3eS6m3`, signed 3-of-5 by the multisig (publisher, rpi1, rpi3); section "v10" below |
+| Bundle | `5b4282e0b7d5b111…` on all five nodes since 2026-11-11 (v10, 181 JUnit tests pass); before that `fd87d2e01ad6e6b6…` |
 
 ## 1. The two new nodes
 
@@ -425,3 +426,92 @@ afterwards): all 7 groups pass. That includes:
 - the firmware host build (13/13);
 - cluster C10: forged, unsigned, tampered and revoked messages are rejected, and
   nothing is lost after re-registration (31/31).
+
+## v10: reader access tied to the device (2026-11-11)
+
+Design: [V10_DESIGN.md](V10_DESIGN.md). A sensor resource can be **bound** to its
+device's on-chain identity; a protected read is then granted only while that device is
+registered (role 3), and optionally only to listed requesters. Compatible upgrade, the
+first one signed by the 3-of-5 UpgradeCap multisig.
+
+| Step | Result |
+|---|---|
+| Tests | Move 158/158 (141 + 17 new), JUnit 181/181 (176 + 5 new), animal-sniffer clean |
+| Compatibility dry run (multisig sender) | success, ≈ 0.226 SUI |
+| Upgrade, signed on three machines (publisher in WSL, rpi1, rpi3), combined, executed | package `0xd3bd5f62…5e21` version 3, tx `2YQLXcXmLBdV97wzybWpP66jUkoLLd29EDoSZw3eS6m3` |
+| Bundle `5b4282e0…` → `04_cutover.sh prepare`, `03_switch_plugin.sh v10` (config, redeploy, verify) | all five healthy, gossip v2 from all five; rpi5's redeploy hit a jump-host SSH reset and was re-run alone (`ONLY=rpi5`) |
+| First v10 GRANT | `AHkbaX18FRLU9c2V15zty37ABC2HntuA9VGG2qgGwA8w` (rpi3): `identity::verify → trust::require_min → cap_token::validate_for_use → policy::evaluate_with_device → evaluator::decide_and_log` |
+
+**Live proof** (`esp32/sim/live_device_binding.sh all`, record
+`esp32/evidence/device_binding_live_2026-11-11.txt`). Every council decision: rpi1
+proposed and executed, rpi3 and rpi4 approved. Parent rpi2 throughout (epoch 8).
+
+| Step | Proposal | Execute tx | Result |
+|---|---|---|---|
+| Bind `/in-cse/Cesp32-dht-01` to device `0x450ff708…8a6b` | 14 | `Bow9zHV8WGtsxHfAHqpLLM6FQ7Z7Qm3aUwtXTwkCCWrB` | — |
+| Protected read as `Cesp32-reader-01` on rpi2 | — | GRANT `G8vRDZtkC6zcVoieghWoat4YyMDUkNRCs1ucxjtYNSp6` | HTTP 200; the GRANT emits `policy::DeviceAccessChecked` for the device; DELETE 403 (`cap_token::E_OP_NOT_ALLOWED`, free simulation) |
+| Old v9 bytecode (`0x5121…::policy::evaluate`) on the bound resource, free dry run | — | — | aborts `policy` code 1 (`E_POLICY_MISSING`): the policy now lives in the binding |
+| Council deregisters the device | 15 | `24n2Dw9n8KD7SwjNNMZjo3P5pr4GbJjqCgC1kFzTUs6E` | protected read HTTP 403, `policy::E_DEVICE_NOT_REGISTERED` (abort 7), found by the free simulation, nothing paid |
+| Council re-registers it (role 3) | 16 | `DyobS1dRWoesNnGWcmo4ZeD83twNNRAWZNtHEt8B1jW4` | protected read GRANT `DLXtJTdWxHM14jLAsnnkVYfQcP8SjC1AgHKsWoCT5Xzk`; DELETE still 403 |
+
+Operational notes:
+- `scripts/v9/council.sh` and the proofs now call the newest package (`PKG_V10`). The
+  old v9 `set_policy` would put a bound resource's policy back in the plain table,
+  where the old `evaluate` skips the device check; it needs a council vote either way.
+- New council actions: `policy-bind-device` (34), `policy-unbind-device` (35),
+  `policy-add-reader` (36), `policy-remove-reader` (37).
+- `upgrade_multisig.sh` fix: the publisher now reads the unsigned tx on stdin. A real
+  package upgrade is ~35 KB of Base64, over the Windows command-line limit for `wsl.exe`
+  (the rehearsal package was small enough to pass).
+- `03_gen_config.sh` writes `sui.policy.device.binding` from `DEVICE_BINDING` in
+  `deploy/v9/plugin-target.env`.
+
+
+## Signed acks and the durable replay floor (ESP bridge/firmware v2.2, 2026-11-11)
+
+Two limits of the per-device identity work are closed. Off-chain only: no
+transaction, no Move or plugin change. Design: `esp32/DESIGN.md` §10.
+
+1. **Signed acks.** Each bridge signs every ack with its own Ed25519 ack key,
+   generated on its Pi by `esp32/pi/install.sh` as the new service user `om2m-ipe`
+   (`/var/lib/om2m-ipe-bridge/ack.key`, 0600, never copied). The sensor accepts an ack
+   only if it is signed by a pinned bridge key, for its own device id and epoch.
+   Public keys: `deploy/v9/ack_keys/<node>.pub`; `esp32/firmware/gen_ack_keys.sh`
+   builds the firmware's `ack_keys.h` and the simulator's `trusted.txt`.
+2. **Durable replay floor.** Per device (newest epoch, highest seq) in
+   `/var/lib/om2m-ipe-bridge/replay.json` (atomic write + fsync), raised from the newest
+   reading on the parent CSE on first contact and every 60 s, so a restart or a
+   different bridge meets the same floor.
+
+**Deployed** with `esp32/deploy_to_pis.sh install all` (rpi2 first): all five bridges
+active, each smoke test passed (unsigned reading rejected), each ack key `om2m-ipe 600`.
+
+**Offline suite** (`sim/run_e2e_in_docker.sh` on rpi1): ALL TEST GROUPS PASSED, including
+the new `tests/test_ack_replay.py` (16), the firmware host check with forged acks
+injected, and cluster e2e 37/37 (C9 forged acks while a bridge is down, C11 replay after
+a bridge restart and to a bridge with wiped state). `esp32/evidence/e2e_ack_replay_in_docker_2026-11-11.txt`.
+
+**Live run** (`esp32/evidence/ack_replay_live_2026-11-11.txt`, simulated `esp32-dht-01` on rpi1):
+
+| Test | Result |
+|---|---|
+| sensor pins the 5 bridge ack keys; normal operation | all acks accepted, 0 ignored |
+| rpi2's bridge stopped 28 s; an attacker on rpi2's broker forges 3 acks (unsigned, rogue key, wrong device) per reading | 48 forged acks ignored; the sensor still failed over to rpi3 after 20 s with no genuine ack, returned home after 30 s |
+| drain at the end | 52 taken, 0 unacknowledged; all 52 (`e3-s0..s51`) on the parent (33 via rpi2, 19 via rpi3) |
+| rpi2's bridge restarted, then the captured genuine `e2-s19` replayed to it | `replay floor loaded for 1 device(s)`; rejected `auth:stale_epoch` |
+| the same replay to rpi4, whose own floor was still at epoch 2 | `replay floor raised from http://10.25.96.201:8282 to epoch 3 seq 51`; rejected `auth:stale_epoch` |
+| parent afterwards | `e2-s19` still 404: not re-created |
+
+The replay tests matter beyond the CSE's 409: `e2-s19` had been wiped from the parent by
+an OM2M restart, so without the floor a replay would have stored it again.
+
+**Note.** During the first attempt, all five `om2m-active` containers were restarted
+(09:40:25–09:41:03 UTC) by a concurrent plugin redeploy. OM2M keeps its resource tree in
+memory, so the parent lost `e2-s0..s44`, which had been stored and genuinely acked
+first. The forged-ack test was repeated on the stable cluster (epoch 3, table above).
+Losing stored history on an OM2M restart is an existing property of OM2M, not of this
+change.
+
+**Operational.** A new node's ack key must be added to `deploy/v9/ack_keys/`, then
+`gen_ack_keys.sh` run and the boards reflashed. Until then, readings sent through that
+node are re-sent elsewhere by the no-ack failover; none are lost.

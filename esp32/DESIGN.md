@@ -170,16 +170,17 @@ node, with no reflash.
 | sensor reboots | RAM buffer lost | unsent readings from before the reboot are lost (bounded: ≤ 1 interval when connected) |
 | forged reading (attacker's own key, or no key) | `[identity] mode = require`: signature + on-chain registry lookup | rejected, never acked, never stored (§9) |
 | device revoked by the council | registry lookup (cached ≤ 60 s) | its readings are rejected; the board buffers them |
+| forged ack on `sensors/<id>/ack` (unsigned, foreign key, other device, altered) | v2.2: the board accepts only acks signed by a pinned bridge ack key, for its own id and epoch | ignored: the reading stays in the resend buffer, and the no-ack failover still fires (§10) |
+| replay of an old genuine reading after a bridge restart, or to another bridge | v2.2: durable replay floor (`replay.json`) raised from the parent CSE | rejected (`stale_epoch` / `stale_seq`), never stored (§10) |
 | forged `om2m/cluster/brokers` | only hosts under `CLUSTER_ALLOW_PREFIX` accepted | worst case: a sensor tries a wrong host on the subnet, gets no acks, fails over |
 
 **Residual risks, stated plainly.**
 - **The brokers are anonymous, but readings are not (v2.1).** Anyone on the subnet can
   still *publish*, but a reading or presence message is stored only if it is signed by
-  a device key registered on-chain for that device (§9). What remains open is the
-  bridge→sensor direction: acks are unsigned, so a publisher on the broker can make a
-  board drop a reading from its resend buffer. Per-device MQTT credentials or broker
-  ACLs on `sensors/<id>/ack` would close it. The firmware already supports
-  `MQTT_USER`/`MQTT_PASS`.
+  a device key registered on-chain for that device (§9), and since v2.2 a board
+  trusts only acks signed by a pinned bridge key (§10). What a publisher on the
+  broker can still do is flood it: availability, not integrity. Broker ACLs
+  (`MQTT_USER`/`MQTT_PASS` are supported by the firmware) would bound that.
 - **History is not migrated after a parent change.** Each parent holds the readings
   written while it was parent. Readings are never duplicated within a tree, and the
   union is complete (test C8).
@@ -308,6 +309,74 @@ up to 300 s old is reused; with nothing cached the bridge rejects (fail closed).
 - The device does not sign Sui transactions. It has no gas, and the DAS still
   authorises *readers* through their node's token. The identity authenticates and
   attributes the *data*.
-- Per-device DAS attribution, where a reader's token is bound to the device's
-  address, would need a new Move check and therefore a package upgrade. It was
-  left out on purpose.
+- Per-device DAS attribution was added in v10 (2026-11-11, `V10_DESIGN.md`): the
+  sensor resource's policy is bound to the device's address, and a read is granted
+  only while the device is registered.
+
+## 10. Signed acknowledgements and the durable replay floor (v2.2)
+
+**Problem 1: acks were unsigned.** A board drops a reading from its resend buffer
+when an ack for (epoch, seq) arrives, and treats any ack as proof that a bridge is
+alive behind its broker. Anyone on the broker could therefore make a board discard
+readings no bridge had stored, and hide a dead bridge from the no-ack failover.
+
+**Design.** Each bridge has its own Ed25519 **ack key**, generated on its Pi by
+`install.sh` as the dedicated service user `om2m-ipe`
+(`/var/lib/om2m-ipe-bridge/ack.key`, 0600, systemd `StateDirectory`, never copied).
+The ack names the device and is signed under its own domain tag:
+
+```
+ack = {"id":<device>,"seq":S,"node":<label>,"epoch":E,"ts":T,"apk":<pk hex>,"sig":<hex>}
+sig = Ed25519(ack key, "om2m-esp32-ack-v1\0" || <ack without the sig field>)
+```
+
+The board pins the bridges' **public** ack keys at flash time
+(`firmware/gen_ack_keys.sh`: `deploy/v9/ack_keys/<node>.pub` → `ack_keys.h`,
+`ACK_TRUSTED_KEYS`) and accepts an ack only if `apk` is pinned, the signature
+verifies (libsodium `crypto_sign_verify_detached`), `id` is its own device id and
+`epoch` its current epoch. It parses only the signed body. The distinct domain tag
+means a device signature can never pass as an ack, or an ack as a reading.
+
+*Why pinned keys, not the on-chain registry.* The board cannot read the chain
+(no light client, no gas), and a key learned from the broker at run time would
+be exactly what an attacker on the broker could supply. A pinned list is the one
+anchor the attacker cannot touch. The cost: a new node's ack key must be added to
+the boards (`gen_ack_keys.sh`, reflash). Readings sent through a node whose key is
+not yet pinned are simply re-sent elsewhere (no-ack failover), never lost. A
+replayed old ack is harmless: it confirms a (device, epoch, seq) that bridge did
+store.
+
+**Problem 2: the replay floor lived in memory.** "An older epoch than one already
+authenticated" was a per-process value, so a restarted bridge, or a different
+bridge, accepted a genuine old-epoch reading once (within the 1 h timestamp window).
+
+**Design.** Per device the bridge keeps (newest authenticated epoch, highest seq in
+it) in `state_dir/replay.json`: temp file, `fsync`, `rename`, `fsync` of the
+directory, so a crash leaves the old or the new file. An epoch increase is written
+at once; seq progress at most once a second (a crash can lose < 1 s of it, which the
+CSE's `e<epoch>-s<seq>` name collision covers). On first contact with a device, and
+every `floor_refresh_s` (60 s), the floor is also **raised from the newest reading on
+the parent CSE**, the one store every bridge writes to. That makes the floor shared
+across bridges without any bridge-to-bridge protocol: a device that failed over from
+another bridge, or a replay sent to a bridge that never saw the device, meets the
+same floor. Rejected:
+
+- an epoch below the floor (`auth:stale_epoch`);
+- in the floor's epoch, a seq more than `seq_window` (256) below the highest
+  (`auth:stale_seq`). The board can only resend from its 64-slot buffer, so nothing
+  genuine is that old; 256 < `mni` (1000), so everything inside the window is still on
+  the CSE and a second copy is refused there (409).
+
+Only authenticated messages move the floor, so a forger cannot push it forward to
+lock a device out. If the CSE cannot be read, the local floor is used and the read is
+retried after 5 s. A corrupt `replay.json` is moved aside (`.corrupt`) and the CSE
+floor still applies.
+
+**Verification.** `tests/test_ack_replay.py` (16 unit tests: ack format and
+forgeries, domain separation, key file, key made 0600 in the state dir, floor across
+a restart, the regression without a state dir, CSE floor for a fresh bridge, cache
+and refresh, CSE down, seq window, corrupt file, unauthenticated messages never move
+the floor); the firmware host check (forged acks during the silent-bridge window are
+all ignored, the failover still happens, nothing lost); cluster e2e C9 (forged acks
+while a bridge is down) and C11 (old-epoch replay after a bridge restart and to a
+bridge with wiped state); and the live run in `ROLLOUT_V9.md`.

@@ -119,6 +119,11 @@ module om2m_access::quorum {
     const ACT_POLICY_REMOVE: u8 = 31;        // text = resource
     const ACT_POLICY_ADD_BLACKOUT: u8 = 32;  // text = resource, value = start_ms, value2 = end_ms
     const ACT_POLICY_CLEAR_BLACKOUTS: u8 = 33; // text = resource
+    // v10: device binding (policy::bind_device & co.)
+    const ACT_POLICY_BIND_DEVICE: u8 = 34;   // text = resource, target = device address
+    const ACT_POLICY_UNBIND_DEVICE: u8 = 35; // text = resource
+    const ACT_POLICY_ADD_READER: u8 = 36;    // text = resource, target = reader address
+    const ACT_POLICY_REMOVE_READER: u8 = 37; // text = resource, target = reader address
     const ACT_TOKEN_MINT: u8 = 40;           // target = owner, text = resource, value = expiry_ms, value2 = max_uses, value3 = ops
     const ACT_CLUSTER_SET_GATE: u8 = 50;     // target = cluster address, value = new gate
 
@@ -413,6 +418,14 @@ module om2m_access::quorum {
             policy::add_blackout(cap, policy_reg, p.text, p.value, p.value2);
         } else if (p.action == ACT_POLICY_CLEAR_BLACKOUTS) {
             policy::clear_blackouts(cap, policy_reg, p.text);
+        } else if (p.action == ACT_POLICY_BIND_DEVICE) {
+            policy::bind_device(cap, policy_reg, p.text, p.target);
+        } else if (p.action == ACT_POLICY_UNBIND_DEVICE) {
+            policy::unbind_device(cap, policy_reg, p.text);
+        } else if (p.action == ACT_POLICY_ADD_READER) {
+            policy::add_reader(cap, policy_reg, p.text, p.target);
+        } else if (p.action == ACT_POLICY_REMOVE_READER) {
+            policy::remove_reader(cap, policy_reg, p.text, p.target);
         } else {
             abort E_WRONG_ACTION
         };
@@ -522,6 +535,8 @@ module om2m_access::quorum {
             || a == ACT_ID_REGISTER || a == ACT_ID_DEREGISTER
             || a == ACT_POLICY_SET || a == ACT_POLICY_REMOVE
             || a == ACT_POLICY_ADD_BLACKOUT || a == ACT_POLICY_CLEAR_BLACKOUTS
+            || a == ACT_POLICY_BIND_DEVICE || a == ACT_POLICY_UNBIND_DEVICE
+            || a == ACT_POLICY_ADD_READER || a == ACT_POLICY_REMOVE_READER
             || a == ACT_TOKEN_MINT || a == ACT_CLUSTER_SET_GATE,
             E_WRONG_ACTION
         );
@@ -565,5 +580,9 @@ module om2m_access::quorum {
     public fun act_policy_add_blackout(): u8 { ACT_POLICY_ADD_BLACKOUT }
     public fun act_policy_clear_blackouts(): u8 { ACT_POLICY_CLEAR_BLACKOUTS }
     public fun act_token_mint(): u8 { ACT_TOKEN_MINT }
+    public fun act_policy_bind_device(): u8 { ACT_POLICY_BIND_DEVICE }
+    public fun act_policy_unbind_device(): u8 { ACT_POLICY_UNBIND_DEVICE }
+    public fun act_policy_add_reader(): u8 { ACT_POLICY_ADD_READER }
+    public fun act_policy_remove_reader(): u8 { ACT_POLICY_REMOVE_READER }
     public fun act_cluster_set_gate(): u8 { ACT_CLUSTER_SET_GATE }
 }

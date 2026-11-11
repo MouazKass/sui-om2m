@@ -32,6 +32,11 @@ final class AbortDecoder {
         NAMES.put("policy:3", "E_TRUST_BELOW_MIN");
         NAMES.put("policy:4", "E_IN_BLACKOUT");
         NAMES.put("policy:5", "E_BAD_WINDOW");
+        NAMES.put("policy:6", "E_DEVICE_BOUND");
+        NAMES.put("policy:7", "E_DEVICE_NOT_REGISTERED");
+        NAMES.put("policy:8", "E_DEVICE_NOT_END_DEVICE");
+        NAMES.put("policy:9", "E_READER_NOT_ALLOWED");
+        NAMES.put("policy:10", "E_NOT_BOUND");
         NAMES.put("evolution:2", "E_NO_TIER_FIELD");
         NAMES.put("audit:1", "E_BAD_RING_SIZE");
     }

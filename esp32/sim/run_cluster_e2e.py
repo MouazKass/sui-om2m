@@ -28,7 +28,11 @@ Scenarios
                              with the latest reading; DELETE -> DENY without a paid tx;
                              unmapped originator -> DENY; the data container is never DAS'd
   C9  bridge down            the broker is up but its bridge died: nothing is acked, so
-                             the sensor fails over instead of losing readings
+                             the sensor fails over instead of losing readings. Meanwhile an
+                             attacker on that broker publishes FORGED acks (unsigned, rogue
+                             key, wrong device) for every reading: the sensor trusts only
+                             acks signed by a pinned bridge key, so it still fails over and
+                             nothing is dropped unstored (C8)
  C10  device identity      every message is signed by the sensor's own key and accepted only
                              while that key is registered on-chain for the device: forged
                              (rogue key), tampered and unsigned messages are rejected; after a
@@ -36,6 +40,11 @@ Scenarios
                              the backlog is re-sent and nothing is lost
   C8  exactly once           every reading stored, none twice (within each tree), union
                              complete across the parent change
+ C11  replay floor           the sensor power-cycles (epoch +1). A genuine signed reading of
+                             the OLD epoch is replayed (a) to its home bridge after that
+                             bridge restarts: rejected from its durable replay.json;
+                             (b) to a bridge whose state was wiped: rejected from the floor
+                             it reads off the parent CSE. Nothing is stored.
 """
 
 import base64
@@ -177,10 +186,13 @@ mode = require
 registry_id = {REGISTRY}
 cache_ttl_s = 2
 negative_ttl_s = 1
+[ack]
+sign = true
 [bridge]
 retry_interval_s = 0.5
 stats_interval_s = 1
 log_level = INFO
+state_dir = {os.path.join(tmp, "state-" + n)}
 """)
     return path
 
@@ -228,6 +240,13 @@ def main():
         start(f"cse-{n}", [PY, os.path.join(HERE, "mock_cse.py"), "--port", str(c["cse"]),
                            "--chain-url", f"http://127.0.0.1:{CHAIN}",
                            "--mappings", os.path.join(tmp, f"{n}.mappings.properties")])
+    # each bridge's ack key, made in its own state dir; only the PUBLIC keys are pinned on the sensor
+    ack_keys = os.path.join(tmp, "ack_keys.txt")
+    with open(ack_keys, "w") as f:
+        for n in N:
+            out = json.loads(subprocess.check_output([PY, os.path.join(ROOT, "pi", "om2m_ipe_bridge.py"),
+                                                      "-c", bridge_conf(n, members), "--print-ack-key"]))
+            f.write(f"{n} {out['apk']}\n")
     for n in N:
         assert until(lambda: requests.get(f"{cse_url(n)}/~/in-cse", headers=HDR, timeout=1).ok, 15), n
         start(f"bridge-{n}", [PY, os.path.join(ROOT, "pi", "om2m_ipe_bridge.py"), "-c", bridge_conf(n, members)])
@@ -235,12 +254,13 @@ def main():
         assert until(lambda: "subscribed" in open(procs[f"bridge-{n}"]._log).read(), 15), n
 
     seeds = ",".join(f"{n}=127.0.0.1:{N[n]['proxy']}" for n in ("rpi1", "rpi2", "rpi3", "rpi4"))
-    start("esp", [PY, "-u", os.path.join(HERE, "esp32_sim.py"), "--device", DEV, "--brokers", seeds,
-                  "--home", "rpi2", "--allow-prefix", "127.0.0.", "--interval", "0.5", "--keepalive", "2",
-                  "--connect-timeout", "1", "--backoff-base", "1", "--backoff-max", "8",
-                  "--home-probe", "1", "--home-stable", "4", "--ack-wait", "1", "--drain", "20",
-                  "--no-ack-failover", "6",
-                  "--state-file", os.path.join(tmp, "nvs.json"), "--key", key])
+    esp_args = [PY, "-u", os.path.join(HERE, "esp32_sim.py"), "--device", DEV, "--brokers", seeds,
+                "--home", "rpi2", "--allow-prefix", "127.0.0.", "--interval", "0.5", "--keepalive", "2",
+                "--connect-timeout", "1", "--backoff-base", "1", "--backoff-max", "8",
+                "--home-probe", "1", "--home-stable", "4", "--ack-wait", "1", "--drain", "20",
+                "--no-ack-failover", "6",
+                "--state-file", os.path.join(tmp, "nvs.json"), "--key", key, "--ack-keys", ack_keys]
+    start("esp", esp_args)
 
     # ---- C0 -------------------------------------------------------------------------
     print("\nC0) attach to home, write to the parent")
@@ -372,13 +392,46 @@ def main():
     # ---- C9 -------------------------------------------------------------------------
     print("\nC9) the broker is up but its bridge is dead")
     cur = (latest_status("rpi3") or {}).get("broker")
+    sys.path.insert(0, os.path.join(ROOT, "pi"))
+    import esp_identity as idm
+    import paho.mqtt.client as pm
+    try:
+        atk = pm.Client(pm.CallbackAPIVersion.VERSION2)
+    except AttributeError:
+        atk = pm.Client()
+    rogue_ack = idm.Ed25519PrivateKey.generate()
+    forged = [0]
+
+    def forge(c, u, m):              # the attacker "acks" every reading it sees on this broker
+        try:
+            r = json.loads(m.payload)
+        except ValueError:
+            return
+        if "sig" not in r or "seq" not in r:
+            return
+        base = {"id": DEV, "seq": r["seq"], "node": cur, "epoch": r.get("epoch")}
+        for f in (json.dumps(base), idm.sign_ack(base, rogue_ack),
+                  idm.sign_ack(dict(base, id="esp32-other-99"), rogue_ack)):
+            c.publish(f"sensors/{DEV}/ack", f, qos=1)
+            forged[0] += 1
+    atk.on_message = forge
+    atk.connect("127.0.0.1", N[cur]["mqtt"])
+    atk.subscribe(f"sensors/{DEV}/telemetry")
+    atk.loop_start()
+    ign0 = esp_log().count("ignored an ack")
     t0 = time.time()
     stop(f"bridge-{cur}")
     st = until(lambda: (latest_status("rpi3") or {}).get("broker") not in (None, cur)
                and (latest_status("rpi3") or {}).get("state") == "online" and latest_status("rpi3"), 30)
     dt = time.time() - t0
+    atk.loop_stop()
+    atk.disconnect()
     check(f"no acks via {cur} -> failed over (bounded by the 6 s no-ack window)", st and dt <= 6 + 6,
           f"now on {st and st.get('broker')} after {dt:.1f} s")
+    check("forged acks on that broker were ignored (they neither held off the failover nor "
+          "dropped a reading; C8 checks nothing was lost)",
+          forged[0] > 0 and esp_log().count("ignored an ack") > ign0,
+          f"{forged[0]} forged acks published")
     start(f"bridge-{cur}", [PY, os.path.join(ROOT, "pi", "om2m_ipe_bridge.py"), "-c",
                             os.path.join(tmp, f"bridge-{cur}.conf")])
 
@@ -455,6 +508,62 @@ def main():
                     for n, s in st.items()), flush=True)
     final = latest_status("rpi3") or {}
     check("graceful goodbye recorded offline", final.get("state") == "offline", f"{final}")
+    fin_line = fin[-1] if fin else ""
+    check("the sensor accepted only signed acks (no reading left unacknowledged, forged ones ignored)",
+          " 0 unacknowledged" in fin_line and "forged/unsigned acks ignored" in fin_line, fin_line.strip()[-90:])
+
+    # ---- C11 ------------------------------------------------------------------------
+    print("\nC11) durable replay floor (bridge restart, and a bridge with no state)")
+    old = genuine                                    # a genuine signed reading of the first epoch
+    old_epoch = json.loads(old)["epoch"] if old else -1
+    start("esp", esp_args)                           # power cycle: same NVS -> epoch + 1
+    new_epoch = old_epoch + 1
+    ok = until(lambda: any(r.startswith(f"e{new_epoch}-") for r in rns("rpi3")), 30)
+    check("the sensor came back with a new epoch and its readings are stored", ok and old,
+          f"epoch {old_epoch} -> {new_epoch}")
+    procs["esp"].send_signal(signal.SIGUSR1)
+    procs["esp"].wait(40)
+    before = len(rns("rpi3"))
+
+    def replay_to(n):
+        c = pm.Client(pm.CallbackAPIVersion.VERSION2) if hasattr(pm, "CallbackAPIVersion") else pm.Client()
+        c.connect("127.0.0.1", N[n]["mqtt"])
+        c.loop_start()
+        c.publish(f"sensors/{DEV}/telemetry", old, qos=1).wait_for_publish(3)
+        time.sleep(2.5)
+        c.loop_stop()
+        c.disconnect()
+
+    def restart_bridge(n, wipe=False):
+        stop(f"bridge-{n}")
+        if wipe:
+            shutil.rmtree(os.path.join(tmp, f"state-{n}"), ignore_errors=True)
+        with open(procs[f"bridge-{n}"]._log, "a") as f:
+            f.write("---- restart ----\n")
+        start(f"bridge-{n}", [PY, os.path.join(ROOT, "pi", "om2m_ipe_bridge.py"), "-c",
+                              os.path.join(tmp, f"bridge-{n}.conf")])
+        until(lambda: "subscribed" in open(procs[f"bridge-{n}"]._log).read().split("---- restart ----")[-1], 15)
+        time.sleep(1.5)
+
+    def since_restart(n):
+        tail = open(procs[f"bridge-{n}"]._log).read().split("---- restart ----")[-1]
+        st = [l for l in tail.splitlines() if " stats {" in l]
+        return tail, (json.loads(st[-1].split(" stats ", 1)[1]) if st else {})
+
+    restart_bridge("rpi2")                           # the sensor's home bridge: it saw the new epoch
+    replay_to("rpi2")
+    tail, st = since_restart("rpi2")
+    check("(a) after a restart, the home bridge reloads its floor and rejects the old-epoch replay",
+          "replay floor loaded for 1 device" in tail and st.get("rejected:auth:stale_epoch", 0) >= 1,
+          f"stale_epoch {st.get('rejected:auth:stale_epoch', 0)}")
+    restart_bridge("rpi4", wipe=True)                # no local state at all
+    replay_to("rpi4")
+    tail, st = since_restart("rpi4")
+    check("(b) a bridge with no local state reads the floor off the parent CSE and rejects it too",
+          st.get("floor_cse_reads", 0) >= 1 and st.get("rejected:auth:stale_epoch", 0) >= 1,
+          f"floor_cse_reads {st.get('floor_cse_reads', 0)}, stale_epoch {st.get('rejected:auth:stale_epoch', 0)}")
+    check("nothing from the replays was stored", len(rns("rpi3")) == before,
+          f"rpi3 {before} -> {len(rns('rpi3'))} readings")
 
     for name in list(procs):
         stop(name)

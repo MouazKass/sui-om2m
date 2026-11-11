@@ -60,13 +60,15 @@ source "$DEPLOY_ENV"
 PLUGIN_TARGET="${PLUGIN_TARGET:-$REPO/deploy/v9/plugin-target.env}"
 CALL_PKG=$PKG_V8
 DENY_FLUSH=false
+DEVICE_BINDING=false   # v10: step 4 = policy::evaluate_with_device
 if [ -f "$PLUGIN_TARGET" ]; then
   grep -q $'\r' "$PLUGIN_TARGET" && die "$PLUGIN_TARGET has CRLF line endings"
   # shellcheck disable=SC1090
   source "$PLUGIN_TARGET"
   [[ "$CALL_PKG" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "$PLUGIN_TARGET: CALL_PKG=$CALL_PKG is not a package id"
   case "$DENY_FLUSH" in true|false) ;; *) die "$PLUGIN_TARGET: DENY_FLUSH must be true or false";; esac
-  echo "plugin target override: sui.package.id=$CALL_PKG, deny flush=$DENY_FLUSH (from $PLUGIN_TARGET)"
+  case "$DEVICE_BINDING" in true|false) ;; *) die "$PLUGIN_TARGET: DEVICE_BINDING must be true or false";; esac
+  echo "plugin target override: sui.package.id=$CALL_PKG, deny flush=$DENY_FLUSH, device binding=$DEVICE_BINDING (from $PLUGIN_TARGET)"
 fi
 
 is_id() { [[ "${1:-}" =~ ^0x[0-9a-fA-F]{1,64}$ ]]; }
@@ -168,6 +170,10 @@ sui.das.deny.log.keep=3
 # function does not exist in v8, so this stays false until the v9 upgrade.
 sui.das.deny.audit.flush.enabled=$DENY_FLUSH
 sui.das.deny.audit.flush.interval.min=15
+# v10 only: decide access with policy::evaluate_with_device, so a resource
+# bound to an IoT device is granted only while that device is registered.
+# The function does not exist before v10; off, a bound resource fails closed.
+sui.policy.device.binding=$DEVICE_BINDING
 
 # --- added for v8 ---
 # Public fullnodes no longer serve JSON-RPC; every read/simulate/execute goes here.

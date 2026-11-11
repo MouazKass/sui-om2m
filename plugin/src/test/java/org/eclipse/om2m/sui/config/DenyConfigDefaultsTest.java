@@ -38,6 +38,15 @@ public class DenyConfigDefaultsTest {
     }
 
     @Test
+    public void deviceBindingStepIsOffUnlessConfigured() {
+        // v10's evaluate_with_device does not exist in v8/v9 packages.
+        assertFalse(SuiConfig.fromProperties(base()).policyDeviceBinding);
+        Properties p = base();
+        p.setProperty("sui.policy.device.binding", "true");
+        assertTrue(SuiConfig.fromProperties(p).policyDeviceBinding);
+    }
+
+    @Test
     public void flushIntervalIsFlooredAtTheContractMinimum() {
         Properties p = base();
         p.setProperty("sui.das.deny.audit.flush.interval.min", "1");

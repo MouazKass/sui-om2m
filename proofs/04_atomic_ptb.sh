@@ -28,8 +28,10 @@ for i,c in enumerate(cmds):
 print('CHAIN='+','.join(names)+';STATUS='+st)
 ")
 grep -v '^CHAIN=' <<<"$CHAIN"
-want="identity::verify,trust::require_min,cap_token::validate_for_use,policy::evaluate,evaluator::decide_and_log;STATUS=success"
-if grep -q "CHAIN=$want" <<<"$CHAIN"; then
+# Step 4 is policy::evaluate (v8/v9) or policy::evaluate_with_device (v10,
+# sui.policy.device.binding=true): same receipt in, same receipt out.
+want="identity::verify,trust::require_min,cap_token::validate_for_use,policy::evaluate(_with_device)?,evaluator::decide_and_log;STATUS=success"
+if grep -Eq "CHAIN=$want" <<<"$CHAIN"; then
   echo "    [PASS] one tx, five steps, each consuming the previous step's receipt"; PROOF_PASS=$((${PROOF_PASS:-0}+1))
   printf '%s,%s,%s,%s,%s,\n' "$(date -u +%FT%TZ)" "$PROOF_ID" "rpi3:DAC GRANT (receipt chain)" success "$D" >> "${PROOF_LOG:-/dev/null}"
 else

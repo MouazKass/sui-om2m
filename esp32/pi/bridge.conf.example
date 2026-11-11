@@ -86,6 +86,23 @@ negative_ttl_s = 15
 max_stale_s = 300
 # readings whose device timestamp is older than this are replays
 replay_window_s = 3600
+# durable replay floor (bridge.state_dir/replay.json, also raised from the
+# newest reading on the parent CSE every floor_refresh_s): an older epoch, or a
+# seq more than seq_window below the highest of the current epoch, is a replay.
+# seq_window > the board's RESEND_SLOTS (64) and < om2m.mni (1000).
+seq_window = 256
+floor_refresh_s = 60
+
+[ack]
+# Sign every ack with this bridge's own Ed25519 ack key, created on this Pi
+# (0600, owned by the service user) on first start and never copied. Boards
+# accept only acks signed by a pinned bridge key: print it with
+#   sudo -u om2m-ipe python3 /opt/om2m-ipe-bridge/om2m_ipe_bridge.py \
+#        -c /etc/om2m-ipe-bridge/bridge.conf --print-ack-key
+# and add it to deploy/v9/ack_keys/ (-> firmware ack_keys.h, simulator --ack-keys).
+sign = true
+# empty = <state_dir>/ack.key
+key_file =
 
 [bridge]
 # readings held in memory while the target CSE is down (e.g. a parent change
@@ -95,3 +112,5 @@ retry_interval_s = 3
 stats_interval_s = 60
 log_level = INFO
 dedupe_window = 4096
+# durable state: replay floor (replay.json) and the ack key (systemd StateDirectory)
+state_dir = /var/lib/om2m-ipe-bridge
