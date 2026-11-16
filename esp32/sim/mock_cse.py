@@ -134,6 +134,29 @@ def resolve(path):
     return cur, None
 
 
+def hier_path(res):
+    """/in-cse/in-name/<rn>/... of a resource (the uril form OM2M returns)."""
+    names = []
+    while res.get("pi") and res["pi"] in RES:
+        names.append(res["rn"])
+        res = RES[res["pi"]]
+    return "/".join([f"/{CFG['cse_id']}/{CFG['cse_name']}", *reversed(names)])
+
+
+def discover(target, ty, lbl):
+    """fu=1 discovery below target: {"m2m:uril": [hierarchical paths]}, filtered
+    by ty and (one) lbl, like OM2M 1.x (used by the replication reconcile)."""
+    out = []
+
+    def walk(ri):
+        for c in children(ri):
+            if (ty is None or str(c["ty"]) == str(ty)) and (lbl is None or lbl in c.get("lbl", [])):
+                out.append(hier_path(c))
+            walk(c["ri"])
+    walk(target["ri"])
+    return reply(200, 2000, {"m2m:uril": out})
+
+
 def delete_tree(ri):
     for c in list(RES.get(ri, {}).get("_children", [])):
         delete_tree(c)
@@ -180,6 +203,8 @@ def onem2m(path):
                 return err(403, 4103, "operation not emulated for dynamic grants")
             return err(403, 4103, "Access denied: static ACP, no DAS consulted")
 
+        if request.method == "GET" and request.args.get("fu") == "1" and not virtual:
+            return discover(target, request.args.get("ty"), request.args.get("lbl"))
         if request.method == "GET":
             if virtual:
                 cins = [c for c in children(target["ri"]) if c["ty"] == 4]

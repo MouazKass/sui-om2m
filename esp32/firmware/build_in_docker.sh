@@ -25,7 +25,13 @@ grep -q '^#define ACK_TRUSTED_KEYS "' "$SKETCH/ack_keys.h" \
 TMP=/tmp/esp32-fw-build-$$
 trap 'ssh "$HOST" "rm -rf $TMP" || true' EXIT
 echo "== copying sketch to $HOST:$TMP"
-ssh "$HOST" "mkdir -p $TMP/esp32_sensor_node $TMP/out"
+# The folder may hold config_local.h (Wi-Fi password), so it is private and is
+# removed on the build host even if this SSH session dies mid-build: stale
+# folders from earlier interrupted builds are swept first, and a detached
+# timer deletes this one after 45 min regardless of what happens here.
+ssh "$HOST" "find /tmp -maxdepth 1 -name 'esp32-fw-build-*' -mmin +45 -exec rm -rf {} + 2>/dev/null; \
+  umask 077; mkdir -p $TMP/esp32_sensor_node $TMP/out; \
+  nohup sh -c 'sleep 2700; rm -rf $TMP' >/dev/null 2>&1 < /dev/null &"
 tar -C "$SKETCH" -cf - . | ssh "$HOST" "tar -C $TMP/esp32_sensor_node -xf -"
 
 echo "== building in a throwaway container (core esp32@$ESP32_CORE, fqbn $FQBN)"

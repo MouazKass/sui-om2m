@@ -75,18 +75,33 @@ From the dashboard you can:
    throwaway container on rpi1 with pinned versions (arduino-cli 1.1.1, core
    3.2.0, PubSubClient 2.8, DHT sensor library 1.4.6, Adafruit Unified Sensor
    1.1.14). The `.bin` files land in `esp32/firmware/build/` (not committed;
-   `SHA256SUMS` and `build.log` are). Edit `config.h` (step 2) first, because
-   the Wi-Fi settings are compiled in. Flash with
+   `SHA256SUMS` and `build.log` are). Create `config_local.h` (step 2) first,
+   because the Wi-Fi settings are compiled in. Flash with
    `esptool.py write_flash 0x0 build/esp32_sensor_node.ino.merged.bin`.
    The verified build of 11 Nov 2026 (default `config.h`): 1,062,826 bytes
-   (81% of flash), 0 warnings, all five pinned ack keys present.
-2. Edit `firmware/esp32_sensor_node/config.h`:
-   - `WIFI_SSID` and `WIFI_PASS`. The network must be 2.4 GHz, without
-     WPA2-Enterprise or a captive portal.
-   - `DEVICE_ID`: unique, lowercase, digits and `-` only.
-   - `HOME_NODE`: the preferred Pi, e.g. `rpi2`.
+   (81% of flash), 0 warnings, all five pinned ack keys present. The VIP build
+   of 16 Nov 2026 (testbed `config_local.h`): 1,062,762 bytes (81%), the VIP
+   compiled in, the password absent from `build.log`.
+2. **Testbed (one cluster address):** copy
+   `firmware/esp32_sensor_node/config_local.h.example` to `config_local.h`
+   (gitignored, never commit it) and put the Wi-Fi password in it. It sets:
+   - `WIFI_SSID "ESB1032-2.4"` (the ESP32 is 2.4 GHz only; the Pis use
+     `ESB1032-5`, the same router and LAN `192.168.1.0/24`);
+   - `CLUSTER_SEEDS "cluster=192.168.1.250:1883"`, `HOME_NODE "cluster"`,
+     `CLUSTER_ALLOW_PREFIX "192.168.1.250"`: the board only ever connects to
+     the **cluster VIP**. keepalived keeps it on the current on-chain parent,
+     and moves it within seconds if that Pi's broker or bridge fails or the
+     parent changes (`deploy/vip/README.md`). With one seed the board retries
+     every ≤ 2 s.
+   - `DEVICE_ID` (uncomment): unique, lowercase, digits and `-` only.
 
-   Leave `CLUSTER_SEEDS` listing all five Pis. Later nodes are learned at run time.
+   `config_local.h` overrides `config.h`; the build scripts never copy it into
+   logs or evidence (only into the compiled binary). On a network with no VIP,
+   leave `config_local.h` out: `config.h` then lists all five Pis by their wired
+   addresses with `HOME_NODE` as the preferred one, and later nodes are learned
+   at run time.
+
+   **Router:** keep `192.168.1.250` out of the router's DHCP pool.
 
    The bridges' ack public keys are pinned in `ack_keys.h` (generated, committed).
    If a node was added or reinstalled with a new key, run `firmware/gen_ack_keys.sh`
@@ -97,7 +112,7 @@ From the dashboard you can:
 4. Upload. Hold BOOT if it hangs on "Connecting…". In the Serial Monitor at 115200
    you should see:
    - `[wifi] connected`;
-   - `[mqtt] connected to rpi2 … session <epoch>.1`;
+   - `[mqtt] connected to cluster (192.168.1.250) … session <epoch>.1`;
    - `[id] device key pk=… sui_address=0x…` and the exact `council.sh … id-register`
      command for this board (the key is created on the first boot, kept in NVS, and
      never printed);
@@ -307,3 +322,83 @@ see `ROLLOUT_V9.md`, "Signed acks and the durable replay floor".
   record `esp32/evidence/device_binding_live_2026-11-11.txt`). The device still has no
   token or gas of its own. Bind further sensors with the council action
   `policy-bind-device` (`esp32/sim/live_device_binding.sh bind`, with `DEV`/`DEV_ADDR`).
+
+## 8. Durable readings: losing the parent costs zero readings (v2.3)
+
+Design: `DESIGN.md` §11. In short, every reading is on at least 3 of the 5 Pis' disks
+before the board is told it is safe, and until then it is in the board's flash.
+
+- **Every Pi holds every reading.** Each bridge writes each authenticated reading to
+  all five CSEs (`pi/replicator.py`, `[replication] mode = all` in `bridge.conf`) and
+  sends the signed ack only once **3 of 5** hold it. Below that: no ack, the board
+  re-sends. A Pi that missed readings (down, or a fresh disk) is filled in by the
+  bridges' backlog and by the leader's reconcile (every 5 min, and when a member comes
+  back). Reading `/in-cse/in-name/<device>/data` on **any** Pi gives the same data, and
+  a protected read on any Pi goes through that Pi's Sui DAS.
+- **OM2M keeps its data on disk** (`dbReset=false`, `WRITE_DELAY=0`,
+  `/home/user/sui-runtime-config/om2m-db` on the host): a container restart, recreate or
+  `04_cutover.sh redeploy` no longer wipes the readings.
+- **The board keeps unacked readings in flash** (`firmware/esp32_sensor_node/flash_buffer.h`,
+  fw 2.3): 1,440 readings = 2 h at 5 s, survives a reboot, sent oldest first; a new
+  power-up's readings wait until the previous one's are acked. Serial log at boot:
+  `[fb] flash buffer: 1440 slots, N unacked reading(s) restored`.
+- **Check a node:** `ssh rpi1 'cd ~/esp32-live && sim/live_durability.sh verify'` prints
+  the readings per Pi, how many Pis hold each acked reading, gaps and duplicates.
+  `esp32/sim/live_parent_kill.sh` (from the laptop) stops the parent's CSE mid-stream and
+  watches it catch up afterwards.
+- **Bridge stats** (`journalctl -u om2m-ipe-bridge | grep stats`): `stored_quorum`,
+  `repl_stored`/`repl_duplicate` (per-replica writes), `repl_no_quorum`,
+  `repl_backlog` (per Pi), `repl_reconciled`, `acked_stale_stored`, `acked_stale_dropped`.
+- What can still lose a reading: the board's flash fails to mount (logged at boot), more
+  than 2 h with fewer than 3 CSEs reachable (the oldest unacked slot is reused, logged), or
+  three Pis losing their disks at once.
+
+Live record: `ROLLOUT_V9.md` ("Durable readings"), `evidence/durability_live_2026-11-16.txt`.
+
+## 9. Wireless firmware updates (signed OTA, fw 2.4)
+
+Only the **first** flash needs a USB data cable (§2). After that, releases go over
+the Wi-Fi to every board, signed, and a bad image rolls itself back.
+
+**Once (publisher machine).** `scripts/ota/keygen.sh` creates the firmware-signing
+key in WSL (`~/.sui-om2m-fw/fw_signing.pem`, 0600; never copied) and pins its public
+key: `deploy/v9/fw_keys/release-1.pub` → `firmware/esp32_sensor_node/fw_keys.h`
+(via `firmware/gen_fw_keys.sh`). Every image flashed after that accepts releases signed
+by that key only. On each Pi: `sudo esp32/pi/install_ota.sh` (done on all five,
+16 Nov 2026) runs `om2m-ota`, a read-only HTTP server on port 8070 that answers only
+the sensor Wi-Fi (192.168.1.0/24) and localhost.
+
+**A release.**
+```bash
+esp32/firmware/build_in_docker.sh                       # with the board's config_local.h
+scripts/ota/publish.sh esp32/firmware/build/esp32_sensor_node.ino.bin <version> <DEVICE_ID>
+scripts/ota/publish.sh --withdraw                       # stop offering it (deletes the images)
+```
+`<version>` is an integer greater than every earlier release (boards refuse anything not
+newer). `publish.sh` signs the manifest in WSL, copies image + manifest to every active
+node, checks that each node serves exactly what the boards would accept, and publishes
+the retained announce `om2m/ota/manifest`. A connected board gets it at once; boards
+also poll `http://192.168.1.250:8070/fw/manifest.json` every 6 h.
+
+**Build one image per board** and publish it with that board's `DEVICE_ID` as target:
+`DEVICE_ID` and the Wi-Fi settings are compiled in from `config_local.h`. A board that
+receives an image built for another ID rejects it on first boot and rolls back (it keeps
+the ID it was first flashed with in NVS), so a mistake costs a reboot, not the board's
+identity. The images contain the Wi-Fi password, which is why the server only answers the
+sensor Wi-Fi and `--withdraw` deletes them.
+
+**What the board checks.** The manifest is signed by a pinned key (domain
+`om2m-esp32-fw-v1`, distinct from device and ack signatures), is for this device, is newer
+than the installed release and than any release that failed here, and fits one OTA slot
+(1.25 MB; the image is 1.12 MB, 85 %). It streams the image into the other slot, checks
+size and SHA-256, and only then switches slots. The new image is **on trial**: it is kept
+once it has connected and received a signed bridge ack; if it does not get there within 3
+boots (crash, no Wi-Fi, no cluster), the board switches back and never retries that
+version. Progress: serial log, and signed messages on `sensors/<DEVICE_ID>/ota`.
+
+**Status.** Offline: 40/40 firmware-logic checks (`sim/firmware_hostcheck/ota_test.cpp`),
+27/27 Python (`tests/test_ota.py`), suite group 3c. Live on the five Pis via 192.168.1.250
+(`evidence/ota_live_2026-11-16.txt`): the genuine release was accepted; forged,
+claimed-key, edited, bit-flipped-image, wrong-device and replayed releases were all
+refused. **Not yet done on real hardware**: a board has to be USB-flashed first (needs a
+data cable), then a real OTA round trip and a forced rollback should be run on it.

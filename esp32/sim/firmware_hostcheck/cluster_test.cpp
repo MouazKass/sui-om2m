@@ -26,7 +26,8 @@ int main(int argc, char** argv) {
     std::string cmd; ss >> cmd;
     std::string arrow, want;
     auto label = [&](int i) { return i < 0 ? std::string("none") : std::string(s.b[i].label); };
-    if (cmd == "params") { ss >> s.p.backoffBaseMs >> s.p.backoffMaxMs >> s.p.homeProbeMs >> s.p.homeStableMs; }
+    if (cmd == "reset") { s = cluster::Selector(); }
+    else if (cmd == "params") { ss >> s.p.backoffBaseMs >> s.p.backoffMaxMs >> s.p.homeProbeMs >> s.p.homeStableMs; }
     else if (cmd == "seeds") { std::string l; ss >> l; s.addSeeds(l.c_str()); }
     else if (cmd == "home") { std::string l; ss >> l; s.setHome(l.c_str()); }
     else if (cmd == "next") { unsigned long t; ss >> t >> arrow >> want; std::string g = label(s.next(t)); expect(g == want, g); }

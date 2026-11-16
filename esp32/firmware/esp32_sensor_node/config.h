@@ -8,8 +8,19 @@
 // ============================================================================
 #pragma once
 
+// ---- Site settings (config_local.h, gitignored) -------------------------------
+// Wi-Fi credentials and the cluster address belong to the site, not the repo.
+// Copy config_local.h.example to config_local.h and fill it in; anything it
+// defines wins over the defaults below. The host test build never reads it.
+#if !defined(FW_HOSTCHECK) && defined(__has_include)
+#if __has_include("config_local.h")
+#include "config_local.h"
+#endif
+#endif
+
 // ---- WiFi --------------------------------------------------------------------
 // The ESP32 must join a 2.4 GHz network that can reach the Raspberry Pis.
+// Testbed: ESB1032-2.4 (same router and LAN as ESB1032-5, 192.168.1.0/24).
 #ifndef WIFI_SSID
 #define WIFI_SSID        "YOUR_WIFI_NAME"
 #endif
@@ -22,6 +33,16 @@
 // starting list: at run time the sensor also learns members from the retained
 // topic om2m/cluster/brokers, so nodes added later are used without a reflash.
 // Format: label=host:port, comma-separated, at most 8.
+//
+// Testbed (config_local.h): ONE seed, the cluster VIP 192.168.1.250 on the
+// Wi-Fi. keepalived (deploy/vip/) keeps it on exactly one healthy Pi and moves
+// it within seconds if that Pi, its broker or its bridge fails, so the sensor
+// only ever needs this one address. With a single seed the selector caps its
+// backoff at 2 s (cluster.h singleBackoffMaxMs).
+//   #define CLUSTER_SEEDS        "cluster=192.168.1.250:1883"
+//   #define HOME_NODE            "cluster"
+//   #define CLUSTER_ALLOW_PREFIX "192.168.1.250"   // ignore learned per-Pi addresses
+// The per-Pi list below is the fallback for a network that has no VIP.
 #ifndef CLUSTER_SEEDS
 #define CLUSTER_SEEDS "rpi1=10.25.96.200:1883,rpi2=10.25.96.201:1883,rpi3=10.25.96.203:1883," \
                       "rpi4=10.25.96.204:1883,rpi5=10.25.96.205:1883"
@@ -51,7 +72,7 @@
 #ifndef DEVICE_ID
 #define DEVICE_ID        "esp32-dht-01"
 #endif
-#define FW_VERSION       "2.2.0"
+#define FW_VERSION       "2.3.0"   // 2.3: durable flash resend buffer (flash_buffer.h)
 
 // ---- Signed acknowledgements (v2.2) -------------------------------------------
 // A reading leaves the resend buffer only on an ack signed by one of the

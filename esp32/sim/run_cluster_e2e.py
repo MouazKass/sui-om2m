@@ -550,18 +550,25 @@ def main():
         st = [l for l in tail.splitlines() if " stats {" in l]
         return tail, (json.loads(st[-1].split(" stats ", 1)[1]) if st else {})
 
+    def refused(st):
+        # v2.3: a stale replay of a reading that IS stored is acked (so a board's
+        # strictly ordered backlog cannot wedge on it), never stored again
+        return st.get("rejected:auth:stale_epoch", 0) + st.get("acked_stale_stored", 0)
+
     restart_bridge("rpi2")                           # the sensor's home bridge: it saw the new epoch
     replay_to("rpi2")
     tail, st = since_restart("rpi2")
     check("(a) after a restart, the home bridge reloads its floor and rejects the old-epoch replay",
-          "replay floor loaded for 1 device" in tail and st.get("rejected:auth:stale_epoch", 0) >= 1,
-          f"stale_epoch {st.get('rejected:auth:stale_epoch', 0)}")
+          "replay floor loaded for 1 device" in tail and refused(st) >= 1,
+          f"stale_epoch {st.get('rejected:auth:stale_epoch', 0)}, acked-as-already-stored "
+          f"{st.get('acked_stale_stored', 0)}")
     restart_bridge("rpi4", wipe=True)                # no local state at all
     replay_to("rpi4")
     tail, st = since_restart("rpi4")
     check("(b) a bridge with no local state reads the floor off the parent CSE and rejects it too",
-          st.get("floor_cse_reads", 0) >= 1 and st.get("rejected:auth:stale_epoch", 0) >= 1,
-          f"floor_cse_reads {st.get('floor_cse_reads', 0)}, stale_epoch {st.get('rejected:auth:stale_epoch', 0)}")
+          st.get("floor_cse_reads", 0) >= 1 and refused(st) >= 1,
+          f"floor_cse_reads {st.get('floor_cse_reads', 0)}, stale_epoch {st.get('rejected:auth:stale_epoch', 0)}, "
+          f"acked-as-already-stored {st.get('acked_stale_stored', 0)}")
     check("nothing from the replays was stored", len(rns("rpi3")) == before,
           f"rpi3 {before} -> {len(rns('rpi3'))} readings")
 

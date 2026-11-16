@@ -1,3 +1,11 @@
+Unable to find image 'debian:bookworm-slim' locally
+bookworm-slim: Pulling from library/debian
+2d66c782e484: Pulling fs layer
+9e2a41483b7f: Download complete
+2d66c782e484: Download complete
+2d66c782e484: Pull complete
+Digest: sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+Status: Downloaded newer image for debian:bookworm-slim
 debconf: delaying package configuration, since apt-utils is not installed
 arduino-cli  Version: 1.1.1 Commit: fa6eafcb Date: 2024-11-22T09:31:36Z
 ID          Installed Latest Name
@@ -8,24 +16,27 @@ Adafruit Unified Sensor 1.1.14      1.1.15      user     Required for all Adafru
 DHT sensor library      1.4.6       1.4.7       user     Arduino library for DHT11, DHT22, etc...
 PubSubClient            2.8         -           user     -
 
-Sketch uses 1062826 bytes (81%) of program storage space. Maximum is 1310720 bytes.
-Global variables use 93628 bytes (28%) of dynamic memory, leaving 234052 bytes for local variables. Maximum is 327680 bytes.
+Sketch uses 1118202 bytes (85%) of program storage space. Maximum is 1310720 bytes.
+Global variables use 124516 bytes (37%) of dynamic memory, leaving 203164 bytes for local variables. Maximum is 327680 bytes.
 
-Used library            Version Path
-WiFi                    3.2.0   /root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/WiFi
-Networking              3.2.0   /root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/Network
-PubSubClient            2.8     /root/Arduino/libraries/PubSubClient
-Preferences             3.2.0   /root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/Preferences
-DHT sensor library      1.4.6   /root/Arduino/libraries/DHT_sensor_library
-Adafruit Unified Sensor 1.1.14  /root/Arduino/libraries/Adafruit_Unified_Sensor
+[92mUsed library[0m            [92mVersion[0m [90mPath[0m
+[93mWiFi[0m                    3.2.0   [90m/root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/WiFi[0m
+[93mNetworking[0m              3.2.0   [90m/root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/Network[0m
+[93mPubSubClient[0m            2.8     [90m/root/Arduino/libraries/PubSubClient[0m
+[93mPreferences[0m             3.2.0   [90m/root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/Preferences[0m
+[93mUpdate[0m                  3.2.0   [90m/root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/Update[0m
+[93mDHT sensor library[0m      1.4.6   [90m/root/Arduino/libraries/DHT_sensor_library[0m
+[93mLittleFS[0m                3.2.0   [90m/root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/LittleFS[0m
+[93mFS[0m                      3.2.0   [90m/root/.arduino15/packages/esp32/hardware/esp32/3.2.0/libraries/FS[0m
+[93mAdafruit Unified Sensor[0m 1.1.14  [90m/root/Arduino/libraries/Adafruit_Unified_Sensor[0m
 
-Used platform Version Path
-esp32:esp32   3.2.0   /root/.arduino15/packages/esp32/hardware/esp32/3.2.0
-total 32160
--rw-r--r-- 1 root root      397 Nov 11 12:03 SHA256SUMS
--rw-r--r-- 1 root root  1062976 Nov 11 12:03 esp32_sensor_node.ino.bin
--rw-r--r-- 1 root root    24976 Nov 11 12:03 esp32_sensor_node.ino.bootloader.bin
--rwxr-xr-x 1 root root 12677976 Nov 11 12:03 esp32_sensor_node.ino.elf
--rw-r--r-- 1 root root 14922124 Nov 11 12:03 esp32_sensor_node.ino.map
--rw-r--r-- 1 root root  4194304 Nov 11 12:03 esp32_sensor_node.ino.merged.bin
--rw-r--r-- 1 root root     3072 Nov 11 12:03 esp32_sensor_node.ino.partitions.bin
+[92mUsed platform[0m [92mVersion[0m [90mPath[0m
+[93mesp32:esp32[0m   3.2.0   [90m/root/.arduino15/packages/esp32/hardware/esp32/3.2.0[0m
+total 33600
+-rw-r--r-- 1 root root      397 Nov 16 14:25 SHA256SUMS
+-rw-r--r-- 1 root root  1118352 Nov 16 14:25 esp32_sensor_node.ino.bin
+-rw-r--r-- 1 root root    24976 Nov 16 14:25 esp32_sensor_node.ino.bootloader.bin
+-rwxr-xr-x 1 root root 13431300 Nov 16 14:25 esp32_sensor_node.ino.elf
+-rw-r--r-- 1 root root 15568549 Nov 16 14:25 esp32_sensor_node.ino.map
+-rw-r--r-- 1 root root  4194304 Nov 16 14:25 esp32_sensor_node.ino.merged.bin
+-rw-r--r-- 1 root root     3072 Nov 16 14:25 esp32_sensor_node.ino.partitions.bin

@@ -84,8 +84,9 @@ cache_ttl_s = 60
 negative_ttl_s = 15
 # chain unreadable: reuse a positive answer this old at most, then reject
 max_stale_s = 300
-# readings whose device timestamp is older than this are replays
-replay_window_s = 3600
+# readings whose device timestamp is older than this are replays. Must cover
+# the board's flash buffer (fw 2.3: 1440 readings = 2 h at 5 s) with margin.
+replay_window_s = 43200
 # durable replay floor (bridge.state_dir/replay.json, also raised from the
 # newest reading on the parent CSE every floor_refresh_s): an older epoch, or a
 # seq more than seq_window below the highest of the current epoch, is a replay.
@@ -114,3 +115,25 @@ log_level = INFO
 dedupe_window = 4096
 # durable state: replay floor (replay.json) and the ack key (systemd StateDirectory)
 state_dir = /var/lib/om2m-ipe-bridge
+
+[replication]
+# all: write every reading to EVERY member CSE (members_file) and send the
+# signed ack only once `quorum` of them hold it (each CSE is an on-disk H2 DB),
+# so an acknowledged reading survives the loss of any (members - quorum)
+# nodes, the parent included. A reading short of quorum is not acked and the
+# board re-sends it. off: v2 behaviour (parent only).
+mode = all
+# 0 = majority of members_file (5 nodes -> 3)
+quorum = 0
+# bound on one write round; a member that misses it is retried from a backlog
+write_timeout_s = 3
+# a failing member is skipped for this long (doubling) so it cannot slow acks
+down_backoff_min_s = 5
+down_backoff_max_s = 60
+backlog_max = 50000
+backfill_interval_s = 5
+backfill_batch = 200
+# the leader (the parent's bridge, or the first live member) compares every
+# replica and copies gaps this often, and whenever a member comes back
+reconcile_interval_s = 300
+reconcile_max_copies = 3000

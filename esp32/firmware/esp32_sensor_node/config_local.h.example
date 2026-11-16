@@ -1,0 +1,14 @@
+// config_local.h - site settings for this testbed. Copy to config_local.h
+// (gitignored) and fill in the Wi-Fi password. Never commit config_local.h.
+#pragma once
+
+#define WIFI_SSID            "ESB1032-2.4"
+#define WIFI_PASS            "YOUR_WIFI_PASSWORD"
+
+// The cluster VIP (keepalived, deploy/vip/): one address, always on a healthy Pi.
+#define CLUSTER_SEEDS        "cluster=192.168.1.250:1883"
+#define HOME_NODE            "cluster"
+#define CLUSTER_ALLOW_PREFIX "192.168.1.250"
+
+// Unique per board.
+// #define DEVICE_ID         "esp32-dht-02"

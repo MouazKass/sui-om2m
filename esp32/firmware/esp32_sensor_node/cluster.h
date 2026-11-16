@@ -52,6 +52,9 @@ struct Params {
   unsigned long backoffMaxMs = 60000;
   unsigned long homeProbeMs = 30000;
   unsigned long homeStableMs = 120000;
+  // Only one broker to try (the cluster VIP): never back off longer than
+  // this, because the VIP comes back on another Pi within seconds.
+  unsigned long singleBackoffMaxMs = 2000;
 };
 
 static inline bool validLabel(const char* s) {
@@ -165,13 +168,18 @@ class Selector {
     homeOkSinceMs = 0;
   }
 
+  unsigned long backoffCap() const {
+    return (n == 1 && p.singleBackoffMaxMs < p.backoffMaxMs) ? p.singleBackoffMaxMs : p.backoffMaxMs;
+  }
+
   void onFailed(int i, unsigned long now) {
     if (i < 0 || i >= n) return;
     if (current == i) current = -1;
     if (b[i].failures < 16) b[i].failures++;
+    unsigned long cap = backoffCap();
     unsigned long backoff = p.backoffBaseMs;
-    for (uint32_t k = 1; k < b[i].failures && backoff < p.backoffMaxMs; k++) backoff *= 2;
-    if (backoff > p.backoffMaxMs) backoff = p.backoffMaxMs;
+    for (uint32_t k = 1; k < b[i].failures && backoff < cap; k++) backoff *= 2;
+    if (backoff > cap) backoff = cap;
     b[i].retryAtMs = now + backoff;
     if (i == home) { homeOk = false; homeOkSinceMs = 0; }
   }
@@ -180,6 +188,7 @@ class Selector {
   // down): fail it and keep it out for at least `ms`, beyond normal backoff.
   void penalize(int i, unsigned long now, unsigned long ms) {
     onFailed(i, now);
+    if (ms > backoffCap()) ms = backoffCap();   // never shut out the only broker
     if (i >= 0 && i < n && b[i].retryAtMs < now + ms) b[i].retryAtMs = now + ms;
   }
 

@@ -1,0 +1,78 @@
+# ESP cluster VIP, live run 2026-11-16 (esp32/sim/live_vip.sh, run 6 = the clean run)
+# Wi-Fi: Pis on ESB1032-5 (rpi1 .120, rpi2 .127, rpi3 .107, rpi4 .133, rpi5 .100); VIP 192.168.1.250
+# VIP holder MACs: rpi2 88:A2:9E:1D:4A:99, rpi3 88:A2:9E:1D:30:21, 'local' = rpi1
+
+start 18:07:56
+18:07:57 == sync esp32/ to rpi1:/home/user/esp32-live (config_local.h is never copied)
+18:07:59 == start the VIP watcher and the simulated sensor on rpi1
+started
+18:08:20    sensor epoch 10; [esp32-dht-01] event        connected cluster (192.168.1.250:1883) session 10.1
+
+18:08:21 == base: the VIP is on the parent
+    parent on-chain: rpi2 epoch 16
+    VIP holder:      rpi2
+
+18:08:44 == bridge: stop rpi2's ESP bridge (parent unhealthy for ESP service)
+18:08:51    stopped
+18:08:54    VIP moved to rpi1 (best healthy non-parent) after 3 s
+18:09:24 == bridge: rpi2's bridge started again
+18:09:38    VIP back on rpi2 after 14 s
+
+18:10:08 == parent: hand the parent role rpi2 -> rpi3 on-chain
+$ [rpi2] sui client call --package $PKG_V8 --module failover --function renew_lease --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0 0x6
+    -> Success   digest=AaVW1hbEL4utk4wRQM4JL8vWWVcRJnMHF2nPGU7HeXqY   gas=1000276 MIST
+    [PASS] rpi2 renews to 0 ms (lapse) (expected success)
+$ [rpi3] sui client call --package $PKG_V8 --module failover --function claim_parent --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> Success   digest=FvAnk4WjzN9EYvjJNwzaGZSPgtDXD42AqYD5bq6pV1Ry   gas=-3027321 MIST
+    [PASS] rpi3 claims (expected success)
+18:10:44    VIP on the new parent rpi3 (bridge chain poll + preempt delay) after 23 s
+
+18:11:24 == parent: hand it back rpi3 -> rpi2
+$ [rpi3] sui client call --package $PKG_V8 --module failover --function renew_lease --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0 0x6
+    -> Success   digest=BrtHvSHU3fUyP5uYoEAWeiAbYTybc4CUfCaVngWWgUs1   gas=1000276 MIST
+    [PASS] rpi3 renews to 0 ms (lapse) (expected success)
+$ [rpi2] sui client call --package $PKG_V8 --module failover --function claim_parent --args 0xe49d6c5faf37ad48ba1213258f3bf596720f25edd9f1fcf796dc6854dd15602f 0x2b2b351f1619d115db50ce007625c932ae69e2aee5abe7f80029e615683245e8 0xc38f75e77c01fdf8d8ce6162b6107d9e630fb61d46045f78156a31531b4eeb39 0x6
+    -> Success   digest=GsKLgbEixcwKn3twFGDW9hK2XaBiKQ7MvSGmLzucpZFx   gas=-3027321 MIST
+    [PASS] rpi2 claims back (expected success)
+18:11:52    VIP back on rpi2 after 17 s
+
+18:12:32 == drain the sensor (every reading acked), then count what was stored
+   sim: [esp32-dht-01] event        power-up epoch 10 boot b793671b, 1 brokers, home cluster
+   sim: [esp32-dht-01] event        connected cluster (192.168.1.250:1883) session 10.1
+   sim: [esp32-dht-01] event        no acks via cluster for 20s: its bridge is down, failing over
+   sim: [esp32-dht-01] event        connected cluster (192.168.1.250:1883) session 10.2
+   sim: [esp32-dht-01] event        no acks via cluster for 20s: its bridge is down, failing over
+   sim: [esp32-dht-01] event        connected cluster (192.168.1.250:1883) session 10.3
+   sim: [esp32-dht-01] event        lost cluster, failing over
+   sim: [esp32-dht-01] event        connected cluster (192.168.1.250:1883) session 10.4
+   sim: [esp32-dht-01] event        lost cluster, failing over
+   sim: [esp32-dht-01] event        connected cluster (192.168.1.250:1883) session 10.5
+   sim: [esp32-dht-01] event        lost cluster, failing over
+   sim: [esp32-dht-01] event        connected cluster (192.168.1.250:1883) session 10.6
+   sim: [esp32-dht-01] event        finished: 135 readings taken, 0 unacknowledged [], 0 forged/unsigned acks ignored
+    finished: 135 readings taken, 0 unack
+    stored on rpi1's CSE: 135 reading(s) of epoch 10
+    stored on rpi2's CSE: 135 reading(s) of epoch 10
+    stored on rpi3's CSE: 135 reading(s) of epoch 10
+    stored on rpi4's CSE: 135 reading(s) of epoch 10
+    stored on rpi5's CSE: 135 reading(s) of epoch 10
+    taken 135, on no CSE (lost) 0, on all 5 CSEs 135
+
+18:13:02 == VIP holder timeline (ARP from rpi1; local = rpi1 itself)
+    1794838078.598 [88:A2:9E:1D:4A:99]
+    1794838127.886 -
+    1794838128.294 local
+    1794838174.240 [88:A2:9E:1D:4A:99]
+    1794838238.446 [88:A2:9E:1D:30:21]
+    1794838309.314 [88:A2:9E:1D:4A:99]
+    final holder: rpi2
+RESULT: PASS
+
+[exited with code 0]
+
+# Earlier runs, kept for the record:
+# run 1 (16:55): bridge phase PASS (VIP off the parent in 8 s, back in 12 s), 220/220 readings stored;
+#   parent phase not executed: rpi2's CLI had no gas coin >= the 0.02 SUI budget (fixed: budget 0.01 SUI).
+# runs 2-3: harness bugs (ssh hang on nohup; an orphaned copy ran concurrently) - invalid, fixed (setsid -f, single-sim guard).
+# run 4 (18:00): VIP timings 3 s / 15 s / 20 s / 20 s, all on-chain steps PASS; readings s0-s15 lost because rpi2's
+#   OM2M container was restarted at 18:01:26 by the parallel durability rollout (in-memory store wiped), not by the VIP.

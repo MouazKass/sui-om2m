@@ -1,0 +1,80 @@
+Losing the parent costs zero readings: live run on the 5-node testbed, 2026-11-16
+(ESP bridge v2.3 replication + quorum ack, durable OM2M DB, sensor with the flash
+buffer model fw 2.3). Times are local (UTC+4). Tools: esp32/sim/live_durability.sh
+(on rpi1), esp32/sim/live_parent_kill.sh (from the laptop), scripts/v8/04_cutover.sh.
+
+== 1. Durable OM2M database (dbReset=false, WRITE_DELAY=0, host volume) ==========
+Rolled out with 04_cutover.sh prepare + redeploy, one node at a time, parent last:
+rpi5 17:48, rpi4 17:58, rpi3 17:58, rpi1 17:59, rpi2 (parent) 18:01. Every node:
+  durable OM2M DB: org.eclipse.om2m.dbReset=false
+                   org.eclipse.om2m.dbUrl=jdbc\:h2\:./database/mndb;MULTI_THREADED\=1;WRITE_DELAY\=0
+  CSE started ... (resource DB on the host: /home/user/sui-runtime-config/om2m-db)
+Proof on rpi5 (probe AE durability-probe, reading e1-s1):
+  AE 201  CNT 201  CIN 201
+  /home/user/sui-runtime-config/om2m-db/mndb.mv.db 6,340,608 bytes
+  docker restart om2m-active 17:49:04 -> CSE back 200 at 17:49:39
+  after restart:  {"probe":"before-restart"}
+  acp_admin before /in-cse/acp-299732860, after /in-cse/acp-299732860 (ids stable now)
+  provision-das after restart: every resource 409 (present), nothing recreated
+  04_cutover.sh redeploy (container REMOVED and recreated) ->
+  after RECREATE: {"probe":"before-restart"}
+  (probe AE deleted afterwards: 200)
+04_cutover.sh verify after the rollout: CSE/sui-das/sui-dac-ae 200 on all five, v2 gossip
+from all five addresses, C2 ordinary RETRIEVE granted on-chain
+(8t6KkZC4WUzHnwsUWVUBnMuanpktmP1XpjFo2vB5FjqR).
+
+== 2. Bridge v2.3 on all five (deploy_to_pis.sh install) ============================
+[replication] mode = all, quorum 0 (= 3 of 5). Every install's smoke test passed (write
+path via --check, 409 on a duplicate name, unsigned reading rejected). Replication
+seen at once on the stream that was running: all five CSEs at 121 readings, newest
+e8-s136, history copied into the fresh databases by reconcile.
+
+Two defects found live and fixed (then re-installed on all five):
+ a. a STATUS message (online/offline) was still written to the parent only; with the
+    parent's CSE stopped it failed and, the queue being in order, held up every
+    reading behind it (rpi2's bridge stuck at 47 acks). Status now goes to every
+    live member, best effort, and never blocks (test_replication StatusNeverBlocks).
+ b. a genuine reading the replay floor calls stale and that is stored NOWHERE would be
+    re-sent for ever and stall the board's ordered backlog. The bridge still rejects
+    it, but sends a signed ack marked "stale" so the board drops it.
+
+== 3. The parent's CSE stopped mid-stream (live_parent_kill.sh, outage 90 s) ===========
+18:21:14 parent is rpi2
+18:21:14 before:  rpi1:294/e11-s8  rpi2:294/e11-s8  rpi3:294/e11-s8  rpi4:294/e11-s8  rpi5:294/e11-s8
+18:21:27 t=0 STOPPED rpi2's CSE container (CSE + plugin)
+18:21:42 t=27  rpi1:306/e11-s20  rpi2:DOWN/-  rpi3:306/e11-s20  rpi4:306/e11-s20  rpi5:306/e11-s20
+18:21:58 t=43  rpi1:311/e11-s25  rpi2:DOWN/-  rpi3:311/e11-s25  rpi4:311/e11-s25  rpi5:311/e11-s25
+18:22:15 t=60  rpi1:317/e11-s31  rpi2:DOWN/-  rpi3:317/e11-s31  rpi4:317/e11-s31  rpi5:317/e11-s31
+18:22:31 t=76  rpi1:321/e11-s35  rpi2:DOWN/-  rpi3:321/e11-s35  rpi4:321/e11-s35  rpi5:321/e11-s35
+18:22:50 t=95  rpi1:324/e11-s38  rpi2:DOWN/-  rpi3:324/e11-s38  rpi4:324/e11-s38  rpi5:324/e11-s38
+18:22:52 t=97 STARTED rpi2's CSE container
+18:23:10 t=115  rpi1:328/e11-s42  rpi2:DOWN/-  rpi3:328/e11-s42  rpi4:328/e11-s42  rpi5:328/e11-s42
+18:23:28 t=133  rpi1:330/e11-s44  rpi2:302/e11-s44  rpi3:330/e11-s44  rpi4:330/e11-s44  rpi5:330/e11-s44
+18:23:46 t=151  rpi1:333/e11-s47  rpi2:311/e11-s44  rpi3:333/e11-s47  rpi4:333/e11-s47  rpi5:333/e11-s47
+18:24:03 t=168  rpi1:338/e11-s52  rpi2:338/e11-s52  rpi3:338/e11-s52  rpi4:338/e11-s52  rpi5:338/e11-s52
+18:24:04 rpi2 caught up with every reading the others hold
+union 339 readings; epochs [8, 9, 10, 11] ; gaps inside an epoch: none ; duplicates 0 on every CSE
+complete on: ['rpi1', 'rpi2', 'rpi3', 'rpi4', 'rpi5']
+Sensor (flash buffer) afterwards: 82 acked, every one held by all 5 CSEs (min holders 5).
+- During the outage readings kept being acked by quorum on the four survivors.
+- rpi2 came back with its own pre-outage readings (durable DB) and was filled in by
+  backfill/reconcile within ~70 s of restarting. No parent change (lease still valid);
+  its plugin re-anchored the lease after the restart.
+
+== 4. The sensor's power cut (flash buffer) ========================================
+power cut: sensor killed; flash after power cut: 88 records, unacked [(11, 58)]
+power-up epoch 12 -> the old epoch's backlog first (e11-s58 re-sent and acked), then epoch 12
+end of run (sensor drained): 105 acked, 0 unacked, every acked reading on all 5 CSEs;
+union 361 readings, epochs 8..12, no gaps inside an epoch, no duplicates on any CSE,
+complete on all five.
+
+== Final state ==========================================================================
+rpi2 parent (epoch 18, is_self), holds the Wi-Fi VIP 192.168.1.250; all five bridges
+active; all five om2m-active up with the durable DB.
+
+Note: the VIP workstream ran its own simulated sensor for the same device (esp32-dht-01,
+epoch 10) and moved the parent during part of this run; epochs 8 and 10 in the union are
+its readings. The no-quorum case (fewer than 3 CSEs) and an empty node caught up by
+reconcile are shown in the offline end-to-end run (sim/run_replication_e2e.py, R2-R3,
+evidence/e2e_durability_in_docker_2026-11-16.txt), not live: stopping three CSEs would
+have taken the DAS down for every other test running on the testbed.

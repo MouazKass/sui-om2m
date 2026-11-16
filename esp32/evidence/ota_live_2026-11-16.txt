@@ -1,0 +1,38 @@
+# Signed OTA, live on the testbed, 2026-11-16 (fw 2.4)
+# Release v1 for target ota-test-01, published by scripts/ota/publish.sh to all five Pis;
+# simulated devices on rpi5 reach the cluster ONLY via 192.168.1.250 (the VIP, held by rpi2).
+
+## Server access (rpi3)
+wired 10.25.96.200:8070 -> 403 (images hold Wi-Fi credentials: Wi-Fi clients only)
+wifi  192.168.1.250:8070 -> served
+
+## Attacker on rpi2 (non-retained announces)
+18:29:06 FORGED (attacker's own key, v101, target all)
+18:29:10 FORGED (claims the pinned key, signed by attacker)
+18:29:15 TAMPERED (genuine manifest, version edited after signing)
+18:29:19 GENUINE manifest, served image with one flipped bit
+18:29:31 image restored (sha256 ok), GENUINE manifest again
+
+## Device A: ota-test-01, installed 0
+[ota-test-01] event        1 pinned firmware key(s); installed release 0
+[ota-test-01] event        power-up epoch 94839338 boot d216105a, 1 brokers, home vip
+[ota-test-01] event        connected vip (192.168.1.250:1883) session 94839338.1
+[ota-test-01] event        ota ACCEPT v1 (1118352 bytes, sha256 ok, from 192.168.1.250): a board would install it
+[ota-test-01] event        ota REJECT (untrusted_key)
+[ota-test-01] event        ota REJECT (bad_signature)
+[ota-test-01] event        ota REJECT (bad_signature)
+[ota-test-01] event        ota REJECT (sha256_mismatch)
+[ota-test-01] event        ota ACCEPT v1 (1118352 bytes, sha256 ok, from 192.168.1.250): a board would install it
+[ota-test-01] event        finished: 12 readings taken, 12 unacknowledged [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 0 forged/unsigned acks ignored
+
+## Device C: esp32-dht-99 (not the target)
+[esp32-dht-99] event        connected vip (192.168.1.250:1883) session 94839338.1
+[esp32-dht-99] event        ota REJECT (not_for_this_device)
+[esp32-dht-99] event        ota REJECT (untrusted_key)
+[esp32-dht-99] event        ota REJECT (bad_signature)
+[esp32-dht-99] event        ota REJECT (bad_signature)
+[esp32-dht-99] event        ota REJECT (not_for_this_device)
+[esp32-dht-99] event        ota REJECT (not_for_this_device)
+
+## Device A again, already running v1 (replay / rollback)
+[ota-test-01] event        ota REJECT (not_newer)

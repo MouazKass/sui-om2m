@@ -57,6 +57,7 @@
 #include "config.h"
 #include "cluster.h"
 #include "device_key.h"
+#include "ota.h"                     // (fw 2.4) signed over-the-air updates
 
 #if ENABLE_DHT
 #include <DHT.h>
@@ -89,6 +90,16 @@ static uint32_t resendCursor = 0;
 static bool resendActive = false;
 static unsigned long ackWaitUntil = 0;
 static unsigned long firstUnackedPubMs = 0;   // first publish since the last ack (0 = none)
+
+// (v2.3) Durable resend buffer: every reading goes to flash first and is sent,
+// oldest first, by fb::service(); see flash_buffer.h. FLASH_BUFFER 0 restores
+// the RAM-only behaviour of v2.2.
+#include "flash_buffer.h"
+static bool fbPublish(const char* payload) {
+  bool ok = mqtt.publish(topicTelemetry, payload, false);
+  if (ok && !firstUnackedPubMs) firstUnackedPubMs = millis();
+  return ok;
+}
 
 // ---- state ------------------------------------------------------------------
 static unsigned long lastReadingMs   = 0;
@@ -139,6 +150,7 @@ static void onMessage(char* topic, byte* payload, unsigned int len) {
   if (len >= sizeof(buf)) return;
   memcpy(buf, payload, len);
   buf[len] = 0;
+  if (otadev::onMqtt(topic, buf, len)) return;   // signed release announce
   if (strcmp(topic, TOPIC_BROKERS) == 0) {
     int k = sel.learn(buf, CLUSTER_ALLOW_PREFIX);
     Serial.printf("[cluster] membership update: %d entries, %d known brokers\n", k, sel.n);
@@ -165,10 +177,14 @@ static void onMessage(char* topic, byte* payload, unsigned int len) {
     if (!pe || !ps) return;
     e = strtoul(pe + 8, nullptr, 10);
     s = strtoul(ps + 6, nullptr, 10);
+#if FLASH_BUFFER
+    if (fb::ack(e, s)) firstUnackedPubMs = 0;   // also confirms a backlog from an earlier power-up
+#endif
     if (e != epoch) return;          // an ack from an earlier power-up
     Slot& sl = slots[s % RESEND_SLOTS];
     if (sl.used && sl.seq == s) sl.acked = true;
     firstUnackedPubMs = 0;           // a bridge is alive behind this broker
+    otadev::markHealthy();           // a new image that got this far is kept
   }
 }
 
@@ -211,6 +227,7 @@ static bool connectTo(int i) {
   mqtt.publish(topicStatus, online, true);   // retained presence for THIS session
   mqtt.subscribe(TOPIC_BROKERS, 1);
   mqtt.subscribe(topicAck, 1);
+  mqtt.subscribe(OTA_TOPIC, 1);      // retained: a pending release arrives at once
   // After ACK_WAIT_MS, re-send every reading from before this connection that
   // no bridge has acknowledged (taken while offline, or lost with the broker).
   connStartSeq = seqNo;
@@ -287,6 +304,12 @@ static void takeReading() {
   s.used = true;
   s.acked = false;
   uint32_t seq = seqNo++;
+#if FLASH_BUFFER
+  fb::append(epoch, seq, s.payload);   // durable first; sent in order by fb::service()
+  Serial.printf("[buf] seq=%lu stored in flash (%lu unacked)\n", (unsigned long)seq,
+                (unsigned long)fb::unacked());
+  return;
+#endif
   if (mqtt.connected()) {
     bool ok = mqtt.publish(topicTelemetry, s.payload, false);
     if (ok && !firstUnackedPubMs) firstUnackedPubMs = millis();
@@ -299,6 +322,9 @@ static void takeReading() {
 
 // Re-sends unacknowledged readings from before this connection, a few per pass.
 static void resendSome() {
+#if FLASH_BUFFER
+  return;                            // fb::service() is the only sender (strict order)
+#endif
   if (!resendActive || !mqtt.connected()) return;
   for (int k = 0; k < 8 && resendCursor < connStartSeq; resendCursor++) {
     const Slot& s = slots[resendCursor % RESEND_SLOTS];
@@ -327,7 +353,11 @@ void setup() {
   epoch = prefs.getUInt("epoch", 0) + 1;
   prefs.putUInt("epoch", epoch);
   prefs.end();
+#if FLASH_BUFFER
+  fb::begin();                       // readings not acked before this power-up are sent first
+#endif
 
+  otadev::begin(mqtt);               // early: a new image that crashes still counts its boots
   snprintf(bootId, sizeof(bootId), "%08lx", (unsigned long)esp_random());
   snprintf(topicTelemetry, sizeof(topicTelemetry), "sensors/%s/telemetry", DEVICE_ID);
   snprintf(topicStatus,    sizeof(topicStatus),    "sensors/%s/status",    DEVICE_ID);
@@ -408,6 +438,7 @@ void loop() {
     return;
   }
   mqtt.loop();
+  if (sel.current >= 0) otadev::service(sel.b[sel.current].host);   // signed release pending?
 
   // ---- after (re)connecting: resend what no bridge has confirmed --------------
   if (ackWaitUntil && now >= ackWaitUntil) {
@@ -416,6 +447,9 @@ void loop() {
     resendCursor = connStartSeq > RESEND_SLOTS ? connStartSeq - RESEND_SLOTS : 0;
   }
   resendSome();
+#if FLASH_BUFFER
+  fb::service(millis(), mqtt.connected(), fbPublish);
+#endif
 
   // ---- broker up but nothing acknowledged: its bridge is down -> fail over ----
   // (millis(), not `now`: a DHT retry inside takeReading() may have advanced the

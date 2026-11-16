@@ -1,0 +1,32 @@
+[Unit]
+Description=Read-only firmware server for the ESP32 sensors (signed OTA, fw 2.4)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/om2m-ota/ota_server.py --root /var/lib/om2m-ota --port 8070
+Restart=always
+RestartSec=5
+# No trust is placed in this server (the board verifies signature + SHA-256),
+# so it gets nothing: a throwaway user, a read-only view of the release dir.
+DynamicUser=true
+ReadOnlyPaths=/var/lib/om2m-ota
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

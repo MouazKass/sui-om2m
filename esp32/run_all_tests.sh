@@ -17,18 +17,28 @@ run python3 tests/test_selector.py
 step "3. firmware host build: the real .ino, virtual time, simulated cluster"
 run bash -c "cd sim/firmware_hostcheck && g++ -std=c++17 -Wall -I stubs -o '$LOGDIR/fw_host' host_main.cpp -lsodium \
   && '$LOGDIR/fw_host' > '$LOGDIR/fw_pub.txt' 2> '$LOGDIR/fw_host.err'; rc=\$?; sed -n '/host-check results/,\$p' '$LOGDIR/fw_host.err'; exit \$rc"
+step "3b. firmware durable resend buffer (flash_buffer.h, fw 2.3) on an in-memory LittleFS"
+run bash -c "cd sim/firmware_hostcheck && g++ -std=c++17 -Wall -Wextra -I stubs -o '$LOGDIR/fb_test' fb_test.cpp \
+  && '$LOGDIR/fb_test' 2> '$LOGDIR/fb_test.err'"
+step "3c. signed OTA updates: firmware logic (ota_core.h, fw 2.4) + Python reference/server"
+run bash -c "cd sim/firmware_hostcheck && g++ -std=c++17 -Wall -Wextra -I stubs -o '$LOGDIR/ota_test' ota_test.cpp -lsodium \
+  && '$LOGDIR/ota_test' '$LOGDIR/ota_vectors.txt' && cd ../.. && python3 tests/test_ota.py '$LOGDIR/ota_vectors.txt' 2>/dev/null"
 step "4. bridge unit tests"
 run python3 tests/test_bridge_unit.py
 step "4b. device identity: signing format, Sui address, registry, bridge decisions"
 run python3 tests/test_identity.py
 step "4b2. signed acks + durable replay floor (bridge v2.2)"
 run python3 tests/test_ack_replay.py
+step "4b3. replication to every CSE + quorum ack (bridge v2.3, replicator.py)"
+run python3 tests/test_replication.py
 step "4c. firmware signatures (C++/libsodium) verify with the bridge (Python)"
 run python3 tests/test_fw_signatures.py "$LOGDIR/fw_pub.txt" "$LOGDIR/fw_host.err"
 step "5. single-node end-to-end (Hamza's original scenarios, v2 layout)"
 run env E2E_LOGDIR="$LOGDIR/e2e" FW_PUB="$LOGDIR/fw_pub.txt" python3 sim/run_e2e.py
 step "6. 5-node cluster end-to-end"
 run env E2E_LOGDIR="$LOGDIR/cluster" python3 sim/run_cluster_e2e.py
+step "6b. losing the parent costs zero readings (replication + quorum ack + flash buffer)"
+run env E2E_LOGDIR="$LOGDIR/replication" python3 sim/run_replication_e2e.py
 step "7. dashboard simulator self-test"
 run env SIM_RUNTIME="$LOGDIR/dashboard" python3 simulate.py --selftest
 echo

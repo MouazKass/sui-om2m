@@ -31,6 +31,7 @@ if [[ -f /etc/om2m-ipe-bridge/bridge.conf ]] && ! grep -q '^\[cluster\]' /etc/om
 fi
 install -m 0755 om2m_ipe_bridge.py /opt/om2m-ipe-bridge/
 install -m 0644 esp_identity.py /opt/om2m-ipe-bridge/
+install -m 0644 replicator.py /opt/om2m-ipe-bridge/
 MEM=members.conf; [[ -f $MEM ]] || MEM=members.conf.example
 install -m 0644 "$MEM" /etc/om2m-ipe-bridge/members.conf
 if [[ ! -f /etc/om2m-ipe-bridge/bridge.conf ]]; then
@@ -62,6 +63,13 @@ if ! grep -q '^\[ack\]' /etc/om2m-ipe-bridge/bridge.conf; then
   { echo; sed -n '/^\[ack\]/,/^\[bridge\]/p' bridge.conf.example | sed '$d'; } >> /etc/om2m-ipe-bridge/bridge.conf
   echo "added [ack] section (sign = true)"
 fi
+# [replication] (v2.3): added to configs that predate it. The 1 h replay window
+# of v2.1 would reject a long flash backlog, so it is raised to the new default.
+if ! grep -q '^\[replication\]' /etc/om2m-ipe-bridge/bridge.conf; then
+  { echo; sed -n '/^\[replication\]/,$p' bridge.conf.example; } >> /etc/om2m-ipe-bridge/bridge.conf
+  echo "added [replication] section (mode = all)"
+fi
+sed -i -E 's|^replay_window_s *= *3600$|replay_window_s = 43200|' /etc/om2m-ipe-bridge/bridge.conf
 grep -q '^state_dir *=' /etc/om2m-ipe-bridge/bridge.conf || \
   sed -i -E '/^\[bridge\]/a state_dir = /var/lib/om2m-ipe-bridge' /etc/om2m-ipe-bridge/bridge.conf
 REG=$(prop sui.identity.registry.id)

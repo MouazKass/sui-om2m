@@ -23,10 +23,10 @@ SSH_CFG=${SSH_CFG:-$HOME/.ssh/config}
 
 if [[ $HOST == local ]]; then
   on_host() { bash -c "$1"; }
-  push_tree() { mkdir -p "$WORK" && tar -C "$HERE" --exclude=__pycache__ --exclude=sim_runtime -cf - . | tar -C "$WORK" -xf -; }
+  push_tree() { mkdir -p "$WORK" && tar -C "$HERE" --exclude=__pycache__ --exclude=sim_runtime --exclude=config_local.h -cf - . | tar -C "$WORK" -xf -; }
 else
   on_host() { ssh -F "$SSH_CFG" "$HOST" "$1"; }
-  push_tree() { tar -C "$HERE" --exclude=__pycache__ --exclude=sim_runtime -cf - . | ssh -F "$SSH_CFG" "$HOST" "mkdir -p $WORK && tar -C $WORK -xf -"; }
+  push_tree() { tar -C "$HERE" --exclude=__pycache__ --exclude=sim_runtime --exclude=config_local.h -cf - . | ssh -F "$SSH_CFG" "$HOST" "mkdir -p $WORK && tar -C $WORK -xf -"; }
 fi
 
 cleanup() {
@@ -49,7 +49,7 @@ docker build -q -t $TAG -f $WORK/.Dockerfile $WORK >/dev/null"
 set +e
 on_host "docker run --name esp32-e2e-$$ --rm --network none \
   -v $WORK:/src:ro --tmpfs /out:exec --tmpfs /tmp:exec -w /src \
-  $TAG bash run_all_tests.sh"
+  $TAG ${E2E_CMD:-bash run_all_tests.sh}"
 rc=$?
 set -e
 echo "[run_e2e_in_docker] host=$HOST exit=$rc (container, image and $WORK removed on exit)"

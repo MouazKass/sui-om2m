@@ -109,6 +109,8 @@ import uuid
 import requests
 import paho.mqtt.client as mqtt
 
+import replicator as replication
+
 log = logging.getLogger("ipe-bridge")
 
 DEVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
@@ -164,7 +166,9 @@ DEFAULTS = {
         # signed by a device key registered on-chain (role AE, cse_id = device).
         "mode": "off", "registry_id": "", "graphql_url": "",
         "cache_ttl_s": "60", "negative_ttl_s": "15", "max_stale_s": "300",
-        "replay_window_s": "3600",
+        # >= the board's flash buffer span (fw 2.3: 1440 readings = 2 h at 5 s),
+        # so a backlog drained after a long outage is not rejected as stale
+        "replay_window_s": "43200",
         # durable replay floor: seq_window must exceed the board's RESEND_SLOTS
         # (64) and stay below om2m.mni (1000), so the CSE 409 covers the window
         "seq_window": "256", "floor_refresh_s": "60",
@@ -180,6 +184,8 @@ DEFAULTS = {
         # durable state (replay floor, ack key). Empty = in memory only.
         "state_dir": "",
     },
+    # write every reading to every member CSE, ack on quorum (replicator.py)
+    "replication": dict(replication.DEFAULTS),
 }
 
 
@@ -422,6 +428,10 @@ class ParentResolver:
         self.since_no_parent = time.time()
         self.last_error = None
         self.changes = 0
+        # <state_dir>/parent.json, rewritten after every successful poll. The
+        # keepalived check deploy/vip/is_parent.sh reads it so the ESP VIP sits
+        # on the on-chain parent without any extra chain query.
+        self.status_path = ""
         if self.mode == "parent" and not (self.gql and self.cluster_id and self.pkg):
             raise SystemExit("cluster.target=parent needs graphql_url, cluster_id and "
                              "package_original_id (or sui_properties pointing at sui.properties)")
@@ -478,12 +488,27 @@ class ParentResolver:
             if not old or old["base"] != new["base"] or old["addr"] != new["addr"]:
                 self.changes += 1
                 log.info("cluster parent: %s (epoch %d) -> writing to %s", new["label"], epoch, base)
+            self._write_status(new)
         except Exception as e:      # keep the last known parent (sticky)
             with self.lock:
                 self.last_error = f"{type(e).__name__}: {e}"
                 stale = self.parent
             log.warning("parent lookup failed (%s); %s", self.last_error,
                         f"keeping {stale['label']}" if stale else "no parent known yet")
+
+    def _write_status(self, p):
+        if not self.status_path:
+            return
+        me = self.cluster.self_label if self.cluster else ""
+        doc = {"v": 1, "ts": int(time.time()), "parent": p["addr"], "label": p["label"],
+               "epoch": p["epoch"], "self": me, "is_self": bool(me) and p["label"] == me}
+        tmp = self.status_path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(doc, f, sort_keys=True)
+            os.replace(tmp, self.status_path)
+        except OSError as e:
+            log.warning("cannot write %s: %s", self.status_path, e)
 
     def target(self):
         """Base URL to write to, or None (buffer)."""
@@ -778,6 +803,7 @@ class Bridge:
 
         self.cluster = Cluster(cfg)
         self.resolver = ParentResolver(cfg, self.cluster)
+        self.replicator = replication.Replicator(self, cfg)
         self.clients = {}
         self.inbox = queue.Queue()
         self.pending = collections.deque()
@@ -791,6 +817,7 @@ class Bridge:
         self.state_dir = b["state_dir"].strip()
         if self.state_dir:
             os.makedirs(self.state_dir, mode=0o700, exist_ok=True)
+            self.resolver.status_path = os.path.join(self.state_dir, "parent.json")
         self._init_ack(cfg)
         self._init_identity(cfg)
 
@@ -881,8 +908,9 @@ class Bridge:
         newest reading on the target CSE on first contact / every floor_refresh_s."""
         last = self.replay.checked.get(device, 0.0)
         if now - last >= self.floor_refresh_s:
-            base = self.resolver.target()
-            if base is not None:
+            bases = ([m.cse_url for m in self.replicator.floor_candidates()]
+                     if self.replicator.enabled else [self.resolver.target()])
+            for base in [x for x in bases if x is not None]:
                 cse = self.cse(base)
                 try:
                     la = cse.latest_at(cse.hier(device, self.cnt_data))
@@ -970,6 +998,8 @@ class Bridge:
             try:
                 signer = self.authenticate(device, kind, payload, msg, rx_time)
             except Rejected as e:
+                if kind == "telemetry" and self._ack_if_stored(device, msg, str(e)):
+                    return
                 self._reject(device, str(e))
                 return
             self.stats["authenticated"] += 1
@@ -1009,8 +1039,10 @@ class Bridge:
                 record["node"] = self.node_label
             self._enqueue(("status", device, record, None, None))
 
-    def _ack(self, device, msg):
+    def _ack(self, device, msg, stale=False):
         a = {"id": device, "seq": msg["seq"], "node": self.node_label}
+        if stale:
+            a["stale"] = True
         if msg.get("v") == 2:
             a["epoch"] = msg["epoch"]
         else:
@@ -1105,9 +1137,80 @@ class Bridge:
         except (CseUnavailable, ResourceGone):
             self.stats["latest_label_failed"] += 1
 
+    def _ack_if_stored(self, device, msg, reason):
+        """A genuine (signed, registered) reading the replay floor calls stale
+        but that IS already stored somewhere: ack it, so the board stops
+        re-sending it (its strictly ordered backlog would otherwise wedge)."""
+        if reason not in ("auth:stale_epoch", "auth:stale_seq", "auth:stale_reading"):
+            return False
+        _, rn = reading_key(msg)
+        if rn and self.replicator.exists_anywhere(device, rn):
+            self.stats["acked_stale_stored"] += 1
+            self._ack(device, msg)
+            return True
+        # Genuine but never stored, and the floor will refuse it forever (a newer
+        # epoch of this device was already accepted: an NVS rollback, or two boards
+        # sharing one key). It is still REJECTED, but a signed ack marked "stale"
+        # lets the board drop it instead of re-sending it for ever and stalling
+        # its ordered backlog behind it. A bridge's ack key could confirm any
+        # reading anyway, so this gives nobody new power.
+        self.stats["acked_stale_dropped"] += 1
+        log.warning("%s: %s is %s and stored nowhere: rejected, board told to drop it", device, rn, reason)
+        self._ack(device, msg, stale=True)
+        return False
+
+    def _deliver_replicated(self, device, record, key, rn):
+        dev = self.device(device)
+        held, failed = self.replicator.store(dev, record, rn)
+        q = self.replicator.quorum()
+        if len(held) < q:
+            self.stats["repl_no_quorum"] += 1
+            raise CseUnavailable(f"{device} {rn}: held by {len(held)}/{q} ({','.join(held) or '-'})"
+                                 f"; failed {','.join(failed)}")
+        self.stats["stored"] += 1
+        self.stats["stored_quorum"] += 1
+        dev.remember(key)
+        self._ack(device, record)
+        for m in self.replicator.ordered_members():     # the AE "latest" label on every replica
+            if m.label in held and dev.place(m.cse_url).ae_ri:
+                dev.last_label_at = 0.0
+                self._update_latest(self.cse(m.cse_url), dev, dev.place(m.cse_url), record)
+
+    def _deliver_status_replicated(self, device, record):
+        """Presence (online/offline) is not a reading: write it to every live
+        member, best effort, and never let it block the readings queued behind
+        it. (Seen live 2026-11-16: with the parent's CSE stopped, a status item
+        bound to the parent held up every reading behind it.)"""
+        dev = self.device(device)
+        ok = 0
+        for m in self.replicator.floor_candidates():
+            cse, pl = self.cse(m.cse_url), dev.place(m.cse_url)
+            try:
+                for attempt in (1, 2):
+                    if pl.ae_ri is None:
+                        self.provision(dev, m.cse_url)
+                    try:
+                        self._deliver_status(cse, dev, pl, record)
+                        ok += 1
+                        break
+                    except ResourceGone:
+                        if attempt == 2:
+                            raise
+                        pl.ae_ri, pl.cnt_ri = None, {}
+            except (CseUnavailable, CseRejected, ResourceGone):
+                self.replicator._mark(m.label, False, time.time())
+        self.stats["status_replicated" if ok else "status_dropped_no_cse"] += 1
+
     def _deliver(self, item):
         kind, device, record, key, rn = item
+        if kind == "data" and self.replicator.enabled:
+            return self._deliver_replicated(device, record, key, rn)
+        if kind == "status" and self.replicator.enabled:
+            return self._deliver_status_replicated(device, record)
         base = self.resolver.target()
+        if base is None and self.replicator.enabled:
+            live = self.replicator.floor_candidates()
+            base = live[0].cse_url if live else None
         if base is None:
             self.stats["no_target"] += 1
             raise CseUnavailable("no parent known yet (chain unreadable); buffering")
@@ -1228,6 +1331,11 @@ class Bridge:
         if self.cluster.members or self.cluster.path:
             threads.append(threading.Thread(target=self._loop, args=(self.cluster.probe_s, self._probe),
                                             daemon=True, name="probe"))
+        if self.replicator.enabled:
+            threads.append(threading.Thread(target=self.replicator.background, args=(self.stop_evt,),
+                                            daemon=True, name="replication"))
+            log.info("replication: every reading to all %d members, ack on quorum %d",
+                     len(self.cluster.snapshot()), self.replicator.quorum())
         for t in threads:
             t.start()
         log.info("bridge started: MQTT %s:%s, target=%s (local CSE %s), node %s",
@@ -1281,6 +1389,8 @@ class Bridge:
         p = self.resolver.describe()
         s["parent"] = p["label"] if p else None
         s["parent_changes"] = self.resolver.changes
+        if self.replicator.enabled:
+            s["repl_backlog"] = self.replicator.backlog_sizes()
         log.info("stats %s", json.dumps(s, sort_keys=True))
 
     def check(self):

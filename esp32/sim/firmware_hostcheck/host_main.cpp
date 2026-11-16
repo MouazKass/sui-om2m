@@ -20,6 +20,7 @@
 // sim/run_e2e.py scenario 5 replays into a real broker.
 //
 //   g++ -std=c++17 -Wall -I stubs -o /tmp/fw_host host_main.cpp && /tmp/fw_host > /tmp/fw_pub.txt
+#define FW_HOSTCHECK 1            // config.h: never pull in a local config_local.h
 #define PUBLISH_INTERVAL_MS 1000UL
 #define HOME_PROBE_MS 2000UL
 #define HOME_STABLE_MS 10000UL

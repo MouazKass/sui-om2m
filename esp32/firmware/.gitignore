@@ -1,3 +1,4 @@
 build/*
 !build/SHA256SUMS
 !build/build.log
+esp32_sensor_node/config_local.h

@@ -166,8 +166,22 @@ fi
 
 # v8 image = v7 snapshot (or :$NAME-base) + new bundle + cleared Equinox cache. Built in a
 # throwaway container; the running one is never touched.
+# Durable resource DB (2026-11-16): OM2M keeps its resources in an H2 file DB
+# (./database/mndb), but dbReset=true wiped it at every start and it lived in
+# the container layer, so stored readings were lost on every restart/recreate.
+# The image now keeps it (dbReset=false) and writes every commit through
+# (WRITE_DELAY=0; H2's default 500 ms delay would lose acknowledged writes on a
+# kill). The directory itself is a host volume ($RT/om2m-db, see deploy_node).
 docker rm -f om2m-v8-prep >/dev/null 2>&1 || true
-docker create --name om2m-v8-prep --entrypoint sh "$BASE" -c "rm -rf $CONF/org.eclipse.osgi" >/dev/null
+cat > "$RT/v8/durable-db.sh" <<'DBEOF'
+set -e
+CONF="$1"
+rm -rf "$CONF/org.eclipse.osgi"
+sed -i -E 's/^org\.eclipse\.om2m\.dbReset=.*/org.eclipse.om2m.dbReset=false/' "$CONF/config.ini"
+sed -i -E 's#^org\.eclipse\.om2m\.dbUrl=.*#org.eclipse.om2m.dbUrl=jdbc\\:h2\\:./database/mndb;MULTI_THREADED\\=1;WRITE_DELAY\\=0#' "$CONF/config.ini"
+DBEOF
+docker create --name om2m-v8-prep --entrypoint sh "$BASE" /durable-db.sh "$CONF" >/dev/null
+docker cp "$RT/v8/durable-db.sh" om2m-v8-prep:/durable-db.sh
 docker start -a om2m-v8-prep
 docker cp "$RT/v8/sui.jar" "om2m-v8-prep:$JAR_IN"
 docker commit \
@@ -179,6 +193,9 @@ inimg=$(docker run --rm --entrypoint sha256sum "$IMG:$NAME-v8" "$JAR_IN" | cut -
 [ "$inimg" = "$WANT" ] || { echo "FATAL: bundle in image $inimg != $WANT"; exit 1; }
 docker run --rm --entrypoint sh "$IMG:$NAME-v8" -c "[ ! -d $CONF/org.eclipse.osgi ]" \
   || { echo "FATAL: Equinox cache still present in v8 image"; exit 1; }
+docker run --rm --entrypoint sh "$IMG:$NAME-v8" -c "grep -qx 'org.eclipse.om2m.dbReset=false' $CONF/config.ini && grep -q 'WRITE_DELAY' $CONF/config.ini" \
+  || { echo "FATAL: durable DB settings missing from config.ini"; exit 1; }
+echo "durable OM2M DB: $(docker run --rm --entrypoint sh "$IMG:$NAME-v8" -c "grep -E '^org.eclipse.om2m.db(Reset|Url)=' $CONF/config.ini" | tr '\n' ' ')"
 echo "image $IMG:$NAME-v8 built: bundle verified, Equinox cache cleared"
 
 # Durable broker config is the generated loop-free mesh; keep the old one once.
@@ -244,6 +261,7 @@ cp "$RT/sui.mappings.properties" /tmp/sui.mappings.properties
 # must be one too (an empty file here made rpi4's first deploy fail, 2026-11-10).
 [ -f /tmp/current-parent-poa ] && [ ! -s /tmp/current-parent-poa ] && rm -f /tmp/current-parent-poa
 mkdir -p /tmp/current-parent-poa
+mkdir -p "$RT/om2m-db"
 
 # --- THE container definitions (the only place they live) ---
 # Broker first, so the mesh is up when the CSE starts gossiping.
@@ -263,8 +281,9 @@ docker run -d --name om2m-active --restart unless-stopped \
   -v "$RT/sui.mappings.properties:$CONF/sui.mappings.properties" \
   -v /tmp/current-parent-poa:/tmp/current-parent-poa \
   -v "$RT/state:/var/lib/sui-om2m" \
+  -v "$RT/om2m-db:$PRODUCT/database" \
   "$IMG:$NAME-v8" >/dev/null
-echo "CSE started on $IMG:$NAME-v8"
+echo "CSE started on $IMG:$NAME-v8 (resource DB on the host: $RT/om2m-db)"
 
 sudo install -m 755 "$RT/v8/provision-das.sh" /usr/local/bin/provision-das.sh
 sudo install -m 755 "$RT/v8/das-watchdog.sh"  /usr/local/bin/das-watchdog.sh

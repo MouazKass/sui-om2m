@@ -188,6 +188,9 @@ class BridgeDecisions(unittest.TestCase):
         cfg["identity"]["registry_id"] = "0xreg"
         cfg["identity"]["graphql_url"] = "http://127.0.0.1:9/graphql"
         self.br = b.Bridge(cfg)
+        # no CSE: the replay floor must not be read from whatever OM2M happens to
+        # listen on 127.0.0.1:8282 (on a testbed Pi that is the live one)
+        self.br.resolver.target = lambda: None
         self.chain = FakeChain()
         self.br.registry = idm.DeviceRegistry(self.chain.post, "0xreg")
         self.sk = Ed25519PrivateKey.from_private_bytes(SEED)
@@ -221,7 +224,8 @@ class BridgeDecisions(unittest.TestCase):
     def test_older_epoch_and_stale_timestamp_are_replays(self):
         self.send(idm.sign_obj(reading(epoch=4), self.sk))
         self.send(idm.sign_obj(reading(epoch=3, seq=9), self.sk))
-        self.send(idm.sign_obj(reading(epoch=4, seq=6, ts=1_800_000_000 - 7200), self.sk))
+        # older than replay_window_s (12 h since fw 2.3's 2 h flash buffer)
+        self.send(idm.sign_obj(reading(epoch=4, seq=6, ts=1_800_000_000 - 13 * 3600), self.sk))
         self.assertEqual(len(self.br.pending), 1)
         self.assertEqual(self.br.stats["rejected:auth:stale_epoch"], 1)
         self.assertEqual(self.br.stats["rejected:auth:stale_reading"], 1)

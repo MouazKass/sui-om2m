@@ -19,7 +19,9 @@ def run(path):
         f = line.split()
         cmd, want, got = f[0], (f[f.index("->") + 1] if "->" in f else None), None
         lbl = lambda i: "none" if i < 0 else s.b[i].label
-        if cmd == "params":
+        if cmd == "reset":
+            s = Selector()
+        elif cmd == "params":
             s.base, s.max, s.probe_ms, s.stable_ms = map(int, f[1:5])
         elif cmd == "seeds":
             s.add_seeds(f[1])

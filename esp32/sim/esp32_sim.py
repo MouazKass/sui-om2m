@@ -48,6 +48,7 @@ import paho.mqtt.client as mqtt
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pi"))
 
 BROKERS_TOPIC = "om2m/cluster/brokers"
+OTA_TOPIC = "om2m/ota/manifest"       # fw 2.4: retained, signed release announce
 LABEL_RE = re.compile(r"^[a-z0-9-]{1,15}$")
 HOST_RE = re.compile(r"^[A-Za-z0-9.-]{1,39}$")
 MAX_BROKERS = 8
@@ -71,6 +72,10 @@ class Selector:
         self.b, self.home, self.current = [], -1, -1
         self.base, self.max, self.probe_ms, self.stable_ms = base, mx, probe, stable
         self.last_probe, self.home_ok_since, self.home_ok = 0, 0, False
+        self.single_max = 2000   # only one broker (the cluster VIP): cap backoff
+
+    def backoff_cap(self):
+        return min(self.single_max, self.max) if len(self.b) == 1 else self.max
 
     def find(self, label):
         return next((i for i, x in enumerate(self.b) if x.label == label), -1)
@@ -156,17 +161,19 @@ class Selector:
             self.current = -1
         x = self.b[i]
         x.failures = min(x.failures + 1, 16)
+        cap = self.backoff_cap()
         backoff = self.base
         k = 1
-        while k < x.failures and backoff < self.max:
+        while k < x.failures and backoff < cap:
             backoff *= 2
             k += 1
-        x.retry_at = now + min(backoff, self.max)
+        x.retry_at = now + min(backoff, cap)
         if i == self.home:
             self.home_ok, self.home_ok_since = False, 0
 
     def penalize(self, i, now, ms):
         self.on_failed(i, now)
+        ms = min(ms, self.backoff_cap())   # never shut out the only broker
         if 0 <= i < len(self.b) and self.b[i].retry_at < now + ms:
             self.b[i].retry_at = now + ms
 
@@ -254,6 +261,11 @@ class Sensor:
         self.start = time.time()
         self.last_payload = None
         self.out_lock = threading.Lock()
+        # (fw 2.3) durable resend buffer: --flash-buffer FILE models flash_buffer.h
+        self.fb = None
+        if getattr(a, "flash_buffer", ""):
+            from flash_buffer_sim import FlashBuffer
+            self.fb = FlashBuffer(a.flash_buffer, window=a.fb_window, retry_s=a.fb_retry)
         self.first_unacked_pub = 0.0       # first publish since the last ack (0 = none)
         self.key = None                    # per-device Ed25519 key (--key), made on THIS host
         if a.key:
@@ -269,6 +281,15 @@ class Sensor:
             self.idm = esp_identity
             self.ack_keys = esp_identity.load_trusted_ack_keys(a.ack_keys)
             self.event(f"{len(self.ack_keys)} pinned bridge ack key(s): signed acks required")
+        # fw 2.4: signed OTA. The simulator cannot flash, but runs the board's exact
+        # acceptance path (ota_manifest.check_release) on every announce.
+        self.ota_keys = None
+        self.ota_installed = getattr(a, "ota_installed", 0)
+        if getattr(a, "ota_keys", ""):
+            import ota_manifest
+            self.om = ota_manifest
+            self.ota_keys = ota_manifest.load_fw_keys(a.ota_keys)
+            self.event(f"{len(self.ota_keys)} pinned firmware key(s); installed release {self.ota_installed}")
 
     def enc(self, obj, key=None):
         """Compact JSON; signed with the device key when --key is given."""
@@ -308,10 +329,29 @@ class Sensor:
     def _on_disconnect(self, c, u, *args):
         self.lost.set()
 
+    def _ota_check(self, raw):
+        """What the board does with an announce: verify, decide, download from the
+        broker it is connected to (the cluster address), check size + SHA-256."""
+        cur = self.sel.current
+        host = self.sel.b[cur].host if cur >= 0 else self.a.host
+        try:
+            m = self.om.check_release(host, self.a.ota_port, self.dev, self.ota_installed,
+                                      self.ota_keys, manifest_raw=raw)
+            self.event(f"ota ACCEPT v{m['version']} ({m['size']} bytes, sha256 ok, from {host}): "
+                       f"a board would install it")
+        except self.om.OtaError as e:
+            self.event(f"ota REJECT ({e})")
+        except OSError as e:
+            self.event(f"ota download failed ({e.__class__.__name__}: {e})")
+
     def _on_message(self, c, u, m):
         try:
             text = m.payload.decode("utf-8")
         except UnicodeDecodeError:
+            return
+        if m.topic == OTA_TOPIC:
+            if self.ota_keys is not None and m.payload:
+                threading.Thread(target=self._ota_check, args=(m.payload,), daemon=True).start()
             return
         if m.topic == BROKERS_TOPIC:
             before = {x.label for x in self.sel.b}
@@ -321,9 +361,17 @@ class Sensor:
                 self.event(f"learned {','.join(new)} from {BROKERS_TOPIC} ({k} entries)")
             return
         if m.topic == self.t_ack:
+            ep = self.epoch
+            if self.fb is not None:          # an ack may confirm a backlog of an earlier power-up
+                try:
+                    e0 = json.loads(text).get("epoch")
+                except (ValueError, AttributeError):
+                    e0 = None
+                if isinstance(e0, int) and e0 != ep and self.fb.has_epoch(e0):
+                    ep = e0
             if self.ack_keys is not None:
                 try:
-                    d = self.idm.verify_ack(m.payload, self.dev, self.epoch, self.ack_keys)
+                    d = self.idm.verify_ack(m.payload, self.dev, ep, self.ack_keys)
                 except self.idm.IdentityError as e:
                     self.acks_rejected += 1
                     if self.acks_rejected % 20 == 1:
@@ -334,6 +382,9 @@ class Sensor:
                     d = json.loads(text)
                 except ValueError:
                     return
+            if self.fb is not None and self.fb.ack(d.get("epoch"), d.get("seq")):
+                with self.lock:
+                    self.first_unacked_pub = 0.0
             if d.get("epoch") != self.epoch:
                 return
             with self.lock:
@@ -380,7 +431,8 @@ class Sensor:
             return False
         self.client = c
         self.sel.on_connected(i, now_ms())
-        c.subscribe([(BROKERS_TOPIC, 1), (self.t_ack, 1)])
+        c.subscribe([(BROKERS_TOPIC, 1), (self.t_ack, 1)] +
+                    ([(OTA_TOPIC, 1)] if self.ota_keys is not None else []))
         c.publish(self.t_status, self.enc({
             "state": "online", "id": self.dev, "session": self.session, "epoch": self.epoch,
             "boot": self.boot, "fw": "sim-2.1.0", "ip": "127.0.0.1",
@@ -465,10 +517,22 @@ class Sensor:
                 self.slots.pop(old, None)
                 self.seq += 1
             self.last_payload = payload
+            if self.fb is not None:
+                self.fb.append(msg["epoch"], msg["seq"], payload)
+                self.out("stored", payload)          # sent, in order, by _fb_pump()
+                return
         sent = self.publish_tele(payload)
         self.out(kind if sent or kind != "ok" else "buffered", payload)
 
+    def _fb_pump(self):
+        if self.fb is None or self.client is None:
+            return
+        for e, sq, resend, payload in self.fb.service(self.publish_tele):
+            self.out("resend" if resend else "ok", payload)
+
     def resend_some(self):
+        if self.fb is not None:
+            return                           # the flash buffer is the only sender (strict order)
         if self.client is None or self.resend_cursor is None:
             return
         with self.lock:
@@ -496,6 +560,8 @@ class Sensor:
 
     # ---- main loop -------------------------------------------------------------------------
     def bye(self, *_):
+        if self.fb is not None:
+            self.fb.close()
         c = self.client
         if c:
             c.publish(self.t_status, self.enc({"state": "offline", "id": self.dev, "session": self.session}),
@@ -541,6 +607,7 @@ class Sensor:
                 with self.lock:
                     self.resend_cursor = max(0, self.conn_start_seq - self.a.resend_slots)
             self.resend_some()
+            self._fb_pump()
             with self.lock:
                 fu = self.first_unacked_pub
             if fu and time.time() - fu >= self.a.no_ack_failover:
@@ -576,6 +643,9 @@ class Sensor:
                 continue
             with self.lock:
                 pending = [s for s, v in self.slots.items() if not v[1]]
+            if self.fb is not None:
+                self._fb_pump()
+                pending = self.fb.unacked()
             if not pending:
                 break
             # every ack-wait period, re-send everything still unacknowledged
@@ -613,6 +683,11 @@ def main():
     ap.add_argument("--home-probe", type=float, default=30.0)
     ap.add_argument("--home-stable", type=float, default=120.0)
     ap.add_argument("--resend-slots", type=int, default=64)
+    ap.add_argument("--flash-buffer", default="",
+                    help="(fw 2.3) durable resend buffer file: unacked readings survive a restart "
+                         "and are sent oldest first (flash_buffer.h)")
+    ap.add_argument("--fb-window", type=int, default=16)
+    ap.add_argument("--fb-retry", type=float, default=15.0)
     ap.add_argument("--ack-wait", type=float, default=1.5)
     ap.add_argument("--no-ack-failover", type=float, default=20.0,
                     help="fail over if nothing is acknowledged for this long (bridge down)")
@@ -634,6 +709,11 @@ def main():
     ap.add_argument("--ack-keys", default="",
                     help="file of pinned bridge ack public keys ('<label> <hex>' lines): "
                          "accept only acks signed by one of them (firmware REQUIRE_SIGNED_ACKS)")
+    ap.add_argument("--ota-keys", default="",
+                    help="file of pinned firmware-signing public keys (deploy/v9/fw_keys/trusted.txt): "
+                         "verify every OTA announce like the firmware (fw 2.4)")
+    ap.add_argument("--ota-installed", type=int, default=0, help="release version this board 'runs'")
+    ap.add_argument("--ota-port", type=int, default=8070)
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
     if a.print_identity:

@@ -380,3 +380,177 @@ the floor); the firmware host check (forged acks during the silent-bridge window
 all ignored, the failover still happens, nothing lost); cluster e2e C9 (forged acks
 while a bridge is down) and C11 (old-epoch replay after a bridge restart and to a
 bridge with wiped state); and the live run in `ROLLOUT_V9.md`.
+
+## 11. Losing the parent costs zero readings (v2.3)
+
+Before v2.3 a reading had one copy, on the parent's CSE, and OM2M kept it in memory:
+`dbReset=true` wiped the H2 database at every start and the database lived in the
+container layer. A parent crash, or even a planned redeploy, lost every reading
+stored on it (seen live on 2026-11-11: about 45 test readings). v2.3 closes this with
+three changes that only work together.
+
+**1. Durable CSEs.** Every node's OM2M keeps its resource DB on disk:
+`dbReset=false`, `WRITE_DELAY=0` (H2's default 500 ms write delay would lose an
+acknowledged commit on a kill), and the `database/` directory is a host volume
+(`/home/user/sui-runtime-config/om2m-db`), so a container restart, recreate or
+redeploy keeps it. Set in the image build and the container definition in
+`scripts/v8/04_cutover.sh`; DAS provisioning was already idempotent (201/409).
+
+**2. Replication and the quorum ack** (`pi/replicator.py`, `[replication] mode = all`).
+Each authenticated reading is written to the CSE of **every** member (same path,
+same `e<epoch>-s<seq>` name, the same signed content), in parallel. A 201 or a 409
+(already there) counts as held. The signed ack goes back to the board **only once a
+quorum holds it** (default: a majority of `members_file`, 3 of 5). Below quorum: no
+ack, the board re-sends, and the retry's 409s count. So an acknowledged reading is on
+at least 3 disks and survives the loss of any 2 nodes, the parent included.
+
+- A member that fails is skipped for a doubling back-off (5 s to 60 s), so a dead node
+  cannot slow every ack down to the HTTP timeout; one write round is bounded by
+  `write_timeout_s` (3 s).
+- What a member missed goes into a per-member backlog, drained when it is reachable
+  (`backfill`).
+- **Reconcile**: the leader (the parent's bridge, or the first live member while the
+  parent is down) compares the reading names on every live CSE (OM2M discovery,
+  `fu=1&ty=4`) every 5 min and whenever a member comes back, and copies the gaps
+  byte for byte. On a member whose container is full (`mni`), readings older than its
+  oldest are retention-evicted and are not re-added; on any other member (it was down,
+  or lost its disk) everything it lacks is a gap.
+- The replay floor (§10) is raised from the newest reading on any live replica.
+- A re-sent reading that the floor calls stale but that is already stored somewhere is
+  **acked**, never stored again, so a board's strictly ordered backlog cannot wedge on it.
+  One that is stale and stored **nowhere** (an NVS rollback, two boards sharing a key)
+  is still rejected, but the signed ack is marked `"stale": true` so the board drops it
+  instead of re-sending it for ever (found live, 2026-11-16).
+- Status (online/offline) is presence, not a reading: it is written to every live
+  member, best effort, and never holds up the readings queued behind it. (Found live:
+  bound to the parent only, a status item blocked every reading while the parent's
+  CSE was stopped.)
+- Protected reads: every replica carries the same AE (`/in-cse/C<device>`, `acp_sui_dac`,
+  `sui-dac`), so a RETRIEVE on any CSE is decided by that node's Sui DAS, exactly as on
+  the parent (and v10's device binding applies on every node).
+
+**3. A durable resend buffer on the board** (`firmware/.../flash_buffer.h`, fw 2.3).
+Every reading is written to flash (LittleFS on the `spiffs` partition) before it is
+sent, and leaves the buffer only on a signed ack. 1,440 slots = 2 h at 5 s; it survives
+a reboot or brown-out.
+
+- One sender, oldest first, at most 16 unacked in flight, re-sent after 15 s.
+- **Epoch barrier**: a new power-up's readings are not sent while the previous epoch
+  still has unacked ones, because the bridges' floor rejects an older epoch once it has
+  seen a newer one. 16 in flight is far below `seq_window` (256), so in-epoch order
+  never trips the floor either.
+- Each slot carries a CRC, so a slot torn by a power cut reads as empty, not garbage.
+  Ack state is keyed by (epoch, seq) per slot and written in batches every 30 s: a
+  reused slot can never look acked; after a reboot a few acked readings may be sent
+  again and are dropped as duplicates.
+- Wear: one ~660-byte slot write per reading, wear-levelled over ~350 blocks: about 50
+  erases per block per day at 5 s, years on 100k-cycle flash.
+- The bridges' `replay_window_s` is raised from 1 h to 12 h so a drained backlog is
+  not rejected as old.
+
+**What is still lost, and only then:** a reading the board took but could not store
+(flash mount failure, logged at boot), a buffer overflow (more than 2 h with no quorum:
+the oldest unacked slot is reused, logged), or three or more nodes losing their disks at
+once.
+
+**The parent's lease is unchanged** (anchor every 600 s, 1,200 s lease): with the
+quorum ack, readings never wait for a new parent, so a takeover only delays the
+parent's own duties. A 120 s anchor would cut the expected takeover from ~15 min to
+~3 min for 5x the renewal gas (720/day, ~0.72 SUI) and would let a short chain/RPC
+outage cost a healthy parent its role. `failover.lease.anchor.period.ms` stays
+configurable.
+
+**Verification.** `tests/test_replication.py` (12: quorum default, all-up, parent plus
+one down still acks, no quorum then recovery via 409s, circuit breaker, backfill,
+leader choice, gap vs evicted history, wiped replica, the bridge running as `__main__`,
+stale-but-stored ack); `sim/firmware_hostcheck/fb_test.cpp` (15: window, order, reboot,
+epoch barrier, retry timing, overflow, torn slot, reused slot, mount failure); the
+firmware host check with the flash buffer on; `sim/run_replication_e2e.py` (R0 to R4:
+replication, the parent killed mid-stream, no quorum plus a power cut, an empty node
+caught up by reconcile, exactly once and complete); and the live run in `ROLLOUT_V9.md`.
+
+## 12. One cluster address for the sensors (VIP, 16 Nov 2026)
+
+**Problem.** Each board carried a list of the five Pis' wired addresses
+(`10.25.96.x`), which a board on the router's Wi-Fi (`192.168.1.0/24`) cannot
+reach, and every board had to know every node.
+
+**Design.** All five Pis also join the router's Wi-Fi (ESB1032-5; the boards use
+ESB1032-2.4, same router and LAN), with `ipv4.never-default` so routing stays on
+eth0. keepalived (VRRP, `deploy/vip/`) holds **one** address, `192.168.1.250`,
+on exactly one Pi:
+
+* `is_parent` (weight +100) makes the current **on-chain parent** win. The bridge
+  writes `/var/lib/om2m-ipe-bridge/parent.json` after each chain poll
+  (`ParentResolver._write_status`), so the check costs no chain query.
+* `esp_ready` (hard fault: wlan0, broker `:1883`, `om2m-ipe-bridge`) takes the
+  address off a Pi that cannot serve sensors; the best healthy non-parent
+  (base priority order) holds it until the parent is healthy again.
+* Preemption with `preempt_delay 5` so the address follows a new parent without
+  flapping; adverts unicast over eth0; `track_interface wlan0`.
+
+The board is flashed with `config_local.h` (gitignored): one seed
+`cluster=192.168.1.250:1883`, `CLUSTER_ALLOW_PREFIX "192.168.1.250"` so the
+learned per-Pi addresses are ignored. `cluster.h` caps backoff at
+`singleBackoffMaxMs` (2 s) when there is only one broker, penalties included, so
+a board never shuts itself out of the only address it has. Shared vectors
+(`sim/selector_vectors.txt`, single-broker section) hold firmware and simulator
+to the same rule.
+
+**Trade-off.** The address follows the *chain's* parent. If the parent Pi dies
+outright, the address moves to a healthy non-parent within seconds; that bridge
+writes to the cluster (replication, §11) and the address moves again once a new
+parent is elected. Unacked readings stay in the board's buffer and are re-sent
+after each move. Anyone on the Wi-Fi could answer ARP for the address; that can
+delay readings but not forge or swallow them (signed readings, signed acks).
+
+**Verification.** Offline: selector vectors 37/37 in both implementations, the
+full suite (`evidence/e2e_vip_in_docker_2026-11-16.txt`). Live
+(`sim/live_vip.sh`, `evidence/vip_live_2026-11-16.txt`): see `ROLLOUT_V9.md`
+"ESP cluster VIP".
+
+## 13. Signed over-the-air updates (v2.4, 16 Nov 2026)
+
+**Problem.** Every firmware change needed a USB cable at each board, and nothing would
+have stopped whoever could reach a board's network from pushing firmware to it.
+
+**Design.**
+- *Trust root:* a dedicated Ed25519 firmware-signing key, created in WSL on the publisher
+  machine (`scripts/ota/keygen.sh`), never copied. Only its public key is pinned in the
+  image (`fw_keys.h`, at most 4 keys; rotation = a release signed by the old key that pins
+  the new one). The distribution path is untrusted.
+- *Manifest* (`pi/ota_manifest.py` is the reference; `ota_core.h` mirrors it):
+  `{"kind","version","target","size","sha256","path","fpk","ts"}` + `"sig"` last, signed
+  under the domain tag `om2m-esp32-fw-v1\0`, each key exactly once (duplicate-key tricks are
+  refused), path restricted to `/fw/<name>.bin`.
+- *Distribution:* every Pi runs `pi/ota_server.py` (systemd `om2m-ota`: DynamicUser,
+  read-only, no listing, GET/HEAD, `/fw/` only, Wi-Fi clients only). Boards fetch from the
+  broker they are connected to, i.e. the cluster address 192.168.1.250, so whichever Pi
+  holds it serves the image. Announce: retained `om2m/ota/manifest` on every broker;
+  fallback poll every 6 h.
+- *Install:* stream into the inactive slot (`Update.h`) while hashing (libsodium SHA-256);
+  switch slots only if size and digest match (`Update.end` also validates the image).
+  Buffers are heap-allocated only during a check or download (with static buffers the
+  DRAM segment overflowed by 3.8 KB).
+- *Anti-rollback:* NVS `ver` (installed) and `bad` (highest release that failed); a release
+  must exceed both.
+- *Rollback:* NVS `pend`/`tries`/`pslot`. A new image is on trial until it is connected and
+  has a signed bridge ack (`ota::onHealthy`, which also calls
+  `esp_ota_mark_app_valid_cancel_rollback`; `verifyRollbackLater()` returns true so the core
+  does not confirm it early). After `OTA_MAX_TRIES` (3) boots without that, the board sets
+  the other slot and restarts. If the bootloader already rolled back (the old slot is
+  running), the board only records the failure and never switches onto the bad slot.
+- *Identity guard:* `DEVICE_ID` is compiled in; the first-flashed ID is kept in NVS and a
+  trial image with another ID is rejected at boot (a USB flash may change it).
+
+**What it does not do.** No encryption of the image (it is public except the Wi-Fi
+credentials, hence the Wi-Fi-only server and `--withdraw` deleting images); no secure boot
+or flash encryption (one-way eFuse decisions for a deployment, see §9); one image per board
+while `DEVICE_ID`/Wi-Fi are compile-time.
+
+**Verification.** `sim/firmware_hostcheck/ota_test.cpp` (40 checks: signatures, domains,
+duplicates, anti-rollback, target, size, path, streaming hash, the rollback state machine
+across reboots, the identity guard), `tests/test_ota.py` (27: the Python reference, the
+C++-signed manifests verified in Python, the server's path and client restrictions, the
+full fetch-and-verify path). Real build: 1,118,202 bytes, 85 % of a 1.25 MB slot, 0
+warnings. Live: `evidence/ota_live_2026-11-16.txt`.

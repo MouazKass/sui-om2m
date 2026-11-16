@@ -515,3 +515,131 @@ change.
 **Operational.** A new node's ack key must be added to `deploy/v9/ack_keys/`, then
 `gen_ack_keys.sh` run and the boards reflashed. Until then, readings sent through that
 node are re-sent elsewhere by the no-ack failover; none are lost.
+
+## ESP cluster VIP: one address for every sensor (2026-11-16)
+
+**What.** The ESP32 boards connect only to `192.168.1.250:1883` on the router's
+Wi-Fi. keepalived (`deploy/vip/`, README there) keeps that address on the
+current **on-chain parent** and moves it if the parent's Wi-Fi, broker or ESP
+bridge fails (to the best healthy non-parent, back when the parent recovers) or
+when the parent role changes.
+
+**Network (done one Pi at a time; eth0 and its static profile untouched).** All
+five Pis joined `ESB1032-5` with `ipv4.never-default yes`,
+`ipv4.ignore-auto-dns yes` (default route and DNS stay on eth0; checked after
+each Pi): rpi1 `.120`, rpi2 `.127`, rpi3 `.107`, rpi4 `.133`, rpi5 `.100`
+(router DHCP). rpi1/rpi2 had the Wi-Fi radio off (country set to AE, radio on).
+`192.168.1.250` answered no ARP before it was claimed; no Wi-Fi client
+isolation; every broker answered on its Wi-Fi address. The boards use
+`ESB1032-2.4` (same router, BSSIDs `…:54`/`…:55`).
+**Open:** rpi5 could not associate to `ESB1032-2.4` (AP rejected association,
+status 16, before the password was tried), so the 2.4 GHz password in the
+boards' `config_local.h` is unverified until a board joins. **Router:** exclude
+`192.168.1.250` from the DHCP pool.
+
+**Changes.**
+- `deploy/vip/`: `keepalived.conf.tmpl`, `esp_ready.sh` (hard check),
+  `is_parent.sh` (weight +100), `install_vip.sh` (inventory-driven; base
+  priorities 150..110 in inventory order, unicast peers over eth0).
+- Bridge: `ParentResolver` writes `<state_dir>/parent.json` after each chain
+  poll (no extra chain query); deployed to all five with `deploy_to_pis.sh install all`.
+- Firmware/simulator: `config_local.h` (gitignored; example committed) with the
+  VIP as the only seed; single-broker backoff cap 2 s in `cluster.h` and
+  `esp32_sim.py` (shared vectors 37/37 both). Firmware rebuilt with the VIP
+  (1,062,762 bytes, 81%); password absent from `build.log`.
+
+**Live (`esp32/sim/live_vip.sh`, evidence `esp32/evidence/vip_live_2026-11-16.txt`).**
+Simulated board on rpi1 given only the VIP; one PASS run after harness fixes:
+
+| Step | Result |
+|---|---|
+| Base | VIP on the parent rpi2 (epoch 16) and on no other Pi |
+| rpi2's ESP bridge stopped | VIP on rpi1 (best healthy non-parent) after **3 s** |
+| rpi2's bridge started | VIP back on rpi2 after **14 s** (rise 4 s + preempt delay 5 s + adverts) |
+| Parent rpi2 → rpi3 on-chain (`AaVW1hbE…`, `FvAnk4Wj…`) | VIP on rpi3 after **23 s** (bridge chain poll 10 s + preempt delay) |
+| Parent back rpi3 → rpi2 (`BrtHvSHU…`, `GsKLgbEi…`) | VIP on rpi2 after **17 s** |
+| Readings | 135 taken, 0 unacknowledged, all 135 on all five CSEs, none lost |
+
+At no point did two Pis hold the address. The board reconnected to the same
+address after every move (backoff ≤ 2 s); two moves were noticed through the
+20 s no-ack rule rather than a broken connection, which bounds the worst-case
+pause at ~20 s; unacked readings were re-sent.
+
+Earlier attempts in the same evidence file: run 1 passed the bridge phase
+(220/220 stored) but the CLI on rpi2 had no gas coin above the 0.02 SUI budget
+(now 0.01 SUI); run 4's timings matched (3/15/20/20 s) but rpi2's OM2M container
+was restarted mid-run by the parallel durability rollout, wiping s0–s15 from the
+in-memory store (not a VIP effect).
+
+## Durable readings: losing the parent costs zero readings (ESP bridge/firmware v2.3, 2026-11-16)
+
+Design: `esp32/DESIGN.md` §11. Live record: `esp32/evidence/durability_live_2026-11-16.txt`.
+Offline: `esp32/evidence/e2e_durability_in_docker_2026-11-16.txt` (all 8 groups pass).
+
+**What was deployed**
+
+| Change | Where | How |
+|---|---|---|
+| OM2M resource DB on disk: `dbReset=false`, `WRITE_DELAY=0`, `database/` a host volume (`$RT/om2m-db`) | all five, parent last (rpi5 17:48 … rpi2 18:01) | `scripts/v8/04_cutover.sh prepare` + `redeploy` (`ONLY=<node>`) |
+| Bridge v2.3: every reading to all five CSEs, signed ack on quorum 3 of 5; backlog + leader reconcile; replay floor from all replicas; status to every replica, never blocking; stale-and-unstored readings rejected but acked `"stale"` | all five | `esp32/deploy_to_pis.sh install <node>` |
+| Firmware 2.3: durable flash resend buffer (1,440 readings, oldest first, epoch barrier) | built (`esp32/firmware/build_in_docker.sh`, core 3.2.0): 1,103,798 bytes (84%), RAM 37% | flash a board (README §2) |
+
+The bundle on the nodes is unchanged (`5b4282e0…`, v10); the plugin was not touched.
+
+**Verified live**
+
+1. *Durable DB:* a probe reading on rpi5 survived `docker restart` and a full container
+   recreate (`redeploy`); ACP ids stay stable; provisioning finds everything present (409).
+   `04_cutover.sh verify` afterwards: all five healthy, v2 gossip from all five, an
+   ordinary RETRIEVE granted on-chain (`8t6KkZC4…`).
+2. *The parent's CSE stopped for 97 s mid-stream:* readings kept being acked by quorum on
+   the four survivors (`e11-s8` → `e11-s38` during the outage); rpi2 came back with its own
+   pre-outage readings and was caught up within ~70 s; then all five held the same 339
+   readings, no gap inside an epoch, no duplicate. The sensor's 82 acked readings were each
+   on all 5. No parent change (lease still valid; rpi2 re-anchored after its restart).
+3. *Sensor power cut:* the unacked reading `e11-s58` survived in flash, was re-sent first
+   after the power-up (epoch 12) and stored. End of run: 105/105 acked, 361 readings on every
+   Pi, no gaps, no duplicates.
+
+**Found live and fixed** (re-installed on all five): a status message bound to the parent
+blocked every reading queued behind it while the parent's CSE was down; a genuine
+reading that is stale and stored nowhere would make a board re-send it for ever.
+
+**Not changed: the parent lease.** Measured before (`evidence/V8_MEASUREMENTS.md` §4):
+takeover = remaining lease + ~5 s, lease 1,200 s anchored every 600 s, so ~15 min expected,
+~20 min worst. With the quorum ack no reading waits for a new parent, so only the parent's
+own duties do. A 120 s anchor would bring the expected takeover to ~3 min at 5x the
+renewal gas (720/day, ~0.72 SUI) and would let a short chain/RPC outage depose a healthy
+parent. `failover.lease.anchor.period.ms` stays configurable.
+
+**Not live, offline only:** fewer than 3 CSEs (no ack, backlog kept in flash across a power
+cut, delivered in order when quorum returns) and an empty node caught up by reconcile
+(`sim/run_replication_e2e.py` R2, R3). Stopping three CSEs live would have taken the DAS
+down for every other test on the testbed.
+
+**Coordination note.** The VIP workstream ran its own simulated sensor for the same
+device and moved the parent during part of this run (epochs 8 and 10 in the data are
+its readings). The parent is rpi2 again (epoch 18) and holds the VIP.
+
+## Signed OTA firmware updates (ESP firmware v2.4, 2026-11-16)
+
+Only the first flash of a board needs USB; later releases go over the Wi-Fi, signed with a
+dedicated firmware key, with automatic rollback (design: `esp32/DESIGN.md` §13, operator
+guide: `esp32/README.md` §9).
+
+| Step | Result |
+|---|---|
+| Firmware-signing key | created in WSL, `~/.sui-om2m-fw/fw_signing.pem` (0600, dir 0700); public `0492bb10…b1a3` in `deploy/v9/fw_keys/release-1.pub`, pinned in `fw_keys.h` |
+| `om2m-ota` on rpi1–rpi5 | active, port 8070, read-only; paths outside `/fw` 404; wired 10.25.96.x → 403, Wi-Fi via 192.168.1.250 → served |
+| Real firmware build (core 3.2.0) | 1,118,202 bytes (85 % of one OTA slot), 0 warnings, pinned key embedded; partition table app0/app1 = 1.25 MB each |
+| Test release v1 (target `ota-test-01`) | signed in WSL, served by all five Pis (each checked with the boards' acceptance code), retained announce on all five brokers |
+| Device `ota-test-01` via 192.168.1.250 | genuine release ACCEPTED (sha256 ok) |
+| Forged (attacker key) / claims the pinned key / version edited after signing | REJECTED: `untrusted_key` / `bad_signature` / `bad_signature` |
+| Genuine manifest, image with one flipped bit (on the VIP holder) | REJECTED: `sha256_mismatch`; accepted again once restored |
+| Other device `esp32-dht-99` | REJECTED: `not_for_this_device` |
+| Same release to a board already on v1 | REJECTED: `not_newer` |
+| Withdraw | announce cleared, images deleted on all five Pis |
+
+Evidence: `esp32/evidence/ota_live_2026-11-16.txt`. Offline: suite group 3c (40 + 27
+checks). Pending: USB-flash a real board (needs a data cable), then a real OTA round trip
+and a forced rollback on it.
