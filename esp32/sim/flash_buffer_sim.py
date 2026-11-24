@@ -1,13 +1,15 @@
 """
 flash_buffer_sim.py - the simulator's model of the firmware's durable resend
-buffer (esp32/firmware/esp32_sensor_node/flash_buffer.h, fw 2.3).
+buffer (esp32/firmware/esp32_sensor_node/flash_buffer.h, fw 2.3, raw flash since 2.4.1).
 
 Same rules: every reading is stored BEFORE it is sent and kept until a bridge
 acks it; one sender, oldest first, at most `window` unacked in flight, re-sent
 after `retry_s`; a newer epoch is not sent while an older one has unacked
 readings (epoch barrier, for the bridges' replay floor); `slots` readings at
-most, the oldest overwritten when full. The file (JSON, written atomically)
-stands in for LittleFS: it survives a simulated power cycle (a new process
+most, the oldest overwritten when full (the firmware drops them a 4 KB sector at
+a time and keeps one spare sector; this model drops them one by one). Acks are
+written at once, as in the firmware. The file (JSON, written atomically)
+stands in for the flash partition: it survives a simulated power cycle (a new process
 with the same --flash-buffer path and --state-file).
 """
 import json

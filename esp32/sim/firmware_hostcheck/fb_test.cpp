@@ -1,5 +1,9 @@
 // fb_test.cpp - host test for the firmware's durable resend buffer
-// (esp32/firmware/esp32_sensor_node/flash_buffer.h) on the in-memory LittleFS stub.
+// (esp32/firmware/esp32_sensor_node/flash_buffer.h) on a NOR-flash model of
+// the data partition (stubs/esp_partition.h: sector erase only, writes clear
+// bits only). 2.3.0 was tested on an in-memory file system that allowed
+// in-place rewrites and so missed that the real LittleFS ran out of space (2.4);
+// the flash model here fails any design that programs a bit back to 1.
 //
 //   g++ -std=c++17 -Wall -Wextra -I stubs -o fb_test fb_test.cpp && ./fb_test
 #include "Arduino.h"
@@ -8,7 +12,7 @@ HostSerial Serial;
 HostESP ESP;
 
 #define PAYLOAD_LEN 640
-#define FB_SLOTS 32
+#define FB_SLOTS 32          // rounds up to whole sectors: 36 slots of 6 per sector
 #define FB_WINDOW 4
 #define FB_PER_PASS 8
 #include "../../firmware/esp32_sensor_node/flash_buffer.h"
@@ -38,7 +42,8 @@ static void ackAll() {
 static void reboot() { fb::begin(); }
 
 int main() {
-  printf("flash buffer host test\n");
+  printf("flash buffer host test (slot %u B, %u per sector, %u slots)\n", (unsigned)fb::SLOT,
+         (unsigned)fb::SPS, (unsigned)fb::SLOTS);
   fb::begin();
 
   // 1. readings taken offline are sent oldest first, at most FB_WINDOW in flight
@@ -53,11 +58,11 @@ int main() {
   fb::service(1100, true, pub);
   check("acks open the window for the next ones", wire.size() == 4 && wire[0] == rd(1, 4));
 
-  // 2. a reboot keeps every unacked reading; acks that were flushed stay acked
-  fb::service(1100 + FB_ACK_FLUSH_MS, true, pub);      // flush acks of 0..3 (4..7 now in flight)
+  // 2. a reboot keeps every unacked reading; acks are written at once and stay acked
   wire.clear();
   reboot();
   check("reboot restores the unacked ones", fb::unacked() == 6, std::to_string(fb::unacked()));
+
   // 3. epoch barrier: the new power-up's readings wait for the old epoch's backlog
   reading(2, 0);
   reading(2, 1);
@@ -85,44 +90,70 @@ int main() {
   ackAll();
   wire.clear();
 
-  // 5. a full buffer reuses the oldest slot; acked slots are reused silently
+  // 5. at least FB_SLOTS unacked readings are always kept (from any write
+  //    position); past that the oldest go, at most one sector's worth at a time
   uint32_t before = fb::overwritten;
   for (uint32_t s = 100; s < 100 + FB_SLOTS; s++) reading(3, s);
-  check("acked slots are reused without loss", fb::overwritten == before);
+  check("FB_SLOTS unacked readings kept without loss", fb::overwritten == before,
+        std::to_string(fb::overwritten - before) + " lost");
+  uint32_t extra = 0;
+  while (fb::overwritten == before && extra < fb::nslots) reading(3, 900 + extra++);
+  uint32_t lost = fb::overwritten - before;
+  check("full ring: the oldest go, at most one sector at a time", lost >= 1 && lost <= fb::SPS,
+        std::to_string(lost) + " lost after " + std::to_string(FB_SLOTS + extra) + " readings");
   reading(3, 999);
-  check("an unacked slot overwritten only when full", fb::overwritten == before + 1);
+  reboot();
+  bool newestKept = false;
+  for (uint32_t i = 0; i < fb::nslots; i++)
+    if (fb::idx[i].valid && fb::idx[i].epoch == 3 && fb::idx[i].seq == 999) newestKept = true;
+  check("the newest reading survives the wrap and a reboot", newestKept);
 
   // 6. a power cut in the middle of a slot write: the slot reads as empty, not garbage
   {
-    auto buf = g_fs()["/fb.dat"];
-    uint32_t slot = (fb::wpos + FB_SLOTS - 1) % FB_SLOTS;          // the slot just written
-    (*buf)[slot * fb::REC + sizeof(fb::Hdr) + 3] ^= 0x5A;          // corrupt its payload
+    uint32_t slot = (fb::wpos + fb::nslots - 1) % fb::nslots;          // the slot just written
+    g_flash()[fb::slotOff(slot) + fb::PAY_OFF + 3] &= 0x0F;           // a half-programmed byte
     reboot();
     bool found = false;
-    for (uint32_t i = 0; i < FB_SLOTS; i++)
+    for (uint32_t i = 0; i < fb::nslots; i++)
       if (fb::idx[i].valid && fb::idx[i].epoch == 3 && fb::idx[i].seq == 999) found = true;
     check("a torn slot (bad CRC) is ignored", !found);
+    reading(4, 0);                                                     // must not program over it
+    reboot();
+    bool ok = false;
+    for (uint32_t i = 0; i < fb::nslots; i++)
+      if (fb::idx[i].valid && fb::idx[i].epoch == 4 && fb::idx[i].seq == 0) ok = true;
+    check("the next reading after a torn slot is stored intact", ok);
   }
 
-  // 7. a slot reused for a NEW reading is never taken for the old acked one
+  // 7. a slot reused for a NEW reading never inherits the old reading's ack
   {
-    g_fs().clear();
+    std::fill(g_flash().begin(), g_flash().end(), 0xFF);
     fb::begin();
-    reading(5, 0);
-    fb::ack(5, 0);
-    fb::service(200000 + FB_ACK_FLUSH_MS, false, pub);   // ack persisted for slot 0
-    for (uint32_t s = 1; s < FB_SLOTS; s++) { reading(5, s); fb::ack(5, s); }
-    reading(5, 500);                                       // reuses slot 0, unacked
-    reboot();                                              // its ack record still says (5,0)
-    check("reused slot is unacked after reboot", fb::unacked() >= 1, std::to_string(fb::unacked()));
+    for (uint32_t s = 0; s < fb::nslots; s++) { reading(5, s); fb::ack(5, s); }
+    reading(5, 500);                                       // reuses slot 0 (sector erased)
+    reboot();
+    check("reused slot is unacked after reboot", fb::unacked() == 1, std::to_string(fb::unacked()));
   }
 
-  // 8. mount failure: buffer disabled, nothing crashes
-  g_fs_mount_fails() = true;
-  check("mount failure -> 0 restored, no crash", fb::begin() == 0 && !fb::ready);
+  // 8. the flash rules held throughout, and wear is one erase per sector's worth of readings
+  check("never programs a bit from 0 to 1 (no write without erase)", g_flash_violations() == 0,
+        std::to_string(g_flash_violations()));
+  {
+    std::fill(g_flash().begin(), g_flash().end(), 0xFF);
+    fb::begin();
+    uint32_t e0 = g_flash_erases();
+    for (uint32_t s = 0; s < 10 * fb::nslots; s++) { reading(6, s); fb::ack(6, s); }
+    uint32_t per = g_flash_erases() - e0;
+    check("wear: one sector erase per SPS readings", per == 10 * fb::nslots / fb::SPS,
+          std::to_string(per) + " erases for " + std::to_string(10 * fb::nslots) + " readings");
+  }
+
+  // 9. no data partition: buffer disabled, nothing crashes
+  g_part_missing() = true;
+  check("no partition -> 0 restored, no crash", fb::begin() == 0 && !fb::ready);
   reading(9, 0);
   check("append is a no-op when disabled", fb::service(1, true, pub) == 0);
-  g_fs_mount_fails() = false;
+  g_part_missing() = false;
 
   printf("flash buffer: %d passed, %d failed\n", passes, fails);
   return fails ? 1 : 0;

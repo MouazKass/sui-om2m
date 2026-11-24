@@ -17,7 +17,7 @@ run python3 tests/test_selector.py
 step "3. firmware host build: the real .ino, virtual time, simulated cluster"
 run bash -c "cd sim/firmware_hostcheck && g++ -std=c++17 -Wall -I stubs -o '$LOGDIR/fw_host' host_main.cpp -lsodium \
   && '$LOGDIR/fw_host' > '$LOGDIR/fw_pub.txt' 2> '$LOGDIR/fw_host.err'; rc=\$?; sed -n '/host-check results/,\$p' '$LOGDIR/fw_host.err'; exit \$rc"
-step "3b. firmware durable resend buffer (flash_buffer.h, fw 2.3) on an in-memory LittleFS"
+step "3b. firmware durable resend buffer (flash_buffer.h, fw 2.4.1) on a NOR-flash model of the data partition"
 run bash -c "cd sim/firmware_hostcheck && g++ -std=c++17 -Wall -Wextra -I stubs -o '$LOGDIR/fb_test' fb_test.cpp \
   && '$LOGDIR/fb_test' 2> '$LOGDIR/fb_test.err'"
 step "3c. signed OTA updates: firmware logic (ota_core.h, fw 2.4) + Python reference/server"

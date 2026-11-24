@@ -1129,7 +1129,7 @@ class Bridge:
             return
         dev.last_label_at = now
         latest = {k: record[k] for k in ("epoch", "seq", "ts", "rx_ts", "temperature", "humidity",
-                                          "light_raw", "light_pct", "node") if k in record}
+                                          "light_raw", "light_pct", "sim", "node") if k in record}
         lbl = dev.labels() + ["latest=" + json.dumps(latest, separators=(",", ":"), sort_keys=True)]
         try:
             code = cse.update(pl.ae_ri, "m2m:ae", {"lbl": lbl})

@@ -268,6 +268,33 @@ static bool buildReading(char* out, size_t cap, uint32_t seq) {
                    (unsigned long)unixTime(), (unsigned long)millis(), (int)WiFi.RSSI(), via);
   bool any = false;
 
+#if SIMULATE_SENSORS
+  // No sensor attached: plausible indoor values (a daily cycle plus a small
+  // random walk), flagged "sim":true in the signed reading so they can never
+  // be taken for measurements. Everything else (signing, flash buffer, cluster,
+  // signed acks) is the real path.
+  {
+    static uint32_t rng = 0;
+    static float walkT = 0, walkH = 0;
+    if (!rng) rng = 0x9E3779B9u ^ (uint32_t)micros() ^ (uint32_t)(seq * 2654435761u);
+    auto rnd = [&]() {                    // xorshift32 -> [-1, 1]
+      rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+      return (float)(rng % 20001u) / 10000.0f - 1.0f;
+    };
+    uint32_t secs = unixTime() ? (uint32_t)(unixTime() % 86400UL) : (uint32_t)((millis() / 1000UL) % 86400UL);
+    float day = sinf(6.2831853f * ((float)secs / 86400.0f - 0.375f));   // peaks mid-afternoon
+    walkT = 0.9f * walkT + 0.15f * rnd();
+    walkH = 0.9f * walkH + 0.6f * rnd();
+    float t = 24.0f + 3.5f * day + walkT;
+    float h = 55.0f - 6.0f * day + walkH;
+    int pct = day > -0.2f ? (int)(20.0f + 70.0f * (day + 0.2f) / 1.2f) : 5;
+    if (pct > 100) pct = 100;
+    n += snprintf(out + n, cap - n,
+                  ",\"temperature\":%.1f,\"humidity\":%.1f,\"light_raw\":%d,\"light_pct\":%d,\"sim\":true",
+                  t, h, (int)(pct * 4095L / 100L), pct);
+    any = true;
+  }
+#else
 #if ENABLE_DHT
   float t = dht.readTemperature();
   float h = dht.readHumidity();
@@ -291,6 +318,7 @@ static bool buildReading(char* out, size_t cap, uint32_t seq) {
   n += snprintf(out + n, cap - n, ",\"light_raw\":%d,\"light_pct\":%d", raw, pct);
   any = true;
 #endif
+#endif  // SIMULATE_SENSORS
 
   snprintf(out + n, cap - n, "}");
   // Unsigned readings are rejected by every bridge, so do not keep one.
@@ -372,6 +400,9 @@ void setup() {
 
   Serial.printf("\n[boot] %s fw=%s epoch=%lu boot=%s brokers=%d home=%s\n", DEVICE_ID, FW_VERSION,
                 (unsigned long)epoch, bootId, sel.n, HOME_NODE);
+#if SIMULATE_SENSORS
+  Serial.println("[sensor] SIMULATED readings (no DHT/LDR read); every reading carries \"sim\":true");
+#endif
 
   connectWifi();                     // radio on: the hardware RNG is now truly random
   if (!devkey::init("sui-esp32-id")) Serial.println("[id] libsodium init FAILED");

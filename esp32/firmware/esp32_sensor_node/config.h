@@ -72,7 +72,7 @@
 #ifndef DEVICE_ID
 #define DEVICE_ID        "esp32-dht-01"
 #endif
-#define FW_VERSION       "2.3.0"   // 2.3: durable flash resend buffer (flash_buffer.h)
+#define FW_VERSION       "2.4.1"   // 2.3: durable flash buffer; 2.4: signed OTA; 2.4.1: buffer on raw flash slots (no LittleFS), SIMULATE_SENSORS option
 
 // ---- Signed acknowledgements (v2.2) -------------------------------------------
 // A reading leaves the resend buffer only on an ack signed by one of the
@@ -93,6 +93,12 @@
 #endif
 
 // ---- Sensors (set to 0 to disable one) ----------------------------------------
+// SIMULATE_SENSORS 1: no DHT/LDR is read; the board sends plausible simulated
+// temperature/humidity/light, flagged "sim":true in every signed reading.
+// For a board with no (working) sensor attached; set it in config_local.h.
+#ifndef SIMULATE_SENSORS
+#define SIMULATE_SENSORS 0
+#endif
 #ifndef ENABLE_DHT
 #define ENABLE_DHT       1
 #endif

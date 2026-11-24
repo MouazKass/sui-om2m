@@ -643,3 +643,61 @@ guide: `esp32/README.md` §9).
 Evidence: `esp32/evidence/ota_live_2026-11-16.txt`. Offline: suite group 3c (40 + 27
 checks). Pending: USB-flash a real board (needs a data cable), then a real OTA round trip
 and a forced rollback on it.
+
+## First real ESP32 board: flash buffer on raw flash, simulated sensor, registration (fw 2.4.1, 2026-11-24)
+
+The first physical board was flashed over USB from the laptop (COM3, CP210x driver
+from Windows Update). Board: ESP32-D0WD-V3 rev 3.1, MAC `20:50:0d:1b:95:6c`.
+
+**Firmware fault found on real hardware, fixed in 2.4.1.** The durable resend buffer
+(2.3/2.4) kept all slots in one LittleFS file and rewrote them in place. LittleFS files
+are copy-on-write to the end of the file, so the first slot write on the board failed
+with `esp_littlefs ... No more free space`. The offline tests had used an in-memory file
+stub that allows in-place rewrites, so they could not see it. 2.4.1 writes the slots
+straight to the raw `spiffs` data partition (no file system):
+- 4 KB sectors of 6 slots (664 B each: header, ack word, payload). A slot is written only
+  while erased, payload first and the header (magic) last. A CRC over epoch, seq, length
+  and payload makes a torn slot read as empty.
+- An ack programs the slot's ack word from `0xFFFFFFFF` to 0 (NOR flash clears bits
+  without an erase), so acks are written at once instead of being batched.
+- The ring has one spare sector, so at least 1,440 unacked readings are always kept; past
+  that the oldest are dropped one sector at a time.
+- Wear: one sector erase per 6 readings, about 12 a day per sector at 5 s.
+
+The host test now runs on a NOR-flash model (`stubs/esp_partition.h`: sector erase only,
+writes clear bits only, violations counted). It has 19 checks, including "never programs
+a bit from 0 to 1", one erase per 6 readings, and the 1,440-reading guarantee from any
+write position. The full offline suite passes (`esp32/sim/run_e2e_in_docker.sh` on rpi1).
+On the board: `flash buffer: 1446 slots (6 per sector)`; 26 unacked readings survived a
+reflash and reboot.
+
+**Simulated sensor (`SIMULATE_SENSORS`).** The board's DHT11 read fails (wiring not yet
+checked), so this board runs with `SIMULATE_SENSORS 1`, set in its gitignored
+`config_local.h`; the repository default stays 0. It sends plausible values (a daily
+cycle plus a small random walk) and every signed reading carries `"sim":true`. The flag
+is covered by the device signature, the bridge stores it, and since this change it is
+also in the bridge's "latest" view. Signing, the flash buffer, the cluster address,
+replication and signed acks are the real path. Readings taken before the switch (no
+DHT, light values from an unconnected ADC pin) were erased from the board's buffer so
+they could never be stored as measurements.
+
+**Identity.** The board has its own id, `esp32-hw-01`, so real hardware and the
+simulator (`esp32-dht-01`, key `0x450f…` on rpi1) are never mixed. The two would also
+collide in the bridges' per-device replay floor. Its key was generated on the board and
+stays in its NVS; only the app was reflashed afterwards (`write_flash 0x10000`), which
+keeps the key.
+
+| Step | Proposal | Execute tx | Result |
+|---|---|---|---|
+| `id-register` `0xcc7cee03…d4d0` as `esp32-hw-01`, role 3 (rpi1 proposed and executed, rpi3 and rpi5 approved; rpi4 is down) | 17 | `9qzzVBPHy6KjrbgypeEFt3DF8XDiDq2xzRfAnCuFjKAc` | registry entry `{cse_id: esp32-hw-01, role: 3}`; the bridge's own `DeviceRegistry.check()` run on rpi2 accepts the board's public key |
+
+Pending:
+- **On site:** the board only knows ESB1032-2.4, so its readings wait in flash until it
+  is in range.
+- **Firmware version:** the board still reports `2.3.1`, the string before renumbering;
+  the next release (2.4.1) is meant to go to it over the air, as the pending real-board
+  OTA round trip.
+- **Read protection** (policy, device binding, per-node read tokens) needs every node's
+  plugin redeployed for the new mappings.
+- **Bridge deploy:** the bridge change (`sim` in the "latest" view) still has to be
+  deployed to the Pis.
