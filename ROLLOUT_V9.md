@@ -701,3 +701,36 @@ Pending:
   plugin redeployed for the new mappings.
 - **Bridge deploy:** the bridge change (`sim` in the "latest" view) still has to be
   deployed to the Pis.
+
+## Second real ESP32 board, esp32-hw-02 (fw 2.4.1, 2026-11-25)
+
+Board: ESP32-D0WD-V3 rev 3.1, MAC `30:76:f5:30:1b:04`, the same firmware build as
+hw-01 except `DEVICE_ID "esp32-hw-02"` (gitignored `config_local.h`, `SIMULATE_SENSORS 1`).
+
+**Boards that never answered.** Two other ESP32 NodeMCU boards from the same batch sent
+no byte at all: none after a reset, none in download mode (BOOT+EN by hand), at six baud
+rates (9600 to 460800, including 74880 for a 26 MHz crystal) and four reset styles, and
+none on external 3.3 V from hw-01. A jumper between TX0 and RX0 echoed every byte, so the
+USB-serial chip and the header pins work. The ESP32 ROM always prints its boot banner on
+reset, whatever is in flash, so the modules are taken as faulty (EN and 3V3 voltages not
+yet measured). They are not used.
+
+**Flashing through a link that drops.** On hw-02, a full write failed three times with
+"The chip stopped responding", each time at a different point, also at 115200 baud and
+with the ROM loader instead of the stub. The ROM boot log afterwards showed the chip and
+its flash were fine (the bootloader from the first, partial write ran and reported only
+"No bootable app partitions"). It was flashed in 20 pieces instead (now `esp32/firmware/flash_chunked.py`), each a separate
+esptool call that is hash-verified and retried up to six times: bootloader at 0x1000,
+partition table at 0x8000, a blank otadata at 0xe000, and the app at 0x10000 in 64 KB
+pieces. One piece needed a second try. The board has no GPIO0 pin on its header (30-pin
+board), so BOOT was held down for the whole run to make every reset land in download mode.
+
+First boot: `esp32-hw-02 fw=2.4.1 epoch=1`, `flash buffer: 1446 slots (6 per sector)`,
+`SIMULATED readings`, `5 pinned bridge ack key(s)`; the key was generated on the board and
+stays in its NVS.
+
+| Step | Proposal | Execute tx | Result |
+|---|---|---|---|
+| `id-register` `0x40839afc…fa5e` as `esp32-hw-02`, role 3 (rpi1 proposed and executed, rpi3 and rpi5 approved) | 18 | `35PK7gUy9GYePyGMfyfTzfhnNiE1sNpW1S1RJgEPJ6Zi` | the bridge's `DeviceRegistry.check()` on rpi2 (identity mode `require`) accepts the board's public key as `esp32-hw-02` and rejects the same key as `esp32-hw-01` (`device_id_mismatch`) |
+
+Pending for hw-02: the same as hw-01 (on-site Wi-Fi, read protection, bridge deploy).

@@ -78,7 +78,12 @@ From the dashboard you can:
    `SHA256SUMS` and `build.log` are). Create `config_local.h` (step 2) first,
    because the Wi-Fi settings are compiled in. Flash with
    `esptool.py write_flash 0x0 build/esp32_sensor_node.ino.merged.bin`.
-   The verified build of 11 Nov 2026 (default `config.h`): 1,062,826 bytes
+   If a board's serial link drops partway through ("The chip stopped
+   responding"), use `firmware/flash_chunked.py` instead: it writes the same
+   image in hash-verified 64 KB pieces and retries each one (hold BOOT for the
+   whole run). It is for a first flash only; a board with a registered key gets
+   only the app (`write_flash 0x10000 build/esp32_sensor_node.ino.bin`), which
+   keeps the key in NVS. The verified build of 11 Nov 2026 (default `config.h`): 1,062,826 bytes
    (81% of flash), 0 warnings, all five pinned ack keys present. The VIP build
    of 16 Nov 2026 (testbed `config_local.h`): 1,062,762 bytes (81%), the VIP
    compiled in, the password absent from `build.log`.
